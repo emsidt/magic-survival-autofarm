@@ -1,0 +1,775 @@
+[
+  {
+    "run_id": "run",
+    "survival_sec": 58.4,
+    "prev_avg_sec": 180.0,
+    "diff_sec": -121.6,
+    "kills": 0,
+    "reward": -0.27,
+    "skills": [],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 208.9,
+    "prev_avg_sec": 58.4,
+    "diff_sec": 150.5,
+    "kills": 0,
+    "reward": 1.254,
+    "skills": [],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 180.9,
+    "prev_avg_sec": 133.7,
+    "diff_sec": 47.2,
+    "kills": 0,
+    "reward": 0.393,
+    "skills": [],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 106.2,
+    "prev_avg_sec": 149.4,
+    "diff_sec": -43.2,
+    "kills": 0,
+    "reward": -0.116,
+    "skills": [],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 25.0,
+    "prev_avg_sec": 138.6,
+    "diff_sec": -113.6,
+    "kills": 0,
+    "reward": -0.3,
+    "skills": [],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 368.1,
+    "prev_avg_sec": 115.9,
+    "diff_sec": 252.2,
+    "kills": 0,
+    "reward": 1.5,
+    "skills": [],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 97.8,
+    "prev_avg_sec": 157.9,
+    "diff_sec": -60.1,
+    "kills": 0,
+    "reward": -0.152,
+    "skills": [],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 73.7,
+    "prev_avg_sec": 149.3,
+    "diff_sec": -75.6,
+    "kills": 0,
+    "reward": -0.203,
+    "skills": [],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 53.4,
+    "prev_avg_sec": 139.9,
+    "diff_sec": -86.5,
+    "kills": 0,
+    "reward": -0.24,
+    "skills": [],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 131.7,
+    "prev_avg_sec": 130.3,
+    "diff_sec": 1.4,
+    "kills": 0,
+    "reward": 0.012,
+    "skills": [],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 187.6,
+    "prev_avg_sec": 130.4,
+    "diff_sec": 57.2,
+    "kills": 0,
+    "reward": 0.477,
+    "skills": [],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 75.9,
+    "prev_avg_sec": 135.6,
+    "diff_sec": -59.7,
+    "kills": 0,
+    "reward": -0.166,
+    "skills": [
+      "electric_shock",
+      "frost_nova",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 221.2,
+    "prev_avg_sec": 130.6,
+    "diff_sec": 90.6,
+    "kills": 0,
+    "reward": 0.755,
+    "skills": [
+      "electric_shock",
+      "frost_nova",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 157.5,
+    "prev_avg_sec": 137.6,
+    "diff_sec": 19.9,
+    "kills": 0,
+    "reward": 0.166,
+    "skills": [
+      "arcane_ray",
+      "frost_nova",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 63.4,
+    "prev_avg_sec": 139.1,
+    "diff_sec": -75.7,
+    "kills": 0,
+    "reward": -0.21,
+    "skills": [
+      "frost_nova",
+      "magic_circle"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 175.5,
+    "prev_avg_sec": 133.3,
+    "diff_sec": 42.2,
+    "kills": 0,
+    "reward": 0.352,
+    "skills": [
+      "frost_nova",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 212.5,
+    "prev_avg_sec": 136.5,
+    "diff_sec": 76.0,
+    "kills": 0,
+    "reward": 0.633,
+    "skills": [
+      "electric_shock",
+      "frost_nova",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 223.4,
+    "prev_avg_sec": 142.3,
+    "diff_sec": 81.1,
+    "kills": 0,
+    "reward": 0.676,
+    "skills": [
+      "cyclone",
+      "electric_shock",
+      "frost_nova",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 84.1,
+    "prev_avg_sec": 148.5,
+    "diff_sec": -64.4,
+    "kills": 0,
+    "reward": -0.173,
+    "skills": [
+      "blizzard",
+      "frost_nova"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 66.4,
+    "prev_avg_sec": 143.5,
+    "diff_sec": -77.1,
+    "kills": 0,
+    "reward": -0.214,
+    "skills": [
+      "electric_shock",
+      "frost_nova"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 172.9,
+    "prev_avg_sec": 137.6,
+    "diff_sec": 35.3,
+    "kills": 0,
+    "reward": 0.294,
+    "skills": [
+      "electric_shock",
+      "frost_nova",
+      "satellite",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 198.8,
+    "prev_avg_sec": 140.3,
+    "diff_sec": 58.5,
+    "kills": 0,
+    "reward": 0.487,
+    "skills": [
+      "frost_nova",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 97.1,
+    "prev_avg_sec": 144.8,
+    "diff_sec": -47.7,
+    "kills": 0,
+    "reward": -0.132,
+    "skills": [
+      "electric_shock",
+      "frost_nova",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 218.9,
+    "prev_avg_sec": 141.1,
+    "diff_sec": 77.8,
+    "kills": 0,
+    "reward": 0.648,
+    "skills": [
+      "arcane_effuse",
+      "blizzard",
+      "concentration",
+      "frost_nova",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 120.3,
+    "prev_avg_sec": 147.1,
+    "diff_sec": -26.8,
+    "kills": 0,
+    "reward": -0.073,
+    "skills": [
+      "blizzard",
+      "cyclone",
+      "frost_nova",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 78.8,
+    "prev_avg_sec": 145.0,
+    "diff_sec": -66.2,
+    "kills": 0,
+    "reward": -0.183,
+    "skills": [
+      "frost_nova",
+      "shield",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 151.8,
+    "prev_avg_sec": 139.9,
+    "diff_sec": 11.9,
+    "kills": 0,
+    "reward": 0.099,
+    "skills": [
+      "electric_shock",
+      "frost_nova",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 195.8,
+    "prev_avg_sec": 140.8,
+    "diff_sec": 55.0,
+    "kills": 0,
+    "reward": 0.458,
+    "skills": [
+      "frost_nova",
+      "snipe",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 171.0,
+    "prev_avg_sec": 145.0,
+    "diff_sec": 26.0,
+    "kills": 0,
+    "reward": 0.217,
+    "skills": [
+      "frost_nova",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 66.0,
+    "prev_avg_sec": 147.0,
+    "diff_sec": -81.0,
+    "kills": 0,
+    "reward": -0.22,
+    "skills": [
+      "frost_nova",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 122.7,
+    "prev_avg_sec": 140.8,
+    "diff_sec": -18.1,
+    "kills": 0,
+    "reward": -0.05,
+    "skills": [
+      "frost_nova",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 162.8,
+    "prev_avg_sec": 139.4,
+    "diff_sec": 23.4,
+    "kills": 0,
+    "reward": 0.195,
+    "skills": [
+      "frost_nova",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 87.0,
+    "prev_avg_sec": 141.2,
+    "diff_sec": -54.2,
+    "kills": 0,
+    "reward": -0.151,
+    "skills": [
+      "electric_shock",
+      "frost_nova",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 206.1,
+    "prev_avg_sec": 137.0,
+    "diff_sec": 69.1,
+    "kills": 0,
+    "reward": 0.576,
+    "skills": [
+      "cloaking",
+      "electric_shock",
+      "frost_nova",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 92.5,
+    "prev_avg_sec": 142.3,
+    "diff_sec": -49.8,
+    "kills": 0,
+    "reward": -0.138,
+    "skills": [
+      "cyclone",
+      "frost_nova",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 200.2,
+    "prev_avg_sec": 138.5,
+    "diff_sec": 61.7,
+    "kills": 0,
+    "reward": 0.514,
+    "skills": [
+      "electric_shock",
+      "frost_nova",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 223.6,
+    "prev_avg_sec": 143.2,
+    "diff_sec": 80.4,
+    "kills": 0,
+    "reward": 0.67,
+    "skills": [
+      "cyclone",
+      "frost_nova",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 118.4,
+    "prev_avg_sec": 149.4,
+    "diff_sec": -31.0,
+    "kills": 0,
+    "reward": -0.083,
+    "skills": [
+      "electric_shock",
+      "frost_nova",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 223.0,
+    "prev_avg_sec": 147.0,
+    "diff_sec": 76.0,
+    "kills": 0,
+    "reward": 0.633,
+    "skills": [
+      "cyclone",
+      "electric_shock",
+      "frost_nova",
+      "satellite",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "human_expert_589189",
+    "survival_sec": 447.4,
+    "prev_avg_sec": 152.8,
+    "diff_sec": 294.6,
+    "kills": 0,
+    "reward": 1.5,
+    "skills": [
+      "cloaking",
+      "concentration",
+      "cyclone",
+      "electric_shock",
+      "electric_zone",
+      "energy_bolt",
+      "explorer",
+      "fast_casting",
+      "fireball",
+      "flash_shock",
+      "frost_nova",
+      "incineration",
+      "intelligence",
+      "lava_zone",
+      "magic_circle",
+      "satellite",
+      "spirit",
+      "thunderstorm",
+      "tsunami"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "human_expert_589683",
+    "survival_sec": 494.0,
+    "prev_avg_sec": 175.5,
+    "diff_sec": 318.5,
+    "kills": 0,
+    "reward": 1.5,
+    "skills": [
+      "blizzard",
+      "cloaking",
+      "concentration",
+      "electric_shock",
+      "electric_zone",
+      "energy_bolt",
+      "fireball",
+      "flash_shock",
+      "frost_nova",
+      "haste",
+      "intelligence",
+      "satellite",
+      "snipe",
+      "thunderstorm",
+      "tsunami"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "human_expert_592093",
+    "survival_sec": 460.4,
+    "prev_avg_sec": 200.0,
+    "diff_sec": 260.4,
+    "kills": 0,
+    "reward": 1.5,
+    "skills": [
+      "arcane_effuse",
+      "arcane_ray",
+      "blizzard",
+      "cloaking",
+      "concentration",
+      "cyclone",
+      "electric_shock",
+      "electric_zone",
+      "energy_bolt",
+      "explorer",
+      "fast_casting",
+      "flash_shock",
+      "florist",
+      "frost_nova",
+      "incineration",
+      "intelligence",
+      "lava_zone",
+      "magic_bullet",
+      "magic_circle",
+      "meteor",
+      "satellite",
+      "shield",
+      "snipe",
+      "spirit",
+      "thunderstorm",
+      "tsunami"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 185.1,
+    "prev_avg_sec": 220.0,
+    "diff_sec": -34.9,
+    "kills": 0,
+    "reward": -0.063,
+    "skills": [
+      "frost_nova",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 217.3,
+    "prev_avg_sec": 217.3,
+    "diff_sec": 0.0,
+    "kills": 0,
+    "reward": 0.0,
+    "skills": [
+      "electric_shock",
+      "frost_nova",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "human_expert_596270",
+    "survival_sec": 212.2,
+    "prev_avg_sec": 217.3,
+    "diff_sec": -5.1,
+    "kills": 0,
+    "reward": -0.009,
+    "skills": [
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "human_expert_596315",
+    "survival_sec": 30.9,
+    "prev_avg_sec": 216.9,
+    "diff_sec": -186.0,
+    "kills": 0,
+    "reward": -0.3,
+    "skills": [
+      "electric_shock"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "human_expert_596843",
+    "survival_sec": 101.0,
+    "prev_avg_sec": 202.6,
+    "diff_sec": -101.6,
+    "kills": 0,
+    "reward": -0.201,
+    "skills": [
+      "cloaking",
+      "cyclone",
+      "electric_shock",
+      "fast_casting",
+      "magic_circle",
+      "satellite",
+      "spirit",
+      "tsunami"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "human_expert_599153",
+    "survival_sec": 722.2,
+    "prev_avg_sec": 194.8,
+    "diff_sec": 527.5,
+    "kills": 0,
+    "reward": 1.5,
+    "skills": [
+      "blizzard",
+      "cyclone",
+      "doctor",
+      "electric_shock",
+      "electric_zone",
+      "fast_casting",
+      "haste",
+      "incineration",
+      "intelligence",
+      "lava_zone",
+      "satellite",
+      "silent_casting",
+      "spirit",
+      "tsunami"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 608.4,
+    "prev_avg_sec": 235.4,
+    "diff_sec": 373.0,
+    "kills": 0,
+    "reward": 1.5,
+    "skills": [
+      "cyclone",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 229.5,
+    "prev_avg_sec": 264.1,
+    "diff_sec": -34.6,
+    "kills": 0,
+    "reward": -0.052,
+    "skills": [
+      "electric_shock",
+      "frost_nova",
+      "special_passive",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 577.1,
+    "prev_avg_sec": 261.4,
+    "diff_sec": 315.7,
+    "kills": 0,
+    "reward": 1.5,
+    "skills": [
+      "blizzard",
+      "electric_shock",
+      "satellite",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 271.1,
+    "prev_avg_sec": 285.7,
+    "diff_sec": -14.6,
+    "kills": 0,
+    "reward": -0.02,
+    "skills": [
+      "electric_shock",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 973.1,
+    "prev_avg_sec": 284.6,
+    "diff_sec": 688.5,
+    "kills": 0,
+    "reward": 1.5,
+    "skills": [
+      "electric_shock",
+      "shield",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 1535.3,
+    "prev_avg_sec": 337.6,
+    "diff_sec": 1197.7,
+    "kills": 0,
+    "reward": 1.5,
+    "skills": [
+      "electric_shock",
+      "frost_nova",
+      "spirit"
+    ],
+    "combos": []
+  }
+]

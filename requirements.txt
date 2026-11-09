@@ -1,0 +1,8 @@
+numpy>=1.26,<3
+opencv-python>=4.9,<5
+Pillow>=10,<13
+mss>=9,<11
+pywin32>=306
+pydirectinput>=1.0.4
+pynput>=1.7.7
+winocr>=0.0.15

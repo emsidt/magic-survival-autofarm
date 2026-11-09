@@ -1,0 +1,33 @@
+# Virtual Environment
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE & Editor settings
+.vscode/
+.idea/
+
+# Large run recordings and screenshots (300MB+)
+data/runs/
+captures/
+
+# Temporary and debug images
+debug_*.png
+*_crop.png
+roi_*.png
+test_*.png
+cards_lvl.png
+header_lvl.png
+
+# Keep learned AI models and rules
+!data/learned_policy.json
+!data/learning_history.json
+rules/*.png
+!rules/.gitkeep
+
+
