@@ -98,8 +98,10 @@ def _verify_chest_color(roi_bgr: np.ndarray, chest_type: str = "treasure_chest")
         dark_pixels = (V <= 50)
         if np.sum(bright_gold) / total_px > 0.35 and np.sum(dark_pixels) / total_px < 0.04:
             return False
-        has_wood_chest = (np.sum(wood) / total_px >= 0.05) and (np.sum(dark_pixels) / total_px >= 0.03)
-        has_badge = (np.sum(badge) / total_px >= 0.08)
+        # Genuine chests have substantial wood planks (>=10%) AND dark iron bands/outline (>=8%).
+        # Real indicators have white/cream badge body (>=8%) or dimmed modal background (dark >= 55%).
+        has_wood_chest = (np.sum(wood) / total_px >= 0.10) and (np.sum(dark_pixels) / total_px >= 0.08)
+        has_badge = (np.sum(badge) / total_px >= 0.08) or (np.sum(dark_pixels) / total_px >= 0.55)
         return bool(has_wood_chest or has_badge)
     elif chest_type == "reliquary":
         red = ((H <= 16) | (H >= 164)) & (S >= 45) & (V >= 45)
@@ -120,19 +122,19 @@ def _verify_chest_color(roi_bgr: np.ndarray, chest_type: str = "treasure_chest")
 
 def detect_chest(
     frame: np.ndarray,
-    min_confidence: float = 0.55,
+    min_confidence: float = 0.60,
     player: tuple[float, float] = (0.5, 0.5),
 ) -> Optional[ChestTarget]:
     """Fast, multi-scale artifact chest & off-screen HUD chest indicator detector
     (Black Box [36.0] > Reliquary [30.0] > Treasure Chest [24.0..26.0]).
 
     Explicitly excludes the player character sprite at center and top HUD bar.
-    Never mistakes glowing Gold Mana orbs for chests.
+    Never mistakes glowing Gold Mana orbs or shadow monster blobs for chests.
     """
     templates = _get_fast_chest_templates()
     if isinstance(min_confidence, (tuple, list)):
         player = tuple(min_confidence)
-        min_confidence = 0.55
+        min_confidence = 0.60
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     fh, fw = gray.shape[:2]
     span = min(fw, fh)

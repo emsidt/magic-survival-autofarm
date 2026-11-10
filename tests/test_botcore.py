@@ -255,6 +255,15 @@ class VisionTests(unittest.TestCase):
             res_edge = detect_chest(frame_edge, player=(0.5, 0.5))
             self.assertIsNotNone(res_edge, "Indicator templates at screen perimeter must be detected")
 
+        # 4. Shadow enemy blob on brown ground:
+        # A dark jagged cluster of enemy pixels on dirt must NEVER trigger chest detection
+        frame_enemy = np.full((960, 540, 3), [70, 115, 145], dtype=np.uint8)  # Brown dirt
+        # Draw a black shadow monster blob at (380, 400)
+        cv2.circle(frame_enemy, (380, 400), 16, (12, 12, 12), -1)
+        cv2.circle(frame_enemy, (390, 408), 10, (15, 15, 15), -1)
+        res_enemy = detect_chest(frame_enemy, player=(0.5, 0.5))
+        self.assertIsNone(res_enemy, "Shadow enemy blobs on dirt ground must never be detected as chests")
+
     def test_multi_chest_priority_and_dark_zone(self):
         # 1. Black Box priority over Treasure Chest
         field = np.full((800, 500, 3), [70, 110, 110], dtype=np.uint8)
