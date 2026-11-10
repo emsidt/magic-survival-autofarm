@@ -1111,6 +1111,61 @@ class VisionTests(unittest.TestCase):
         with patch("botcore.detect_buy_button", return_value=None):
             self.assertFalse(is_merchant_shop(frame))
 
+    def test_electric_zone_not_confused_with_electric_shock(self):
+        from unittest.mock import patch
+        from botcore import CardSlotData, choose_best_artifact_or_card, _match_keyword, SKILL_ALIASES
+
+        # 1. Alias check: "electric zone" must match electric_zone, NEVER electric_shock
+        ez_text = "electric zone lv. 1"
+        self.assertTrue(any(_match_keyword(a, ez_text) for a in SKILL_ALIASES["electric_zone"]))
+        self.assertFalse(any(_match_keyword(a, ez_text) for a in SKILL_ALIASES["electric_shock"]))
+
+        # 2. Card selection: Slot 1 has Electric Zone, Slot 2 has Fireball, Slot 3 has Lava Zone
+        cards = {
+            1: CardSlotData(1, text_lines=["electric zone", "lv. 1"], skills=["electric_zone"]),
+            2: CardSlotData(2, text_lines=["fireball", "lv. 1"], skills=["fireball"]),
+            3: CardSlotData(3, text_lines=["lava zone", "lv. 1"], skills=["lava_zone"]),
+        }
+        frame = np.zeros((800, 450, 3), dtype=np.uint8)
+        with patch("botcore._detect_cards_ocr", return_value=cards):
+            choice = choose_best_artifact_or_card(frame)
+            self.assertEqual(choice.idx, 1)
+            self.assertEqual(choice.skill_key, "electric_zone")
+            self.assertIn("Electric Zone", choice.label)
+            self.assertNotIn("Electric Shock", choice.label)
+
+    def test_maxed_skill_and_template_overrides(self):
+        from unittest.mock import patch
+        from botcore import CardSlotData, choose_best_artifact_or_card
+
+        # 1. Template match false positive for Spirit must NOT override OCR Electric Zone
+        cards = {
+            1: CardSlotData(1, text_lines=["electric zone", "lv. 1"], skills=["electric_zone"]),
+            2: CardSlotData(2, text_lines=["fireball", "lv. 1"], skills=["fireball"]),
+            3: CardSlotData(3, text_lines=["lava zone", "lv. 1"], skills=["lava_zone"]),
+        }
+        tmpl_false_spirit = {1: ["spirit"], 2: [], 3: []}
+        frame = np.zeros((800, 450, 3), dtype=np.uint8)
+        with patch("botcore._detect_cards_ocr", return_value=cards):
+            with patch("botcore._detect_skills_templates", return_value=tmpl_false_spirit):
+                choice = choose_best_artifact_or_card(frame)
+                # Slot 1 should be recognized as Electric Zone, NOT Spirit!
+                self.assertEqual(choice.idx, 1)
+                self.assertEqual(choice.skill_key, "electric_zone")
+                self.assertNotIn("Spirit", choice.label)
+
+        # 2. When Spirit is in maxed_skills, Spirit must NEVER be chosen
+        cards_with_spirit = {
+            1: CardSlotData(1, text_lines=["spirit", "lv. max"], skills=["spirit"], is_maxed=True),
+            2: CardSlotData(2, text_lines=["electric zone", "lv. 2"], skills=["electric_zone"]),
+            3: CardSlotData(3, text_lines=["fireball", "lv. 1"], skills=["fireball"]),
+        }
+        with patch("botcore._detect_cards_ocr", return_value=cards_with_spirit):
+            choice2 = choose_best_artifact_or_card(frame, maxed_skills={"spirit"})
+            self.assertEqual(choice2.idx, 2)
+            self.assertEqual(choice2.skill_key, "electric_zone")
+            self.assertIn("Electric Zone", choice2.label)
+
 
 if __name__ == "__main__":
     unittest.main()

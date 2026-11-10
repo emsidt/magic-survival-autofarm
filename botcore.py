@@ -2045,44 +2045,39 @@ SKILL_ALIASES: dict[str, list[str]] = {
     "heart_of_lightning": ["heart of lightning", "heartoflightning"],
 
     # Component skills
-    "spirit": [
-        "spirit", "spirits", "spint", "spirt", "spint's", "spirit's",
-        "magic blade", "familiar", "blade-shaped projectile",
-    ],
+    "spirit": ["spirit", "spirits", "spirit's"],
     "electric_shock": [
         "electric shock", "electrick shock", "electric_shock", "electricshock",
-        "electric", "shock", "chain lightning", "superconductivity", "current overload",
     ],
     "cyclone": [
         "cyclone", "cycione", "cycIone", "cyctone", "cyclon", "cycloe", "cydone",
         "cy clone", "cyc lone", "cyclones",
-        "hurricane", "climate change", "extreme weather", "tornado", "deep breath",
+        "hurricane", "climate change",
     ],
     "satellite": [
         "satellite", "satelite", "satellit", "satellites", "sateilite", "satelIite",
-        "anti-gravity", "antigravity", "nuclear fission", "neutron",
     ],
 
     # Ice / Freeze skills
-    "blizzard": ["blizzard", "blizard", "blizz", "sub-zero", "sub zero", "cold wave", "ice age"],
-    "frost_nova": ["frost nova", "frostnova", "frost", "absolute zero", "earthquake"],
-    "tsunami": ["tsunami", "tsunam", "pole", "ocean", "deluge"],
+    "blizzard": ["blizzard", "blizard", "blizz"],
+    "frost_nova": ["frost nova", "frostnova"],
+    "tsunami": ["tsunami", "tsunam"],
 
     # Other Active / Support Magics
-    "flash_shock": ["flash shock", "flashshock", "flash_shock", "flash", "frenzy", "ragnarok"],
-    "magic_circle": ["magic circle", "magiccircle", "unleash mana", "great magic circle"],
-    "shield": ["shield", "barrier", "reconstruct"],
-    "cloaking": ["cloaking", "cloak", "mirage", "soul harvest"],
-    "armageddon": ["armageddon", "apocalypse", "book of revelation"],
-    "electric_zone": ["electric zone", "electriczone"],
+    "flash_shock": ["flash shock", "flashshock", "flash_shock"],
+    "magic_circle": ["magic circle", "magiccircle"],
+    "shield": ["shield"],
+    "cloaking": ["cloaking", "cloak"],
+    "armageddon": ["armageddon"],
+    "electric_zone": ["electric zone", "electriczone", "electrick zone", "electric_zone"],
     "arcane_ray": ["arcane ray", "arcaneray"],
-    "fireball": ["fireball", "fire ball", "poison gas", "constellation"],
-    "meteor": ["meteor", "giant meteorite", "volcano eruption"],
-    "thunderstorm": ["thunderstorm", "thunder storm", "orbital strike", "judgment"],
-    "incineration": ["incineration", "flame strike", "pyroblast"],
-    "energy_bolt": ["energy bolt", "energybolt", "spark", "flare"],
-    "lava_zone": ["lava zone", "lavazone", "magma eruption", "melting"],
-    "magic_bullet": ["magic bullet", "magicbullet", "magic bolt", "magicbolt", "continuous cast", "avatar"],
+    "fireball": ["fireball", "fire ball"],
+    "meteor": ["meteor", "meteors"],
+    "thunderstorm": ["thunderstorm", "thunder storm"],
+    "incineration": ["incineration", "incinerate"],
+    "energy_bolt": ["energy bolt", "energybolt"],
+    "lava_zone": ["lava zone", "lavazone"],
+    "magic_bullet": ["magic bullet", "magicbullet", "magic bolt", "magicbolt"],
 
     # Meta Passive Magics
     "fast_casting": ["fast casting", "fastcasting"],
@@ -2098,8 +2093,8 @@ SKILL_ALIASES: dict[str, list[str]] = {
     "adrenaline": ["adrenaline", "adrenalin"],
     "silent_casting": ["silent casting", "silent chant", "silentcast"],
     "mana_factory": ["mana factory", "manafactory"],
-    "guardian_angel": ["guardian angel", "guardian", "angel"],
-    "magic_seal": ["magic seal", "seal"],
+    "guardian_angel": ["guardian angel", "guardian"],
+    "magic_seal": ["magic seal", "magicseal"],
     "juggernaut": ["juggernaut", "juggernauts", "juggernaut's"],
     "noblesse": ["noblesse", "nobless", "noble"],
     "timekeeper": ["timekeeper", "time keeper", "time acceleration"],
@@ -2109,8 +2104,8 @@ SKILL_ALIASES: dict[str, list[str]] = {
     "pioneer": ["pioneer"],
     "florist": ["florist"],
     "grand_master": ["grand master", "grandmaster"],
-    "eldritch": ["eldritch", "curse"],
-    "growth": ["growth", "overgrowth", "grow", "vitality growth"],
+    "eldritch": ["eldritch"],
+    "growth": ["growth", "overgrowth", "vitality growth"],
     "catalyst": ["catalyst"],
     "overdrive": ["overdrive"],
     "veteran": ["veteran"],
@@ -2119,13 +2114,49 @@ SKILL_ALIASES: dict[str, list[str]] = {
     "mutation": ["mutation", "mutant"],
 }
 
+# Maximum level caps for skills in Magic Survival
+SKILL_MAX_LEVELS: dict[str, int] = {
+    # Active Magics (Max Level 7)
+    "spirit": 7,
+    "electric_shock": 7,
+    "cyclone": 7,
+    "satellite": 7,
+    "blizzard": 7,
+    "frost_nova": 7,
+    "tsunami": 7,
+    "flash_shock": 7,
+    "magic_circle": 7,
+    "shield": 7,
+    "cloaking": 7,
+    "armageddon": 7,
+    "electric_zone": 7,
+    "arcane_ray": 7,
+    "fireball": 7,
+    "meteor": 7,
+    "thunderstorm": 7,
+    "incineration": 7,
+    "energy_bolt": 7,
+    "lava_zone": 7,
+    "magic_bullet": 7,
+
+    # Passive Magics (Max Level 5)
+    "fast_casting": 5,
+    "haste": 5,
+    "snipe": 5,
+    "vitality": 5,
+    "intelligence": 5,
+    "arcane_effuse": 5,
+    "concentration": 5,
+    "explorer": 5,
+}
+
 # Special Passives ("Red Star Passives" / Kỹ năng có dấu * / dấu sao)
 SPECIAL_STAR_PASSIVES: dict[str, list[str]] = {
     "adrenaline": ["adrenaline", "adrenalin"],
     "silent_casting": ["silent casting", "silent chant", "silentcast"],
     "mana_factory": ["mana factory", "manafactory"],
-    "guardian_angel": ["guardian angel", "guardian", "angel"],
-    "magic_seal": ["magic seal", "seal"],
+    "guardian_angel": ["guardian angel", "guardian"],
+    "magic_seal": ["magic seal", "magicseal"],
     "juggernaut": ["juggernaut", "juggernauts", "juggernaut's"],
     "noblesse": ["noblesse", "nobless", "noble"],
     "timekeeper": ["timekeeper", "time keeper", "time acceleration"],
@@ -2135,8 +2166,8 @@ SPECIAL_STAR_PASSIVES: dict[str, list[str]] = {
     "pioneer": ["pioneer"],
     "florist": ["florist"],
     "grand_master": ["grand master", "grandmaster"],
-    "eldritch": ["eldritch", "curse"],
-    "growth": ["growth", "overgrowth", "grow", "vitality growth"],
+    "eldritch": ["eldritch"],
+    "growth": ["growth", "overgrowth", "vitality growth"],
     "catalyst": ["catalyst"],
     "overdrive": ["overdrive"],
     "veteran": ["veteran"],
@@ -2278,6 +2309,7 @@ class CardSlotData:
     is_special_passive: bool = False
     special_passive_name: str = ""
     has_special_artifact: bool = False
+    is_maxed: bool = False
 
 
 def _detect_cards_ocr(frame: np.ndarray, h: int, w: int) -> dict[int, CardSlotData]:
@@ -2353,24 +2385,6 @@ def _detect_cards_ocr(frame: np.ndarray, h: int, w: int) -> dict[int, CardSlotDa
                 if any(sym in line_text for sym in ("*", "★", "☆")):
                     card.has_asterisk = True
 
-                # Check Special Passives ("Red Star Passives" / Kỹ năng có dấu *)
-                for sp_key, aliases in SPECIAL_STAR_PASSIVES.items():
-                    if any(_match_keyword(a, line_text) for a in aliases):
-                        card.has_asterisk = True
-                        card.is_special_passive = True
-                        card.special_passive_name = sp_key
-                        if sp_key not in card.skills:
-                            card.skills.append(sp_key)
-                        break
-
-                # Check skills
-                for skill_key, aliases in SKILL_ALIASES.items():
-                    for a in aliases:
-                        if _match_keyword(a, line_text):
-                            if skill_key not in card.skills:
-                                card.skills.append(skill_key)
-                            break
-
                 # Check freeze traits
                 for ft in FREEZE_TRAITS:
                     if _match_keyword(ft, line_text):
@@ -2416,6 +2430,61 @@ def _detect_cards_ocr(frame: np.ndarray, h: int, w: int) -> dict[int, CardSlotDa
                 for name in SURVIVAL_SYNERGY_ARTIFACTS:
                     if name in line_text:
                         card.has_survival_synergy = True
+
+        # Post-process each card slot: prioritize card TITLE lines (first 1-2 lines)
+        for card in cards.values():
+            if not card.text_lines:
+                continue
+
+            full_card_text = " ".join(card.text_lines)
+            if any(m in full_card_text for m in ("(max)", "lv max", "lv. max", "level max", "max level")):
+                card.is_maxed = True
+
+            # 1. Match Special Passives: Title lines first
+            for line in card.text_lines[:2]:
+                for sp_key, aliases in SPECIAL_STAR_PASSIVES.items():
+                    if any(_match_keyword(a, line) for a in aliases):
+                        card.has_asterisk = True
+                        card.is_special_passive = True
+                        card.special_passive_name = sp_key
+                        if sp_key not in card.skills:
+                            card.skills.append(sp_key)
+                        break
+                if card.is_special_passive:
+                    break
+
+            if not card.is_special_passive:
+                for line in card.text_lines[2:]:
+                    for sp_key, aliases in SPECIAL_STAR_PASSIVES.items():
+                        if any(_match_keyword(a, line) for a in aliases):
+                            card.has_asterisk = True
+                            card.is_special_passive = True
+                            card.special_passive_name = sp_key
+                            if sp_key not in card.skills:
+                                card.skills.append(sp_key)
+                            break
+                    if card.is_special_passive:
+                        break
+
+            # 2. Match Skills: Title lines first (prevents description text from polluting skill name)
+            title_skills: list[str] = []
+            for line in card.text_lines[:2]:
+                for skill_key, aliases in SKILL_ALIASES.items():
+                    for a in aliases:
+                        if _match_keyword(a, line):
+                            if skill_key not in title_skills:
+                                title_skills.append(skill_key)
+                            break
+            if title_skills:
+                card.skills.extend(title_skills)
+            else:
+                for line in card.text_lines[2:]:
+                    for skill_key, aliases in SKILL_ALIASES.items():
+                        for a in aliases:
+                            if _match_keyword(a, line):
+                                if skill_key not in card.skills:
+                                    card.skills.append(skill_key)
+                                break
 
         # Visual check: detect red star badge in icon region of each card slot
         if num_cards == 4:
@@ -2737,6 +2806,7 @@ def choose_best_artifact_or_card(
     prefer_crit_and_cooldown: bool = True,
     prefer_freeze_traits: bool = True,
     active_skills: Optional[set[str]] = None,
+    maxed_skills: Optional[set[str]] = None,
 ) -> CardChoice:
     """Evaluate 3 vertical card slots using Wiki & Reddit Meta Tier List:
     1. Trait choices: Freeze traits (Sub-Zero, Absolute Zero, Pole) -> Combination traits
@@ -2753,6 +2823,22 @@ def choose_best_artifact_or_card(
     num_cards = len(ocr_cards)
     all_indices = tuple(ocr_cards.keys())
     tmpl_matches = _detect_skills_templates(frame, h, w, num_cards=num_cards)
+
+    # Filter out skills that are already MAXED
+    if maxed_skills:
+        for idx in all_indices:
+            ocr_cards[idx].skills = [s for s in ocr_cards[idx].skills if s not in maxed_skills]
+
+    # Evaluate candidate skills per slot:
+    # If OCR recognized a skill or special passive on this slot, DO NOT let template matching inject false skills!
+    slot_skills: dict[int, list[str]] = {}
+    for idx in all_indices:
+        if ocr_cards[idx].skills or ocr_cards[idx].is_special_passive:
+            cand = [s for s in ocr_cards[idx].skills if not maxed_skills or s not in maxed_skills]
+        else:
+            # Fallback to visual template match only when OCR found nothing
+            cand = [s for s in tmpl_matches.get(idx, []) if not maxed_skills or s not in maxed_skills]
+        slot_skills[idx] = cand
 
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     if num_cards == 4:
@@ -2868,8 +2954,12 @@ def choose_best_artifact_or_card(
 
     total_priority_count = len(normalized_priority)
     for idx in all_indices:
-        card_skills = set(ocr_cards[idx].skills + tmpl_matches.get(idx, []))
+        if ocr_cards[idx].is_maxed:
+            continue
+        card_skills = slot_skills.get(idx, [])
         for skill in card_skills:
+            if maxed_skills and skill in maxed_skills:
+                continue
             if skill in normalized_priority:
                 rank = total_priority_count - normalized_priority.index(skill)
                 # If card is starred or fusion component, give it a major priority boost
@@ -2924,6 +3014,8 @@ def choose_best_artifact_or_card(
                 bonus += 150
         if ocr_cards[idx].has_survival_synergy:
             bonus += 80
+        if ocr_cards[idx].is_maxed:
+            bonus -= 20000
 
         syn_bonus, syn_matched = compute_skill_synergy_bonus(card_full_text, active_skills)
         if syn_matched:

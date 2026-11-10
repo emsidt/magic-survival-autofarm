@@ -68,6 +68,9 @@ from botcore import (
     is_level_up_screen,
     is_shop_buy_enabled,
     is_three_card_chest,
+    COMBINATION_COMPONENTS,
+    SKILL_MAX_LEVELS,
+    SPECIAL_STAR_PASSIVES,
 )
 from data_recorder import DataRecorder
 from learning_engine import AdaptiveLearner
@@ -647,6 +650,8 @@ class FarmApp:
         last_confirm_click_time = 0.0
         ad_wait_start_time = 0.0
         active_skills: set[str] = set()
+        skill_levels: dict[str, int] = {}
+        maxed_skills: set[str] = set()
         uncertain_since = 0.0
         level_up_clicks = 0
         match_running = False
@@ -791,6 +796,8 @@ class FarmApp:
                                     except Exception:
                                         pass
                                 active_skills.clear()
+                                skill_levels.clear()
+                                maxed_skills.clear()
                                 controller.tap(list(confirm_pos), rect)
                                 now_tick = time.monotonic()
                                 last_confirm_click_time = now_tick
@@ -817,6 +824,8 @@ class FarmApp:
                             match_running = False
                             post_death_phase = False
                             active_skills.clear()
+                            skill_levels.clear()
+                            maxed_skills.clear()
                             ad_wait_start_time = 0.0
                             match_start_time = 0.0
                             if self.config.get("auto_restart", True) and (start_tick - last_auto_action_time >= 1.5):
@@ -834,6 +843,8 @@ class FarmApp:
                             match_running = False
                             post_death_phase = False
                             active_skills.clear()
+                            skill_levels.clear()
+                            maxed_skills.clear()
                             ad_wait_start_time = 0.0
                             match_start_time = 0.0
                             if self.config.get("auto_restart", True) and (start_tick - last_auto_action_time >= 1.5):
@@ -851,6 +862,8 @@ class FarmApp:
                             match_running = False
                             post_death_phase = False
                             active_skills.clear()
+                            skill_levels.clear()
+                            maxed_skills.clear()
                             ad_wait_start_time = 0.0
                             if self.config.get("auto_restart", True) and (start_tick - last_auto_action_time >= 1.5):
                                 self.recorder.start_new_run()
@@ -1101,6 +1114,8 @@ class FarmApp:
                                 best_circle_score, best_circle_label, parent_sk = evaluate_selected_attribute(frame)
                                 if parent_sk:
                                     active_skills.add(parent_sk)
+                                    skill_levels[parent_sk] = 7
+                                    maxed_skills.add(parent_sk)
 
                                 # Nếu thuộc tính hiện tại chưa phải là nhánh Hợp thể (score < 500), thử bấm xem các vòng tròn khác
                                 if best_circle_score < 500 and (start_tick - last_attribute_scan_time >= 4.0):
@@ -1180,6 +1195,12 @@ class FarmApp:
                                         },
                                     )
                                     active_skills.add(combo_key)
+                                    maxed_skills.add(combo_key)
+                                    if combo_key in COMBINATION_COMPONENTS:
+                                        for comp in COMBINATION_COMPONENTS[combo_key]:
+                                            active_skills.add(comp)
+                                            skill_levels[comp] = 7
+                                            maxed_skills.add(comp)
                                     now_tick = time.monotonic()
                                     last_auto_action_time = now_tick
                                     level_up_clicks += 1
@@ -1204,12 +1225,17 @@ class FarmApp:
                                     prefer_crit_and_cooldown=self.config.get("prefer_crit_and_cooldown", True),
                                     prefer_freeze_traits=self.config.get("prefer_freeze_traits", True),
                                     active_skills=active_skills,
+                                    maxed_skills=maxed_skills,
                                 )
                                 card_idx, target = choice_res
                                 choice_label = getattr(choice_res, "label", f"Thẻ {card_idx}")
                                 sk_key = getattr(choice_res, "skill_key", "")
                                 if sk_key:
                                     active_skills.add(sk_key)
+                                    skill_levels[sk_key] = skill_levels.get(sk_key, 0) + 1
+                                    max_l = SKILL_MAX_LEVELS.get(sk_key, 1 if sk_key in SPECIAL_STAR_PASSIVES else 7)
+                                    if skill_levels[sk_key] >= max_l:
+                                        maxed_skills.add(sk_key)
                                 self.recorder.record_decision(
                                     frame,
                                     "level_up",

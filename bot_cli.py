@@ -79,6 +79,8 @@ def run_cli_bot():
     print(">>> Nhấn Ctrl+C trong cửa sổ này để dừng bất kỳ lúc nào.\n")
 
     active_skills: set[str] = set()
+    skill_levels: dict[str, int] = {}
+    maxed_skills: set[str] = set()
     match_start_time = 0.0
     match_running = False
     last_auto_action_time = 0.0
@@ -149,6 +151,8 @@ def run_cli_bot():
                         print(f"   Đã cập nhật {len(rep.get('skills_updated', []))} kỹ năng vào Não AI!")
                         print("=" * 60 + "\n")
                     active_skills.clear()
+                    skill_levels.clear()
+                    maxed_skills.clear()
                     controller.tap(list(confirm_pos), rect)
                     print(f"📋 [Kết quả] Tự động bấm 'Confirm' quay về sảnh!")
                     time.sleep(1.5)
@@ -165,6 +169,8 @@ def run_cli_bot():
             if sg_pos:
                 match_running = False
                 active_skills.clear()
+                skill_levels.clear()
+                maxed_skills.clear()
                 match_start_time = 0.0
                 if now - last_auto_action_time >= 1.5:
                     last_auto_action_time = now
@@ -236,6 +242,14 @@ def run_cli_bot():
                             btn_learn = botcore.detect_learn_button(f_conf)
                             if btn_learn:
                                 controller.tap(list(btn_learn), rect)
+                                active_skills.add(combo_key)
+                                maxed_skills.add(combo_key)
+                                if combo_key in botcore.COMBINATION_COMPONENTS:
+                                    for comp in botcore.COMBINATION_COMPONENTS[combo_key]:
+                                        active_skills.add(comp)
+                                        skill_levels[comp] = 7
+                                        maxed_skills.add(comp)
+                                        print(f"🏆 [MAX FUSION] Kỹ năng thành phần [{comp}] đã hợp thể tối đa vào [{combo_label}]!")
                                 print(f"✨ [Phép kết hợp Fusion] Đã mở khóa: [{combo_label}] ({combo_key})!")
                                 time.sleep(0.65)
                                 continue
@@ -249,14 +263,20 @@ def run_cli_bot():
                         prefer_crit_and_cooldown=config.get("prefer_crit_and_cooldown", True),
                         prefer_freeze_traits=config.get("prefer_freeze_traits", True),
                         active_skills=active_skills,
+                        maxed_skills=maxed_skills,
                     )
                     card_idx, target = choice_res
                     choice_label = getattr(choice_res, "label", f"Thẻ {card_idx}")
                     if target:
                         controller.tap(list(target), rect)
-                        chosen_sk = getattr(choice_res, "chosen_skill", None)
-                        if chosen_sk:
-                            active_skills.add(chosen_sk)
+                        sk_key = getattr(choice_res, "skill_key", None)
+                        if sk_key:
+                            active_skills.add(sk_key)
+                            skill_levels[sk_key] = skill_levels.get(sk_key, 0) + 1
+                            max_lvl = botcore.SKILL_MAX_LEVELS.get(sk_key, 1 if sk_key in botcore.SPECIAL_STAR_PASSIVES else 7)
+                            if skill_levels[sk_key] >= max_lvl:
+                                maxed_skills.add(sk_key)
+                                print(f"🏆 [MAX LEVEL] Kỹ năng [{sk_key}] đã đạt cấp tối đa ({max_lvl})!")
                         print(f"⭐ [Cấp #{step_count}] Đã chọn Thẻ {card_idx}: [{choice_label}]")
                         time.sleep(0.65)
                 continue
@@ -276,6 +296,9 @@ def run_cli_bot():
                     controller.tap(list(learn_pos), rect)
                     if p_sk:
                         active_skills.add(p_sk)
+                        skill_levels[p_sk] = 7
+                        maxed_skills.add(p_sk)
+                        print(f"🏆 [MAX LEVEL] Kỹ năng [{p_sk}] đã hoàn thành nhánh Cấp 7 (MAX)!")
                     print(f"🌀 [Thuộc tính Cấp 7] Đã học nhánh: [{l_att}] (Thuộc: {p_sk})")
                     time.sleep(0.65)
                 continue
