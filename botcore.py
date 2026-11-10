@@ -409,14 +409,14 @@ def choose_direction(
 
     # Pac-Man Target-Lock: Select the single highest-value nearby safe orb so the character
     # walks directly ONTO individual orbs one-by-one instead of hovering in the empty centroid
-    # between multiple scattered orbs!
+    # between multiple scattered orbs! Bolder mana vacuuming!
     all_orbs: list[tuple[int, int, float]] = []
     for gx, gy in nearest_purple:
-        all_orbs.append((gx, gy, 45.0))
+        all_orbs.append((gx, gy, 65.0))
     for gx, gy in nearest_gold:
-        all_orbs.append((gx, gy, 28.0))
+        all_orbs.append((gx, gy, 42.0))
     for gx, gy in nearest_blue:
-        all_orbs.append((gx, gy, 18.0))
+        all_orbs.append((gx, gy, 28.0))
 
     best_orb: Optional[tuple[int, int, float, float, float]] = None
     best_orb_val = -1.0
@@ -427,12 +427,12 @@ def choose_direction(
             gy_c = min(h - 1, max(0, gy))
             gx_c = min(w - 1, max(0, gx))
             d_px = float(vision.distance[gy_c, gx_c])
-            if d_px < 14.0:
-                continue  # Never prioritize mana orbs inside lethal void zones or enemy bodies!
-            gem_safety = min(1.0, max(0.20, (d_px - 10.0) / 20.0))
+            if d_px < 8.0:
+                continue  # Skip orbs inside lethal enemy core
+            gem_safety = min(1.0, max(0.40, (d_px - 6.0) / 18.0))
             align = ((dx * previous[0] + dy * previous[1]) / dist) if previous else 0.0
-            hysteresis = 1.0 + 0.35 * max(0.0, align)
-            val = (bw * 1.5) * gem_safety * hysteresis / (0.12 + dist / (span * 0.45))
+            hysteresis = 1.0 + 0.45 * max(0.0, align)
+            val = (bw * 2.2) * gem_safety * hysteresis / (0.10 + dist / (span * 0.55))
             if val > best_orb_val:
                 best_orb_val = val
                 best_orb = (gx, gy, bw, dist, gem_safety)
@@ -497,11 +497,11 @@ def choose_direction(
             and monolith_dot > 0.35
         )
 
-        # Danger repulsion: heavy collision penalty when approaching hazardous boundaries (< 25px)
-        score = -14.0 * forward_danger
-        if near_danger_dist < 25.0 and not is_charging_monolith:
-            score -= 28.0 * (1.0 - near_danger_dist / 25.0)
-        if near_danger_dist < 12.0 and not is_charging_monolith:
+        # Danger repulsion: clear collision avoidance with lethal boundary (< 10px) while staying brave
+        score = -10.0 * forward_danger
+        if near_danger_dist < 18.0 and not is_charging_monolith:
+            score -= 22.0 * (1.0 - near_danger_dist / 18.0)
+        if near_danger_dist < 10.0 and not is_charging_monolith:
             score -= 50.0  # Immediate impassable lethal wall / void / swarm barrier
 
         # Intelligent Swarm Kiting: Flow tangentially in a circular arc around monster swarms
@@ -525,34 +525,34 @@ def choose_direction(
             if chest_dist > 4:
                 chest_dot = (cdx * direction[0] + cdy * direction[1]) / chest_dist
 
-        # Active Pac-Man Mana Vacuum: Lock onto best_orb + narrow-cone cluster bonus
+        # Active Pac-Man Mana Vacuum: Bold, aggressive pull towards nearby mana orbs!
         mana_score = 0.0
-        safe_path = max(0.20, 1.0 - forward_danger * 0.65)
-        if near_danger_dist < 16.0 and not is_charging_monolith:
-            safe_path = 0.0  # Immediate hazard block (< 16px)
+        safe_path = max(0.35, 1.0 - forward_danger * 0.50)
+        if near_danger_dist < 10.0 and not is_charging_monolith:
+            safe_path = 0.0  # Immediate hazard block (< 10px)
 
         if best_orb is not None and safe_path > 0:
             tx, ty, tbw, tdist, t_safety = best_orb
             tdx, tdy = tx - px, ty - py
             tdot = (tdx * direction[0] + tdy * direction[1]) / tdist
             if tdot > 0:
-                # Decisive pull towards the target mana orb!
-                mana_score += (tbw * 2.8) * (tdot ** 1.2) * t_safety * safe_path
+                # Decisive, strong pull towards the target mana orb!
+                mana_score += (tbw * 4.5) * (tdot ** 1.1) * t_safety * safe_path
 
         if safe_path > 0:
             cluster_bonus = 0.0
             for gx, gy, bw in all_orbs:
                 dx, dy = gx - px, gy - py
                 dist = math.hypot(dx, dy)
-                if 4 < dist < span * 0.85:
+                if 4 < dist < span * 0.90:
                     dot = (dx * direction[0] + dy * direction[1]) / dist
-                    if dot > 0.35:
+                    if dot > 0.30:
                         gy_c = min(h - 1, max(0, gy))
                         gx_c = min(w - 1, max(0, gx))
-                        if vision.distance[gy_c, gx_c] < 14.0:
-                            continue  # Skip orbs inside hazard
-                        cluster_bonus += (bw * 0.35) * (dot ** 1.3) / (0.20 + dist / (span * 0.40))
-            mana_score += min(20.0, cluster_bonus) * safe_path
+                        if vision.distance[gy_c, gx_c] < 8.0:
+                            continue  # Skip orbs inside lethal core
+                        cluster_bonus += (bw * 0.55) * (dot ** 1.2) / (0.15 + dist / (span * 0.50))
+            mana_score += min(60.0, cluster_bonus) * safe_path
 
         # If a chest is nearby/on-screen, suppress mana orbs that pull away from the chest
         if vision.chest and chest_dist > 4:
