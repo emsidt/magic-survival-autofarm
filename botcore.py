@@ -1254,16 +1254,16 @@ def is_three_card_chest(frame: np.ndarray, obtain_x: float = 0.50) -> bool:
     """Return True if the Treasure Chest popup displays 3 horizontal cards (vs 1 centered card)."""
     h, w = frame.shape[:2]
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    y0, y1 = int(h * 0.27), int(h * 0.44)
-    left_x0 = max(0, int(w * (obtain_x - 0.34)))
-    left_x1 = max(left_x0 + 1, int(w * (obtain_x - 0.16)))
-    right_x0 = min(w - 1, int(w * (obtain_x + 0.16)))
-    right_x1 = min(w, int(w * (obtain_x + 0.34)))
+    y0, y1 = int(h * 0.25), int(h * 0.45)
+    left_x0 = max(0, int(w * (obtain_x - 0.36)))
+    left_x1 = max(left_x0 + 1, int(w * (obtain_x - 0.12)))
+    right_x0 = min(w - 1, int(w * (obtain_x + 0.12)))
+    right_x1 = min(w, int(w * (obtain_x + 0.36)))
     left_roi = gray[y0:y1, left_x0:left_x1]
     right_roi = gray[y0:y1, right_x0:right_x1]
     if left_roi.size == 0 or right_roi.size == 0:
-        return False
-    return int(np.sum(left_roi > 30)) >= 80 and int(np.sum(right_roi > 30)) >= 80
+        return True  # Default to 3-card browsing in Magic Survival
+    return int(np.sum(left_roi > 20)) >= 30 and int(np.sum(right_roi > 20)) >= 30
 
 
 # Direct Archetype & Skill-Specific Synergy Keywords for Artifact Selection

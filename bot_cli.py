@@ -310,9 +310,53 @@ def run_cli_bot():
                 match_running = True
                 if now - last_chest_time >= 1.2:
                     last_chest_time = now
-                    _, c_lbl = botcore.evaluate_selected_chest_artifact(frame, True, active_skills=active_skills)
-                    controller.tap(list(obtain_pos), rect)
-                    print(f"📦 [Rương Cổ vật] Đã nhận: [{c_lbl}]!")
+                    obtain_x, obtain_y = obtain_pos
+                    prefer_cc = config.get("prefer_crit_and_cooldown", True)
+
+                    build_skills = set(active_skills)
+                    for p_sk in config.get("skill_priority", []):
+                        clean_sk = str(p_sk).lower().strip().replace("-", "_").replace(" ", "_")
+                        build_skills.add(clean_sk)
+
+                    print(f"\n📦 [Rương Cổ vật] Mở Rương! Đang duyệt 3 cổ vật (Ô 1, Ô 2, Ô 3)...")
+                    candidates = {}
+
+                    # 1. Đọc Thẻ 1 (Mặc định đang được chọn khi mở rương)
+                    s1, lbl1 = botcore.evaluate_selected_chest_artifact(frame, prefer_cc, active_skills=build_skills)
+                    candidates[1] = (s1, lbl1)
+                    print(f"   - Thẻ 1/3: [{lbl1}] (Điểm: {s1})")
+
+                    # 2. Bấm xem Thẻ 2
+                    slot2 = botcore.get_chest_card_target(2, obtain_x)
+                    controller.tap(list(slot2), rect)
+                    time.sleep(0.30)
+                    f2 = controller.screenshot() if is_adb else frame
+                    s2, lbl2 = botcore.evaluate_selected_chest_artifact(f2, prefer_cc, active_skills=build_skills)
+                    candidates[2] = (s2, lbl2)
+                    print(f"   - Thẻ 2/3: [{lbl2}] (Điểm: {s2})")
+
+                    # 3. Bấm xem Thẻ 3
+                    slot3 = botcore.get_chest_card_target(3, obtain_x)
+                    controller.tap(list(slot3), rect)
+                    time.sleep(0.30)
+                    f3 = controller.screenshot() if is_adb else frame
+                    s3, lbl3 = botcore.evaluate_selected_chest_artifact(f3, prefer_cc, active_skills=build_skills)
+                    candidates[3] = (s3, lbl3)
+                    print(f"   - Thẻ 3/3: [{lbl3}] (Điểm: {s3})")
+
+                    # Chọn thẻ có điểm cao nhất (ưu tiên Build Synergy, S-Tier, Special, Legendary)
+                    best_idx = max(candidates, key=lambda k: candidates[k][0])
+                    best_score, best_label = candidates[best_idx]
+
+                    # Nếu thẻ tốt nhất không phải là Thẻ 3 (thẻ đang chọn), bấm chọn lại thẻ đó
+                    if best_idx != 3:
+                        best_slot = botcore.get_chest_card_target(best_idx, obtain_x)
+                        controller.tap(list(best_slot), rect)
+                        time.sleep(0.25)
+
+                    # Bấm Obtain để nhận cổ vật
+                    controller.tap([obtain_x, obtain_y], rect)
+                    print(f"📦 [Rương Cổ vật] 🎉 ĐÃ CHỌN CỔ VẬT TỐT NHẤT: Thẻ {best_idx} -> [{best_label}]!")
                     time.sleep(0.65)
                 continue
 

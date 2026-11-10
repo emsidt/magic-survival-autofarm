@@ -974,19 +974,24 @@ class FarmApp:
                             if self.config.get("auto_levelup", True) and (start_tick - last_chest_obtain_time >= 1.1):
                                 obtain_x, obtain_y = obtain_pos
                                 prefer_cc = self.config.get("prefer_crit_and_cooldown", True)
-                                if is_three_card_chest(frame, obtain_x) and (start_tick - last_chest_scan_time >= 3.0):
+                                build_skills = set(active_skills)
+                                for p_sk in self.config.get("skill_priority", []):
+                                    clean_sk = str(p_sk).lower().strip().replace("-", "_").replace(" ", "_")
+                                    build_skills.add(clean_sk)
+
+                                if is_three_card_chest(frame, obtain_x):
                                     # Đọc thẻ 1 (mặc định đang chọn), sau đó bấm xem thẻ 2 và thẻ 3 để so sánh điểm Meta + Build Synergy
-                                    s1, lbl1 = evaluate_selected_chest_artifact(frame, prefer_cc, active_skills=active_skills)
+                                    s1, lbl1 = evaluate_selected_chest_artifact(frame, prefer_cc, active_skills=build_skills)
                                     slot2 = get_chest_card_target(2, obtain_x)
                                     controller.tap(list(slot2), rect)
-                                    time.sleep(0.32)
+                                    time.sleep(0.30)
                                     frame2 = screenshot(rect)
-                                    s2, lbl2 = evaluate_selected_chest_artifact(frame2, prefer_cc, active_skills=active_skills)
+                                    s2, lbl2 = evaluate_selected_chest_artifact(frame2, prefer_cc, active_skills=build_skills)
                                     slot3 = get_chest_card_target(3, obtain_x)
                                     controller.tap(list(slot3), rect)
-                                    time.sleep(0.32)
+                                    time.sleep(0.30)
                                     frame3 = screenshot(rect)
-                                    s3, lbl3 = evaluate_selected_chest_artifact(frame3, prefer_cc, active_skills=active_skills)
+                                    s3, lbl3 = evaluate_selected_chest_artifact(frame3, prefer_cc, active_skills=build_skills)
 
                                     candidates = {1: (s1, lbl1), 2: (s2, lbl2), 3: (s3, lbl3)}
                                     best_idx = max(candidates, key=lambda k: candidates[k][0])
@@ -994,7 +999,7 @@ class FarmApp:
                                     if best_idx != 3:
                                         best_slot = get_chest_card_target(best_idx, obtain_x)
                                         controller.tap(list(best_slot), rect)
-                                        time.sleep(0.28)
+                                        time.sleep(0.25)
                                     self.recorder.record_decision(
                                         frame,
                                         "chest",
@@ -1017,7 +1022,7 @@ class FarmApp:
                                     time.sleep(0.55)
                                 else:
                                     # Rương 1 vật phẩm (Reliquary) hoặc bấm bồi Obtain nếu lần bấm trước chưa đóng rương
-                                    _, lbl = evaluate_selected_chest_artifact(frame, prefer_cc, active_skills=active_skills)
+                                    _, lbl = evaluate_selected_chest_artifact(frame, prefer_cc, active_skills=build_skills)
                                     self.recorder.record_decision(
                                         frame,
                                         "chest",
