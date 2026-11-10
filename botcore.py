@@ -693,6 +693,13 @@ def detect_settings_dialog(frame: np.ndarray) -> bool:
         async def _ocr():
             return await winocr.recognize_pil(pil_img, lang="en")
         res = asyncio.run(_ocr())
+        full_text = " ".join(line.text.lower() for line in res.lines)
+        if "ad inspector" in full_text or "creative preview" in full_text or "debug mode" in full_text:
+            return False
+        # Must have at least one distinctive game settings keyword
+        has_distinctive = any(k in full_text for k in ("bgm", "sfx", "cloud save", "coupon", "language"))
+        if not has_distinctive:
+            return False
         keywords = ("bgm", "sfx", "sound", "language", "setting", "settings", "coupon", "cloud save", "version")
         matches = 0
         for line in res.lines:

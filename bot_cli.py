@@ -103,6 +103,13 @@ def run_cli_bot():
             now = time.monotonic()
 
             if is_adb:
+                # Tự phục hồi: Nếu game bị văng ra màn hình chính LDPlayer (AdMob Crash) -> tự động mở lại
+                if hasattr(controller, "is_game_foreground") and not controller.is_game_foreground():
+                    print("🔄 [Tự phục hồi] Phát hiện game bị thoát/văng ra ngoài màn hình chính -> Đang tự động mở lại Magic Survival...")
+                    controller.launch_game()
+                    time.sleep(3.5)
+                    last_auto_action_time = now
+                    continue
                 frame = controller.screenshot()
             else:
                 import main
@@ -159,8 +166,9 @@ def run_cli_bot():
                     last_monolith_pos = None
                     previous_direction = None
                     controller.tap(list(confirm_pos), rect)
+                    last_auto_action_time = now
                     print(f"📋 [Kết quả] Tự động bấm 'Confirm' quay về sảnh!")
-                    time.sleep(1.5)
+                    time.sleep(2.0)
                 continue
 
             # 3. Màn hình Cài đặt mở nhầm -> Bấm Back/ESC đóng

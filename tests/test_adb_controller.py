@@ -51,6 +51,25 @@ class TestADBController(unittest.TestCase):
             self.assertIsNotNone(frame)
             self.assertEqual(frame.shape, (100, 100, 3))
 
+    def test_is_game_foreground_and_launch(self):
+        """Test foreground check via dumpsys window and game launch via monkey."""
+        mock_res = MagicMock()
+        mock_res.stdout = b"mCurrentFocus=Window{bbc8fda u0 com.vkslrzm.Zombie/com.unity3d.player.UnityPlayerActivity}\n"
+        with patch.object(self.ctrl, "_run_adb", return_value=mock_res):
+            self.assertTrue(self.ctrl.is_game_foreground())
+
+        mock_launcher = MagicMock()
+        mock_launcher.stdout = b"mCurrentFocus=Window{123 u0 com.ldmnq.launcher3}\n"
+        with patch.object(self.ctrl, "_run_adb", return_value=mock_launcher):
+            self.assertFalse(self.ctrl.is_game_foreground())
+
+        with patch.object(self.ctrl, "_run_adb") as mock_run:
+            self.ctrl.launch_game()
+            mock_run.assert_called_once_with(
+                ["shell", "monkey", "-p", "com.vkslrzm.Zombie", "-c", "android.intent.category.LAUNCHER", "1"],
+                timeout=3.0,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

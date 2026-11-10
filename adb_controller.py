@@ -155,6 +155,26 @@ class ADBController:
             except Exception:
                 pass
 
+    def is_game_foreground(self, package_name: str = "com.vkslrzm.Zombie") -> bool:
+        """Check if Magic Survival is currently the active foreground window."""
+        try:
+            res = self._run_adb(["shell", "dumpsys", "window"], timeout=2.0)
+            out = res.stdout.decode("utf-8", errors="ignore")
+            for line in out.splitlines():
+                if "mCurrentFocus" in line:
+                    return package_name in line
+            return False
+        except Exception:
+            return True
+
+    def launch_game(self, package_name: str = "com.vkslrzm.Zombie"):
+        """Bring or launch the game back to foreground if closed/crashed."""
+        with self.lock:
+            try:
+                self._run_adb(["shell", "monkey", "-p", package_name, "-c", "android.intent.category.LAUNCHER", "1"], timeout=3.0)
+            except Exception:
+                pass
+
     def screenshot(self) -> Optional[np.ndarray]:
         """Capture Android screen directly from framebuffer pipe in background without window focus."""
         try:
