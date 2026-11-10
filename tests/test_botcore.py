@@ -1275,6 +1275,30 @@ class VisionTests(unittest.TestCase):
             # 5. Die screen is not a chest screen
             self.assertFalse(botcore.is_chest_screen(img_die))
 
+        # 6. Candy Crush / Third-party mobile video ad detection
+        ad_path = Path(r"C:\Users\User\.gemini\antigravity\brain\2dc840cb-72eb-45f9-92e9-a3fe999f18b4\.user_uploaded\media_1794315022661_1abe6bab.png")
+        if ad_path.is_file():
+            img_ad = cv2.imread(str(ad_path))
+            img_ad_1080 = cv2.resize(img_ad, (1080, 1920))
+
+            # Pause button MUST NOT trigger on ad candies
+            self.assertIsNone(botcore.detect_pause_button(img_ad))
+            self.assertIsNone(botcore.detect_pause_button(img_ad_1080))
+
+            # Ad Close circled 'X' button is detected accurately at top right
+            close_orig = botcore.detect_close_button(img_ad)
+            self.assertIsNotNone(close_orig)
+            self.assertAlmostEqual(close_orig[0], 0.879, delta=0.04)
+            self.assertAlmostEqual(close_orig[1], 0.068, delta=0.04)
+
+            close_1080 = botcore.detect_close_button(img_ad_1080)
+            self.assertIsNotNone(close_1080)
+            self.assertAlmostEqual(close_1080[0], 0.879, delta=0.04)
+            self.assertAlmostEqual(close_1080[1], 0.068, delta=0.04)
+
+            # Ad screen verification
+            self.assertTrue(botcore.is_ad_screen(img_ad))
+
 
 if __name__ == "__main__":
     unittest.main()

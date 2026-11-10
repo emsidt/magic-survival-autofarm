@@ -492,14 +492,24 @@ def run_cli_bot():
                         time.sleep(0.5)
                 continue
 
-            # 12. Phát hiện quảng cáo có nút X -> Bấm X tắt
+            # 12. Phát hiện quảng cáo (Video, Playable ad, AdMob) -> Bấm X hoặc Close tắt
             ad_x = botcore.detect_close_button(frame)
             if ad_x:
                 controller.release()
-                if now - last_auto_action_time >= 1.5:
+                match_running = False
+                if now - last_auto_action_time >= 1.2:
                     last_auto_action_time = now
                     controller.tap(list(ad_x), rect)
-                    print("📺 [Quảng cáo] Đã tự động bấm nút 'X' đóng quảng cáo!")
+                    print(f"📺 [Quảng cáo] Đã tự động bấm nút 'X' tại {ad_x} đóng quảng cáo!")
+                    time.sleep(1.2)
+                continue
+            elif botcore.is_ad_screen(frame):
+                controller.release()
+                match_running = False
+                if now - last_auto_action_time >= 3.0:
+                    last_auto_action_time = now
+                    print("📺 [Quảng cáo] Đang trên màn hình quảng cáo -> Bấm ESC/Back bỏ qua quảng cáo...")
+                    controller.press_esc()
                     time.sleep(1.0)
                 continue
 

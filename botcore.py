@@ -715,7 +715,7 @@ def detect_settings_dialog(frame: np.ndarray) -> bool:
         return False
 
 
-def detect_pause_button(frame: np.ndarray, threshold: float = 0.65) -> Optional[tuple[float, float]]:
+def detect_pause_button(frame: np.ndarray, threshold: float = 0.70) -> Optional[tuple[float, float]]:
     """Detect the in-game Pause button (||) located in the top-right corner during gameplay."""
     tmpl_path = _BASE_DIR / "assets" / "pause_button.png"
     if not tmpl_path.is_file():
@@ -725,7 +725,8 @@ def detect_pause_button(frame: np.ndarray, threshold: float = 0.65) -> Optional[
         return None
     h, w = frame.shape[:2]
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    roi = gray[0:int(h * 0.10), int(w * 0.80):w]
+    x_start = int(w * 0.86)
+    roi = gray[0 : int(h * 0.08), x_start:w]
     th_sz, tw_sz = tmpl.shape
     best_val = 0.0
     best_loc = None
@@ -774,13 +775,13 @@ def detect_close_button(frame: np.ndarray, threshold: float = 0.62) -> Optional[
     h, w = frame.shape[:2]
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-    # Ad close buttons appear strictly in the outer corners (top 8% of screen, max 120px)
-    corner_h = min(int(h * 0.08), 120)
+    # Ad close buttons appear strictly in the outer corners (top 9.5% of screen, max 180px)
+    corner_h = min(int(h * 0.095), 180)
     corners = [
         # Top-right corner (standard position for Google AdMob, Unity, AppLovin mobile ads)
-        (int(w * 0.72), 0, w, corner_h),
+        (int(w * 0.70), 0, w, corner_h),
         # Top-left corner (position in Google Play Games portrait ads)
-        (0, 0, int(w * 0.28), corner_h),
+        (0, 0, int(w * 0.30), corner_h),
     ]
 
     best_coord = None
@@ -792,9 +793,19 @@ def detect_close_button(frame: np.ndarray, threshold: float = 0.62) -> Optional[
         tmpl_x = cv2.imread(str(tmpl_x_path), cv2.IMREAD_GRAYSCALE)
         if tmpl_x is not None:
             templates.append(tmpl_x)
-            for scale in (0.5, 0.75, 1.0, 1.25, 1.5):
+            for scale in (0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0):
                 sw, sh = int(tmpl_x.shape[1] * scale), int(tmpl_x.shape[0] * scale)
                 templates.append(cv2.resize(tmpl_x, (sw, sh)))
+
+    # Circled X (white filled circle with black X - standard in Google AdMob, Candy Crush, AppLovin, Unity ads)
+    tmpl_circ_path = _BASE_DIR / "assets" / "ad_close_circle_x.png"
+    if tmpl_circ_path.is_file():
+        tmpl_c = cv2.imread(str(tmpl_circ_path), cv2.IMREAD_GRAYSCALE)
+        if tmpl_c is not None:
+            templates.append(tmpl_c)
+            for scale in (0.60, 0.75, 1.0, 1.25, 1.5, 1.75, 1.95, 2.0, 2.2):
+                sw, sh = int(tmpl_c.shape[1] * scale), int(tmpl_c.shape[0] * scale)
+                templates.append(cv2.resize(tmpl_c, (sw, sh)))
 
     # Synthetic X crosses (crisp white cross on black)
     for sz in (12, 16, 20, 26, 32):
@@ -906,6 +917,35 @@ def detect_close_button(frame: np.ndarray, threshold: float = 0.62) -> Optional[
         pass
 
     return None
+
+
+def is_ad_screen(frame: np.ndarray) -> bool:
+    """Return True if the current screen is displaying a third-party mobile ad (AdMob, Unity, Playable Ad)."""
+    if detect_close_button(frame) is not None:
+        return True
+    try:
+        import asyncio
+        import winocr
+        from PIL import Image
+
+        h, w = frame.shape[:2]
+        pil_img = Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+
+        async def _ocr_ad():
+            return await winocr.recognize_pil(pil_img, lang="en")
+
+        res = asyncio.run(_ocr_ad())
+        full_text = " ".join(l.text.lower() for l in res.lines)
+        ad_kws = (
+            "cài đặt", "install", "not in-game", "google play", "play store",
+            "reward in", "reward granted", "candy crush", "download now",
+            "free download", "bỏ qua quảng cáo", "skip ad", "close ad",
+        )
+        if any(kw in full_text for kw in ad_kws):
+            return True
+    except Exception:
+        pass
+    return False
 
 
 def detect_confirm_button(frame: np.ndarray, min_confidence: float = 0.70) -> Optional[tuple[float, float]]:
