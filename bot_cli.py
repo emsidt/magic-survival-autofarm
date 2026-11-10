@@ -100,6 +100,8 @@ def run_cli_bot():
     in_shop = False
     last_shop_label = ""
     step_count = 0
+    last_known_game_timer_sec = 0.0
+    last_timer_scan_time = 0.0
 
     try:
         while True:
@@ -134,6 +136,9 @@ def run_cli_bot():
             if die_pos:
                 controller.release()
                 match_running = False
+                t_die = botcore.detect_game_timer(frame)
+                if t_die and t_die[2] >= last_known_game_timer_sec:
+                    last_known_game_timer_sec = float(t_die[2])
                 if now - last_die_time >= 1.5:
                     last_die_time = now
                     controller.tap(list(die_pos), rect)
@@ -148,10 +153,17 @@ def run_cli_bot():
                 match_running = False
                 if now - last_confirm_time >= 2.0:
                     last_confirm_time = now
+                    # Lấy thời gian sống THỰC TẾ từ thanh đồng hồ chính giữa game
+                    t_final = botcore.detect_game_timer(frame)
+                    if t_final and t_final[2] >= last_known_game_timer_sec:
+                        last_known_game_timer_sec = float(t_final[2])
+
+                    survival_sec = last_known_game_timer_sec
                     recorder.record_decision(frame, "endgame", "confirm")
                     recorder.finish_run()
-                    if match_start_time > 0.0:
-                        survival_sec = now - match_start_time
+                    if survival_sec > 0.0 or match_start_time > 0.0:
+                        if survival_sec == 0.0 and match_start_time > 0.0:
+                            survival_sec = max(1.0, now - match_start_time)
                         match_start_time = 0.0
                         m, s = int(survival_sec // 60), int(survival_sec % 60)
                         rep = learner.evaluate_and_learn_run(
@@ -161,7 +173,7 @@ def run_cli_bot():
                             core_skills=set(config.get("skill_priority", [])),
                         )
                         print("\n" + "=" * 60)
-                        print(f"🏆 [KẾT QUẢ VÁN]: Sống sót {m:02d}p {s:02d}s | Điểm thưởng: {rep.get('reward', 0):+.2f}")
+                        print(f"🏆 [KẾT QUẢ VÁN]: Sống sót {m:02d}p {s:02d}s ({survival_sec:.0f}s thực tế trên thanh HUD) | Điểm thưởng: {rep.get('reward', 0):+.2f}")
                         print(f"   Đã cập nhật {len(rep.get('skills_updated', []))} kỹ năng vào Não AI!")
                         print("=" * 60 + "\n")
                     active_skills.clear()
@@ -170,6 +182,8 @@ def run_cli_bot():
                     last_monolith_pos = None
                     last_chest_pos = None
                     previous_direction = None
+                    last_known_game_timer_sec = 0.0
+                    last_timer_scan_time = 0.0
                     controller.tap(list(confirm_pos), rect)
                     last_auto_action_time = now
                     print(f"📋 [Kết quả] Tự động bấm 'Confirm' quay về sảnh!")
@@ -216,6 +230,8 @@ def run_cli_bot():
                     last_auto_action_time = now
                     run_id = recorder.start_new_run()
                     match_start_time = now
+                    last_known_game_timer_sec = 0.0
+                    last_timer_scan_time = 0.0
                     step_count = 0
                     last_monolith_pos = None
                     last_chest_pos = None
@@ -301,6 +317,11 @@ def run_cli_bot():
             if lvl_res:
                 controller.release()
                 match_running = True
+                if now - last_timer_scan_time >= 1.5:
+                    last_timer_scan_time = now
+                    t_lvl = botcore.detect_game_timer(frame)
+                    if t_lvl and t_lvl[2] >= last_known_game_timer_sec:
+                        last_known_game_timer_sec = float(t_lvl[2])
                 if now - last_level_up_time >= 1.2:
                     last_level_up_time = now
                     step_count += 1
@@ -369,6 +390,11 @@ def run_cli_bot():
             if obtain_pos or botcore.is_chest_screen(frame):
                 controller.release()
                 match_running = True
+                if now - last_timer_scan_time >= 1.5:
+                    last_timer_scan_time = now
+                    t_ch = botcore.detect_game_timer(frame)
+                    if t_ch and t_ch[2] >= last_known_game_timer_sec:
+                        last_known_game_timer_sec = float(t_ch[2])
                 if now - last_chest_modal_time >= 1.2:
                     last_chest_modal_time = now
                     obtain_x, obtain_y = obtain_pos or (0.50, 0.812)
@@ -503,6 +529,13 @@ def run_cli_bot():
                 if match_start_time == 0.0:
                     match_start_time = now
 
+                # Quét đồng hồ thời gian sống thực tế trên thanh HUD mỗi ~1.0 giây
+                if now - last_timer_scan_time >= 1.0:
+                    last_timer_scan_time = now
+                    t_live = botcore.detect_game_timer(frame)
+                    if t_live and (t_live[2] >= last_known_game_timer_sec or last_known_game_timer_sec == 0.0):
+                        last_known_game_timer_sec = float(t_live[2])
+
                 player_coords = tuple(config.get("player_position", [0.5, 0.5]))
                 px = int(w * player_coords[0])
                 py = int(h * player_coords[1])
@@ -565,7 +598,7 @@ def run_cli_bot():
                 # Điều khiển né quái thông minh bằng thuật toán trường tiềm năng (Potential Field)
                 dir_x, dir_y = botcore.choose_direction(
                     vision,
-                    elapsed=now - match_start_time,
+                    elapsed=last_known_game_timer_sec if last_known_game_timer_sec > 0.0 else (now - match_start_time),
                     player=player_coords,
                     previous=previous_direction,
                 )

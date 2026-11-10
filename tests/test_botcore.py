@@ -1324,6 +1324,45 @@ class VisionTests(unittest.TestCase):
             # Ad screen verification
             self.assertTrue(botcore.is_ad_screen(img_ad))
 
+    def test_game_timer_hud_detection(self):
+        import botcore
+        from pathlib import Path
+
+        # 1. Regex parsing tests for in-game timer strings
+        self.assertEqual(botcore.parse_timer_text("03:32"), (3, 32, 212))
+        self.assertEqual(botcore.parse_timer_text("03 : 32"), (3, 32, 212))
+        self.assertEqual(botcore.parse_timer_text("03 •.32"), (3, 32, 212))
+        self.assertEqual(botcore.parse_timer_text("05 : 43"), (5, 43, 343))
+        self.assertEqual(botcore.parse_timer_text("14:25"), (14, 25, 865))
+        self.assertIsNone(botcore.parse_timer_text("no timer here"))
+        self.assertIsNone(botcore.parse_timer_text("99:99"))
+
+        # 2. Blank frame has no game timer
+        frame_blank = np.zeros((1920, 1080, 3), dtype=np.uint8)
+        self.assertIsNone(botcore.detect_game_timer(frame_blank))
+
+        # 3. Real gameplay frames top HUD timer detection
+        p_lvl = Path(r"C:\Users\User\.gemini\antigravity\brain\2dc840cb-72eb-45f9-92e9-a3fe999f18b4\.user_uploaded\media_1794314195828_4b489029.png")
+        if p_lvl.is_file():
+            img_lvl = cv2.imread(str(p_lvl))
+            t_res = botcore.detect_game_timer(img_lvl)
+            self.assertIsNotNone(t_res)
+            self.assertEqual(t_res, (3, 32, 212))
+
+        p_die = Path(r"C:\Users\User\.gemini\antigravity\brain\2dc840cb-72eb-45f9-92e9-a3fe999f18b4\.user_uploaded\media_1794303389717_e66f4fae.png")
+        if p_die.is_file():
+            img_die = cv2.imread(str(p_die))
+            t_res2 = botcore.detect_game_timer(img_die)
+            self.assertIsNotNone(t_res2)
+            self.assertEqual(t_res2, (5, 43, 343))
+
+        p_chest = Path(r"C:\Users\User\.gemini\antigravity\brain\2dc840cb-72eb-45f9-92e9-a3fe999f18b4\.user_uploaded\media_1794314056060_1ea9202c.png")
+        if p_chest.is_file():
+            img_chest = cv2.imread(str(p_chest))
+            t_res3 = botcore.detect_game_timer(img_chest)
+            self.assertIsNotNone(t_res3)
+            self.assertEqual(t_res3, (2, 31, 151))
+
 
 if __name__ == "__main__":
     unittest.main()

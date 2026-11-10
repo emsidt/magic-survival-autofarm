@@ -997,6 +997,77 @@ def detect_resume_button(frame: np.ndarray) -> Optional[tuple[float, float]]:
     return None
 
 
+def parse_timer_text(text: str) -> Optional[tuple[int, int, int]]:
+    """Parse minutes and seconds from OCR string (e.g. '03:32', '03 : 32', '03 •.32', '05 : 43', '14:25').
+    Returns (minutes, seconds, total_seconds) or None.
+    """
+    cleaned = re.sub(r'[^0-9:]+', ':', text.strip())
+    m = re.search(r'(\d{1,2}):+(\d{2})', cleaned)
+    if m:
+        mins, secs = int(m.group(1)), int(m.group(2))
+        if secs < 60 and mins < 180:
+            return (mins, secs, mins * 60 + secs)
+    m4 = re.search(r'\b(\d{1,2})[\s]+(\d{2})\b', text)
+    if m4:
+        mins, secs = int(m4.group(1)), int(m4.group(2))
+        if secs < 60 and mins < 180:
+            return (mins, secs, mins * 60 + secs)
+    return None
+
+
+def detect_game_timer(frame: np.ndarray) -> Optional[tuple[int, int, int]]:
+    """Detect in-game survival timer from the HUD top-center bar (e.g. '02:31', '03:32', '05:43').
+    Returns (minutes, seconds, total_seconds) or None.
+
+    This provides true, authentic in-game survival time directly from the top HUD bar,
+    completely ignoring time spent in level-up menus, chest modals, shops, or loading pauses.
+    """
+    if frame is None or frame.size == 0:
+        return None
+    h, w = frame.shape[:2]
+    # The in-game timer in Magic Survival is located strictly in the top bar: y: ~1.5%..8.0%, x: ~28%..72%
+    y0, y1 = int(h * 0.015), int(h * 0.080)
+    x0, x1 = int(w * 0.28), int(w * 0.72)
+    roi = frame[y0:y1, x0:x1]
+    if roi.size == 0 or roi.shape[0] < 8 or roi.shape[1] < 20:
+        return None
+
+    try:
+        import asyncio
+        import winocr
+        from PIL import Image
+
+        async def _ocr(p_img):
+            return await winocr.recognize_pil(p_img, lang="en")
+
+        # Pass 1: raw image (scaled to comfortable OCR height if small)
+        scale = max(1.0, 60.0 / max(1, roi.shape[0]))
+        if scale > 1.2:
+            rw, rh = int(roi.shape[1] * scale), int(roi.shape[0] * scale)
+            roi_scaled = cv2.resize(roi, (rw, rh), interpolation=cv2.INTER_CUBIC)
+        else:
+            roi_scaled = roi
+
+        pil_img = Image.fromarray(cv2.cvtColor(roi_scaled, cv2.COLOR_BGR2RGB))
+        res = asyncio.run(_ocr(pil_img))
+        txt = " ".join(l.text for l in res.lines)
+        parsed = parse_timer_text(txt)
+        if parsed is not None:
+            return parsed
+
+        # Pass 2: normalized contrast for dimmed screens (modal dialogs, dark boss zones)
+        gray = cv2.cvtColor(roi_scaled, cv2.COLOR_BGR2GRAY)
+        norm = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
+        pil_norm = Image.fromarray(norm)
+        res_norm = asyncio.run(_ocr(pil_norm))
+        txt_norm = " ".join(l.text for l in res_norm.lines)
+        return parse_timer_text(txt_norm)
+    except Exception:
+        pass
+
+    return None
+
+
 def detect_confirm_button(frame: np.ndarray, min_confidence: float = 0.70) -> Optional[tuple[float, float]]:
     """Detect 'Confirm' button at the bottom of the 'Experiment Failed' / Results screen."""
     # During active gameplay/combat, the Pause button is present -> player is ALIVE, not on results screen

@@ -664,6 +664,8 @@ class FarmApp:
         last_monolith_pos: Optional[tuple[int, int]] = None
         last_monolith_time: float = 0.0
         match_start_time: float = 0.0
+        last_known_game_timer_sec: float = 0.0
+        last_timer_scan_time: float = 0.0
         while not self.ending.is_set():
             try:
                 while not self.ending.is_set():
@@ -774,8 +776,11 @@ class FarmApp:
                             if start_tick - last_confirm_click_time >= 2.0:
                                 self.recorder.record_decision(frame, "endgame", "confirm")
                                 self.recorder.finish_run()
-                                if match_start_time > 0.0:
-                                    survival_seconds = time.monotonic() - match_start_time
+                                if match_start_time > 0.0 or last_known_game_timer_sec > 0.0:
+                                    t_fin = botcore.detect_game_timer(frame)
+                                    if t_fin and t_fin[2] >= last_known_game_timer_sec:
+                                        last_known_game_timer_sec = float(t_fin[2])
+                                    survival_seconds = last_known_game_timer_sec if last_known_game_timer_sec > 0.0 else max(1.0, time.monotonic() - match_start_time)
                                     match_start_time = 0.0
                                     try:
                                         learn_rep = self.learner.evaluate_and_learn_run(
@@ -869,6 +874,8 @@ class FarmApp:
                             if self.config.get("auto_restart", True) and (start_tick - last_auto_action_time >= 1.5):
                                 self.recorder.start_new_run()
                                 match_start_time = time.monotonic()
+                                last_known_game_timer_sec = 0.0
+                                last_timer_scan_time = 0.0
                                 controller.tap(list(ea_pos), rect)
                                 last_auto_action_time = start_tick
                                 self.rule_counts["enter_area"] = self.rule_counts.get("enter_area", 0) + 1
@@ -1281,6 +1288,13 @@ class FarmApp:
                             match_running = True
                             if match_start_time == 0.0:
                                 match_start_time = time.monotonic()
+
+                            if start_tick - last_timer_scan_time >= 1.0:
+                                last_timer_scan_time = start_tick
+                                t_live = botcore.detect_game_timer(frame)
+                                if t_live and (t_live[2] >= last_known_game_timer_sec or last_known_game_timer_sec == 0.0):
+                                    last_known_game_timer_sec = float(t_live[2])
+
                             fh, fw = frame.shape[:2]
                             px = int(fw * self.config["player_position"][0])
                             py = int(fh * self.config["player_position"][1])
@@ -1338,7 +1352,9 @@ class FarmApp:
                             match_running = True
                             post_death_phase = False
                             direction = choose_direction(
-                                vision, start_tick, self.previous_direction,
+                                vision,
+                                last_known_game_timer_sec if last_known_game_timer_sec > 0.0 else (start_tick - match_start_time),
+                                self.previous_direction,
                                 tuple(self.config["player_position"]),
                             )
                             controller.move(direction, rect, self.config)
