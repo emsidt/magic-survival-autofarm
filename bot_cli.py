@@ -358,12 +358,12 @@ def run_cli_bot():
 
             # 9. MÀN HÌNH RƯƠNG CỔ VẬT (Obtain button)
             obtain_pos = botcore.detect_obtain_button(frame)
-            if obtain_pos:
+            if obtain_pos or botcore.is_chest_screen(frame):
                 controller.release()
                 match_running = True
                 if now - last_chest_time >= 1.2:
                     last_chest_time = now
-                    obtain_x, obtain_y = obtain_pos
+                    obtain_x, obtain_y = obtain_pos or (0.50, 0.812)
                     prefer_cc = config.get("prefer_crit_and_cooldown", True)
 
                     build_skills = set(active_skills)

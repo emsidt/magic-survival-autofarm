@@ -1212,6 +1212,54 @@ class VisionTests(unittest.TestCase):
         bright_learn[860:910, 240:360] = 255
         self.assertTrue(botcore.is_learn_button_active(bright_learn))
 
+    def test_chest_modal_and_die_detection_on_1080p(self):
+        import botcore
+        from pathlib import Path
+
+        chest_path = Path(r"C:\Users\User\.gemini\antigravity\brain\2dc840cb-72eb-45f9-92e9-a3fe999f18b4\.user_uploaded\media_1794314056060_1ea9202c.png")
+        die_path = Path(r"C:\Users\User\.gemini\antigravity\brain\2dc840cb-72eb-45f9-92e9-a3fe999f18b4\.user_uploaded\media_1794303389717_e66f4fae.png")
+
+        if chest_path.is_file():
+            img_chest = cv2.imread(str(chest_path))
+            img_1080 = cv2.resize(img_chest, (1080, 1920))
+
+            # 1. Obtain button is reliably detected on both original and 1080p
+            ob_orig = botcore.detect_obtain_button(img_chest)
+            self.assertIsNotNone(ob_orig)
+            self.assertAlmostEqual(ob_orig[1], 0.812, delta=0.04)
+
+            ob_1080 = botcore.detect_obtain_button(img_1080)
+            self.assertIsNotNone(ob_1080)
+            self.assertAlmostEqual(ob_1080[1], 0.812, delta=0.04)
+
+            # 2. Chest modal screen detection
+            self.assertTrue(botcore.is_chest_screen(img_chest))
+            self.assertTrue(botcore.is_chest_screen(img_1080))
+
+            # 3. Chest modal is NEVER misidentified as Level Up screen or Ad Close button
+            lvl_res = botcore.is_level_up_screen(img_1080)
+            self.assertFalse(bool(lvl_res))
+            self.assertEqual(lvl_res[1], "obtain_button")
+
+            ad_x = botcore.detect_close_button(img_1080)
+            self.assertIsNone(ad_x)
+
+        if die_path.is_file():
+            img_die = cv2.imread(str(die_path))
+            img_die_1080 = cv2.resize(img_die, (1080, 1920))
+
+            # 4. Die button is detected immediately on original and 1080p
+            d_orig = botcore.detect_die_button(img_die)
+            self.assertIsNotNone(d_orig)
+            self.assertAlmostEqual(d_orig[1], 0.73, delta=0.05)
+
+            d_1080 = botcore.detect_die_button(img_die_1080)
+            self.assertIsNotNone(d_1080)
+            self.assertAlmostEqual(d_1080[1], 0.73, delta=0.05)
+
+            # 5. Die screen is not a chest screen
+            self.assertFalse(botcore.is_chest_screen(img_die))
+
 
 if __name__ == "__main__":
     unittest.main()

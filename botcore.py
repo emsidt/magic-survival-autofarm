@@ -417,11 +417,11 @@ def choose_direction(
     # between multiple scattered orbs! Bolder mana vacuuming!
     all_orbs: list[tuple[int, int, float]] = []
     for gx, gy in nearest_purple:
-        all_orbs.append((gx, gy, 65.0))
+        all_orbs.append((gx, gy, 80.0))
     for gx, gy in nearest_gold:
-        all_orbs.append((gx, gy, 42.0))
+        all_orbs.append((gx, gy, 55.0))
     for gx, gy in nearest_blue:
-        all_orbs.append((gx, gy, 28.0))
+        all_orbs.append((gx, gy, 36.0))
 
     best_orb: Optional[tuple[int, int, float, float, float]] = None
     best_orb_val = -1.0
@@ -432,9 +432,9 @@ def choose_direction(
             gy_c = min(h - 1, max(0, gy))
             gx_c = min(w - 1, max(0, gx))
             d_px = float(vision.distance[gy_c, gx_c])
-            if d_px < 8.0:
+            if d_px < 6.0:
                 continue  # Skip orbs inside lethal enemy core
-            gem_safety = min(1.0, max(0.40, (d_px - 6.0) / 18.0))
+            gem_safety = min(1.0, max(0.40, (d_px - 5.0) / 16.0))
             align = ((dx * previous[0] + dy * previous[1]) / dist) if previous else 0.0
             hysteresis = 1.0 + 0.45 * max(0.0, align)
             val = (bw * 2.2) * gem_safety * hysteresis / (0.10 + dist / (span * 0.55))
@@ -754,7 +754,7 @@ def detect_close_button(frame: np.ndarray, threshold: float = 0.62) -> Optional[
     Safeguarded to strictly ignore Title Screen, Game Lobby, Endgame Confirm screen,
     active gameplay Pause Button, Settings Gear, Chest Obtain screen, Shop screen, and Select Attribute screen.
     """
-    # 1. If Title Screen, Lobby, Confirm, Die screen, Pause button, or Game Modal is active, NEVER detect an ad close button!
+    # 1. If Title Screen, Lobby, Confirm, Die screen, Pause button, Chest modal, or Game Modal is active, NEVER detect an ad close button!
     if (detect_start_game(frame) is not None or 
         detect_enter_area(frame) is not None or 
         detect_selected(frame) is not None or
@@ -762,6 +762,7 @@ def detect_close_button(frame: np.ndarray, threshold: float = 0.62) -> Optional[
         detect_die_button(frame) is not None or
         detect_pause_button(frame) is not None or
         detect_obtain_button(frame) is not None or
+        is_chest_screen(frame) or
         detect_buy_button(frame) is not None or
         detect_learn_button(frame) is not None or
         is_attribute_screen(frame)):
@@ -773,8 +774,8 @@ def detect_close_button(frame: np.ndarray, threshold: float = 0.62) -> Optional[
     h, w = frame.shape[:2]
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-    # Ad close buttons appear strictly in the outer corners (top 9% of screen, max 160px)
-    corner_h = min(int(h * 0.09), 160)
+    # Ad close buttons appear strictly in the outer corners (top 8% of screen, max 120px)
+    corner_h = min(int(h * 0.08), 120)
     corners = [
         # Top-right corner (standard position for Google AdMob, Unity, AppLovin mobile ads)
         (int(w * 0.72), 0, w, corner_h),
@@ -899,7 +900,7 @@ def detect_close_button(frame: np.ndarray, threshold: float = 0.62) -> Optional[
                     r = word.bounding_rect
                     cx = (r.x + r.width / 2) / w
                     cy = (r.y + r.height / 2) / h
-                    if cy <= 0.18 and (cx <= 0.25 or cx >= 0.75):
+                    if cy <= 0.08 and (cx <= 0.25 or cx >= 0.75):
                         return (round(cx, 4), round(cy, 4))
     except Exception:
         pass
@@ -928,7 +929,7 @@ def detect_confirm_button(frame: np.ndarray, min_confidence: float = 0.70) -> Op
             th, tw = template.shape[:2]
             best_match = None
             best_score = 0.0
-            for scale in (0.80, 0.90, 1.0, 1.10, 1.25):
+            for scale in (0.75, 0.90, 1.0, 1.15, 1.30, 1.50, 1.75, 2.00, 2.25):
                 stw, sth = int(tw * scale), int(th * scale)
                 if stw >= roi.shape[1] or sth >= roi.shape[0]:
                     continue
@@ -1008,7 +1009,7 @@ def detect_enter_area(frame: np.ndarray, min_confidence: float = 0.70) -> Option
         th, tw = template.shape[:2]
         best_match = None
         best_score = 0.0
-        for scale in (0.75, 0.85, 1.0, 1.15, 1.30):
+        for scale in (0.70, 0.85, 1.0, 1.15, 1.35, 1.55, 1.80, 2.05, 2.25):
             stw, sth = int(tw * scale), int(th * scale)
             if stw >= roi.shape[1] or sth >= roi.shape[0]:
                 continue
@@ -1060,7 +1061,7 @@ def detect_selected(frame: np.ndarray, min_confidence: float = 0.70) -> Optional
     th, tw = template.shape[:2]
     best_match = None
     best_score = 0.0
-    for scale in (0.8, 0.9, 1.0, 1.1, 1.2):
+    for scale in (0.75, 0.90, 1.0, 1.15, 1.30, 1.50, 1.75, 2.00, 2.25):
         stw, sth = int(tw * scale), int(th * scale)
         if stw >= roi.shape[1] or sth >= roi.shape[0]:
             continue
@@ -1092,7 +1093,7 @@ def detect_start_game(frame: np.ndarray, min_confidence: float = 0.70) -> Option
             th, tw = template.shape[:2]
             best_match = None
             best_score = 0.0
-            for scale in (0.70, 0.85, 1.0, 1.15, 1.30):
+            for scale in (0.70, 0.85, 1.0, 1.15, 1.35, 1.55, 1.80, 2.05, 2.25):
                 stw, sth = int(tw * scale), int(th * scale)
                 if stw >= roi.shape[1] or sth >= roi.shape[0]:
                     continue
@@ -1159,7 +1160,7 @@ def detect_die_button(frame: np.ndarray, min_confidence: float = 0.68) -> Option
     best_match = None
     best_score = 0.0
     # 1. Match the 'Die' row directly (Skull + 'Die' text)
-    for scale in (0.42, 0.52, 0.62, 0.72, 0.82, 0.92, 1.0, 1.12, 1.25):
+    for scale in (0.45, 0.60, 0.75, 0.90, 1.05, 1.25, 1.50, 1.75, 2.00, 2.25):
         stw, sth = int(dtw * scale), int(dth * scale)
         if stw >= roi.shape[1] or sth >= roi.shape[0] or stw < 10 or sth < 10:
             continue
@@ -1171,7 +1172,7 @@ def detect_die_button(frame: np.ndarray, min_confidence: float = 0.68) -> Option
             best_match = (x0 + max_loc[0] + stw // 2, y0 + max_loc[1] + sth // 2)
 
     # 2. Fallback: match full Revive+Die block, clicking at 80% height (center of 'Die' row)
-    for scale in (0.42, 0.52, 0.62, 0.72, 0.82, 0.92, 1.0, 1.12, 1.25):
+    for scale in (0.45, 0.60, 0.75, 0.90, 1.05, 1.25, 1.50, 1.75, 2.00, 2.25):
         stw, sth = int(tw * scale), int(th * scale)
         if stw >= roi.shape[1] or sth >= roi.shape[0] or stw < 15 or sth < 15:
             continue
@@ -1215,7 +1216,7 @@ def detect_die_button(frame: np.ndarray, min_confidence: float = 0.68) -> Option
     return None
 
 
-def detect_obtain_button(frame: np.ndarray, min_confidence: float = 0.72) -> Optional[tuple[float, float]]:
+def detect_obtain_button(frame: np.ndarray, min_confidence: float = 0.68) -> Optional[tuple[float, float]]:
     """Detect the 'Obtain' confirm button at the bottom of the Treasure Chest popup."""
     template_path = _BASE_DIR / "assets" / "obtain_button.png"
     if not template_path.is_file():
@@ -1233,7 +1234,7 @@ def detect_obtain_button(frame: np.ndarray, min_confidence: float = 0.72) -> Opt
     th, tw = template.shape[:2]
     best_match = None
     best_score = 0.0
-    for scale in (0.70, 0.85, 1.0, 1.15, 1.30):
+    for scale in (0.70, 0.85, 1.0, 1.15, 1.30, 1.50, 1.75, 2.00, 2.25):
         stw, sth = int(tw * scale), int(th * scale)
         if stw >= roi.shape[1] or sth >= roi.shape[0]:
             continue
@@ -1245,7 +1246,57 @@ def detect_obtain_button(frame: np.ndarray, min_confidence: float = 0.72) -> Opt
             best_match = (x0 + max_loc[0] + stw // 2, y0 + max_loc[1] + sth // 2)
     if best_score >= min_confidence and best_match:
         return (round(best_match[0] / w, 4), round(best_match[1] / h, 4))
+
+    # Fallback via Windows OCR: Look for 'obtain'
+    try:
+        import asyncio
+        import winocr
+        from PIL import Image
+
+        pil_roi = Image.fromarray(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB))
+
+        async def _ocr_obtain():
+            return await winocr.recognize_pil(pil_roi, lang="en")
+
+        ocr_res = asyncio.run(_ocr_obtain())
+        for line in ocr_res.lines:
+            if "obtain" in line.text.lower():
+                if line.words:
+                    r = line.words[0].bounding_rect
+                    cx = (x0 + r.x + r.width / 2) / w
+                    cy = (y0 + r.y + r.height / 2) / h
+                    return (round(cx, 4), round(cy, 4))
+    except Exception:
+        pass
+
     return None
+
+
+def is_chest_screen(frame: np.ndarray) -> bool:
+    """Return True if the current frame is a Treasure Chest / Obelisk / Relic artifact popup."""
+    if detect_obtain_button(frame) is not None:
+        return True
+    # Fast OCR fallback on header area
+    try:
+        import asyncio
+        import winocr
+        from PIL import Image
+
+        h, w = frame.shape[:2]
+        header_roi = frame[int(h * 0.08) : int(h * 0.35), int(w * 0.15) : int(w * 0.85)]
+        pil_img = Image.fromarray(cv2.cvtColor(header_roi, cv2.COLOR_BGR2RGB))
+
+        async def _ocr_chest():
+            return await winocr.recognize_pil(pil_img, lang="en")
+
+        res = asyncio.run(_ocr_chest())
+        txt = " ".join(l.text.lower() for l in res.lines)
+        for kw in ("obelisk", "treasure", "chest", "relic"):
+            if kw in txt:
+                return True
+    except Exception:
+        pass
+    return False
 
 
 def get_chest_card_target(card_index: int = 1, obtain_x: float = 0.50, y: float = 0.36) -> tuple[float, float]:
@@ -2668,7 +2719,7 @@ def is_level_up_screen(frame: np.ndarray) -> LevelUpDetection:
     Guarantees 0% false positives during active combat and gameplay.
     """
     # 1. Negative checks: Ensure no other modal/menu screen is active
-    if detect_obtain_button(frame) is not None:
+    if detect_obtain_button(frame) is not None or is_chest_screen(frame):
         return LevelUpDetection(False, "obtain_button")
     if detect_buy_button(frame) is not None:
         return LevelUpDetection(False, "buy_button")
