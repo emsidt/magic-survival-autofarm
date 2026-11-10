@@ -68,8 +68,8 @@ def _get_fast_chest_templates() -> list[tuple[str, np.ndarray, float, int, int]]
         if base_tmpl is None:
             continue
         bh, bw = base_tmpl.shape[:2]
-        # Full template at 0.40x and 0.50x (matches 0.80x off-screen HUD badge and 1.00x on-field chest)
-        for scale in (0.40, 0.50):
+        # Multi-scale templates on 2x downsampled image (matching 0.70x to 2.0x raw screens, including 1080p LDPlayer)
+        for scale in (0.35, 0.45, 0.55, 0.70, 0.85, 1.00):
             tw = max(14, int(round(bw * scale)))
             th = max(12, int(round(bh * scale)))
             st = cv2.resize(base_tmpl, (tw, th))
@@ -89,16 +89,16 @@ def _verify_chest_color(roi_bgr: np.ndarray, chest_type: str = "treasure_chest")
     total_px = roi_bgr.shape[0] * roi_bgr.shape[1]
 
     if chest_type == "treasure_chest":
-        # Rich amber/brown wood (H 7..23, S>=75, V>=35), or cream/white indicator badge (S<=50, V>=165)
-        wood = (H >= 7) & (H <= 23) & (S >= 75) & (V >= 35)
-        badge = (S <= 50) & (V >= 165)
+        # Rich amber/brown wood (H 5..28, S>=35, V>=25), or cream/white indicator badge (S<=45, V>=175)
+        wood = (H >= 5) & (H <= 28) & (S >= 35) & (V >= 25)
+        badge = (S <= 45) & (V >= 175)
         # CRITICAL: Reject regions that are purely glowing Gold/Yellow Mana orbs!
         # Gold mana orbs have bright neon yellow (H 18..36, S >= 80, V >= 185) with NO dark pixels!
         bright_gold = (H >= 16) & (H <= 36) & (S >= 80) & (V >= 185)
         dark_pixels = (V <= 50)
         if np.sum(bright_gold) / total_px > 0.35 and np.sum(dark_pixels) / total_px < 0.04:
             return False
-        return bool((np.sum(wood) / total_px >= 0.06) or (np.sum(badge) / total_px >= 0.10))
+        return bool((np.sum(wood) / total_px >= 0.025) or (np.sum(badge) / total_px >= 0.08))
     elif chest_type == "reliquary":
         red = ((H <= 16) | (H >= 164)) & (S >= 45) & (V >= 45)
         stone = (S <= 65) & (V >= 115) & (V <= 235)
@@ -118,7 +118,7 @@ def _verify_chest_color(roi_bgr: np.ndarray, chest_type: str = "treasure_chest")
 
 def detect_chest(
     frame: np.ndarray,
-    min_confidence: float = 0.60,
+    min_confidence: float = 0.48,
     player: tuple[float, float] = (0.5, 0.5),
 ) -> Optional[ChestTarget]:
     """Fast, multi-scale artifact chest & off-screen HUD chest indicator detector
@@ -130,7 +130,7 @@ def detect_chest(
     templates = _get_fast_chest_templates()
     if isinstance(min_confidence, (tuple, list)):
         player = tuple(min_confidence)
-        min_confidence = 0.60
+        min_confidence = 0.48
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     fh, fw = gray.shape[:2]
     span = min(fw, fh)
@@ -325,10 +325,11 @@ def inspect_game(frame: np.ndarray, player: tuple[float, float] = (0.5, 0.5)) ->
     # Crucial: mask out all detected chests so their dark outlines / Black Box stone
     # are NEVER treated as monsters that repel the player!
     if chest_target is not None:
-        chest_clear_radius = max(48, int(span * 0.095))
+        chest_clear_radius = max(75, int(span * 0.12))
         for c_pt in getattr(chest_target, "all_positions", [chest_pos]):
             if c_pt is not None:
                 cv2.circle(dark, c_pt, chest_clear_radius, 0, -1)
+                enemy_mask[max(0, c_pt[1] - chest_clear_radius) : min(h, c_pt[1] + chest_clear_radius), max(0, c_pt[0] - chest_clear_radius) : min(w, c_pt[0] + chest_clear_radius)] = 0
     # Crucial: mask out the monolith so its dark jagged stone and crimson runes
     # are NEVER treated as an enemy hazard that repels the player!
     if monolith_pos is not None:
@@ -495,6 +496,16 @@ def choose_direction(
             if monolith_dist > 4:
                 monolith_dot = (mdx * direction[0] + mdy * direction[1]) / monolith_dist
 
+        # Compute chest vector if a chest or off-screen chest indicator is present
+        chest_dot = -1.0
+        chest_dist = 0.0
+        if vision.chest:
+            cx, cy = vision.chest
+            cdx, cdy = cx - px, cy - py
+            chest_dist = math.hypot(cdx, cdy)
+            if chest_dist > 4:
+                chest_dot = (cdx * direction[0] + cdy * direction[1]) / chest_dist
+
         is_charging_monolith = bool(
             getattr(vision, "monolith", None)
             and monolith_dist < span * 0.65
@@ -518,16 +529,6 @@ def choose_direction(
 
         # Path factor for movement
         path_safe_factor = max(0.20, 1.0 - forward_danger * 1.20)
-
-        # Compute chest vector if a chest or off-screen chest indicator is present
-        chest_dot = -1.0
-        chest_dist = 0.0
-        if vision.chest:
-            cx, cy = vision.chest
-            cdx, cdy = cx - px, cy - py
-            chest_dist = math.hypot(cdx, cdy)
-            if chest_dist > 4:
-                chest_dot = (cdx * direction[0] + cdy * direction[1]) / chest_dist
 
         # Active Pac-Man Mana Vacuum: Bold, aggressive pull towards nearby mana orbs!
         mana_score = 0.0
@@ -560,10 +561,10 @@ def choose_direction(
 
         # If a chest is nearby/on-screen, suppress mana orbs that pull away from the chest
         if vision.chest and chest_dist > 4:
-            if chest_dist <= span * 0.45 and chest_dot < 0.35:
+            if chest_dist <= span * 0.35 and chest_dot < 0.20:
                 mana_score *= 0.15
-            elif chest_dot < 0.0:
-                mana_score *= 0.05
+            elif chest_dot < -0.30:
+                mana_score *= 0.20
         # If a monolith is present, suppress mana orbs pulling away from the monolith
         if getattr(vision, "monolith", None) and monolith_dist > 4:
             mana_score = 0.0
@@ -571,15 +572,17 @@ def choose_direction(
 
         # High priority for artifact chest / chest indicator:
         if vision.chest and chest_dist > 4:
-            if chest_dot > -0.10:
-                base_weight = max(55.0, getattr(vision, "chest_weight", 24.0) * 2.2)
-                eff_dot = max(0.18, chest_dot) ** 0.55
+            if chest_dot > -0.15:
+                base_weight = max(160.0, getattr(vision, "chest_weight", 24.0) * 6.5)
+                eff_dot = max(0.18, chest_dot) ** 0.50
                 if near_danger_dist < 14.0:
                     safe_corridor = 0.10
                 else:
                     safe_corridor = max(0.50, 1.0 - forward_danger * 0.50)
-                chest_pull = base_weight * eff_dot * safe_corridor / (0.45 + chest_dist / (span * 1.5))
+                chest_pull = base_weight * eff_dot * safe_corridor / (0.25 + chest_dist / (span * 1.5))
                 score += chest_pull
+            if chest_dot < -0.10:
+                score -= 60.0 * (1.0 - chest_dot)
 
         # High priority for wave-milestone monolith:
         if getattr(vision, "monolith", None) and monolith_dist > 4:
@@ -1245,21 +1248,21 @@ def detect_obtain_button(frame: np.ndarray, min_confidence: float = 0.72) -> Opt
     return None
 
 
-def get_chest_card_target(card_index: int = 1, obtain_x: float = 0.50) -> tuple[float, float]:
+def get_chest_card_target(card_index: int = 1, obtain_x: float = 0.50, y: float = 0.36) -> tuple[float, float]:
     """Return normalized screen coordinates for the 3 horizontal Treasure Chest artifact slots.
 
-    The 3 horizontal slots sit at ~36% screen height:
-      Slot 1 (Left)  : obtain_x - 0.25
+    The 3 horizontal slots sit at y screen height (default 0.36, 0.385 on 1080p):
+      Slot 1 (Left)  : obtain_x - 0.235
       Slot 2 (Middle): obtain_x
-      Slot 3 (Right) : obtain_x + 0.25
+      Slot 3 (Right) : obtain_x + 0.235
     """
     cx = float(obtain_x)
     mapping = {
-        1: (round(max(0.10, cx - 0.25), 4), 0.36),
-        2: (round(cx, 4), 0.36),
-        3: (round(min(0.90, cx + 0.25), 4), 0.36),
+        1: (round(max(0.10, cx - 0.235), 4), y),
+        2: (round(cx, 4), y),
+        3: (round(min(0.90, cx + 0.235), 4), y),
     }
-    return mapping.get(card_index, (round(cx, 4), 0.36))
+    return mapping.get(card_index, (round(cx, 4), y))
 
 
 def is_three_card_chest(frame: np.ndarray, obtain_x: float = 0.50) -> bool:
@@ -1316,7 +1319,7 @@ SKILL_SYNERGY_KEYWORDS: dict[str, list[str]] = {
         "cloaking", "cloak", "merlin's cloak", "merlins cloak", "mirage",
     ],
     "armageddon": [
-        "armageddon", "book of revelation", "apocalypse",
+        "armageddon", "book of revelation", "apocalypse", "a eddo n", "remove all enemies",
     ],
     "electric_zone": [
         "electric zone", "electric", "emp",
@@ -2131,7 +2134,7 @@ SKILL_ALIASES: dict[str, list[str]] = {
     "magic_circle": ["magic circle", "magiccircle"],
     "shield": ["shield"],
     "cloaking": ["cloaking", "cloak"],
-    "armageddon": ["armageddon"],
+    "armageddon": ["armageddon", "a eddo n", "remove all enemies"],
     "electric_zone": ["electric zone", "electriczone", "electrick zone", "electric_zone"],
     "arcane_ray": ["arcane ray", "arcaneray"],
     "fireball": ["fireball", "fire ball"],
@@ -2500,7 +2503,7 @@ def _detect_cards_ocr(frame: np.ndarray, h: int, w: int) -> dict[int, CardSlotDa
                 continue
 
             full_card_text = " ".join(card.text_lines)
-            if any(m in full_card_text for m in ("(max)", "lv max", "lv. max", "level max", "max level")):
+            if any(m in full_card_text for m in ("(max)", "[max]", "(max", "max)", "lv max", "lv. max", "level max", "max level", "maxed")) or bool(re.search(r'\b(lv\.?\s*max|max\s*level|maxed)\b', full_card_text)):
                 card.is_maxed = True
 
             # 1. Match Special Passives: Title lines first
@@ -2615,7 +2618,7 @@ def _detect_skills_templates(frame: np.ndarray, h: int, w: int, num_cards: int =
                     continue
                 res = cv2.matchTemplate(roi, tmpl, cv2.TM_CCOEFF_NORMED)
                 _, max_val, _, max_loc = cv2.minMaxLoc(res)
-                if max_val >= 0.65:
+                if max_val >= 0.78:
                     px, py = max_loc
                     sub = roi[py : py + tmpl.shape[0], px : px + tmpl.shape[1]]
                     if sub.size > 0 and np.max(sub) >= 120 and np.std(sub) >= 28.0:
@@ -2896,13 +2899,16 @@ def choose_best_artifact_or_card(
 
     # Evaluate candidate skills per slot:
     # If OCR recognized a skill or special passive on this slot, DO NOT let template matching inject false skills!
+    # If OCR detected readable text lines on the card, never guess an unrelated skill via low-confidence template matching.
     slot_skills: dict[int, list[str]] = {}
     for idx in all_indices:
         if ocr_cards[idx].skills or ocr_cards[idx].is_special_passive:
             cand = [s for s in ocr_cards[idx].skills if not maxed_skills or s not in maxed_skills]
-        else:
-            # Fallback to visual template match only when OCR found nothing
+        elif not ocr_cards[idx].text_lines:
+            # Fallback to visual template match ONLY when OCR found absolutely no readable text (pure glyph)
             cand = [s for s in tmpl_matches.get(idx, []) if not maxed_skills or s not in maxed_skills]
+        else:
+            cand = []
         slot_skills[idx] = cand
 
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
@@ -3026,7 +3032,7 @@ def choose_best_artifact_or_card(
             if maxed_skills and skill in maxed_skills:
                 continue
             if skill in normalized_priority:
-                rank = total_priority_count - normalized_priority.index(skill)
+                rank = (total_priority_count - normalized_priority.index(skill)) * 4.0
                 # If card is starred or fusion component, give it a major priority boost
                 if ocr_cards[idx].has_asterisk:
                     rank += 120.0

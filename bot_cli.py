@@ -89,6 +89,7 @@ def run_cli_bot():
     last_confirm_time = 0.0
     last_shop_time = 0.0
     last_chest_time = 0.0
+    last_chest_pos = None
     last_learn_time = 0.0
     last_monolith_pos = None
     last_monolith_time = 0.0
@@ -164,6 +165,7 @@ def run_cli_bot():
                     skill_levels.clear()
                     maxed_skills.clear()
                     last_monolith_pos = None
+                    last_chest_pos = None
                     previous_direction = None
                     controller.tap(list(confirm_pos), rect)
                     last_auto_action_time = now
@@ -213,6 +215,7 @@ def run_cli_bot():
                     match_start_time = now
                     step_count = 0
                     last_monolith_pos = None
+                    last_chest_pos = None
                     previous_direction = None
                     controller.tap(list(ea_pos), rect)
                     print("\n" + "-" * 60)
@@ -350,24 +353,28 @@ def run_cli_bot():
                     print(f"\n📦 [Rương Cổ vật] Mở Rương! Đang duyệt 3 cổ vật (Ô 1, Ô 2, Ô 3)...")
                     candidates = {}
 
-                    # 1. Đọc Thẻ 1 (Mặc định đang được chọn khi mở rương)
-                    s1, lbl1 = botcore.evaluate_selected_chest_artifact(frame, prefer_cc, active_skills=build_skills)
+                    # 1. Bấm xem Thẻ 1
+                    slot1 = botcore.get_chest_card_target(1, obtain_x, y=0.385)
+                    controller.tap(list(slot1), rect)
+                    time.sleep(0.32)
+                    f1 = controller.screenshot() if is_adb else frame
+                    s1, lbl1 = botcore.evaluate_selected_chest_artifact(f1, prefer_cc, active_skills=build_skills)
                     candidates[1] = (s1, lbl1)
                     print(f"   - Thẻ 1/3: [{lbl1}] (Điểm: {s1})")
 
                     # 2. Bấm xem Thẻ 2
-                    slot2 = botcore.get_chest_card_target(2, obtain_x)
+                    slot2 = botcore.get_chest_card_target(2, obtain_x, y=0.385)
                     controller.tap(list(slot2), rect)
-                    time.sleep(0.30)
+                    time.sleep(0.32)
                     f2 = controller.screenshot() if is_adb else frame
                     s2, lbl2 = botcore.evaluate_selected_chest_artifact(f2, prefer_cc, active_skills=build_skills)
                     candidates[2] = (s2, lbl2)
                     print(f"   - Thẻ 2/3: [{lbl2}] (Điểm: {s2})")
 
                     # 3. Bấm xem Thẻ 3
-                    slot3 = botcore.get_chest_card_target(3, obtain_x)
+                    slot3 = botcore.get_chest_card_target(3, obtain_x, y=0.385)
                     controller.tap(list(slot3), rect)
-                    time.sleep(0.30)
+                    time.sleep(0.32)
                     f3 = controller.screenshot() if is_adb else frame
                     s3, lbl3 = botcore.evaluate_selected_chest_artifact(f3, prefer_cc, active_skills=build_skills)
                     candidates[3] = (s3, lbl3)
@@ -379,13 +386,14 @@ def run_cli_bot():
 
                     # Nếu thẻ tốt nhất không phải là Thẻ 3 (thẻ đang chọn), bấm chọn lại thẻ đó
                     if best_idx != 3:
-                        best_slot = botcore.get_chest_card_target(best_idx, obtain_x)
+                        best_slot = botcore.get_chest_card_target(best_idx, obtain_x, y=0.385)
                         controller.tap(list(best_slot), rect)
-                        time.sleep(0.25)
+                        time.sleep(0.28)
 
                     # Bấm Obtain để nhận cổ vật
                     controller.tap([obtain_x, obtain_y], rect)
                     print(f"📦 [Rương Cổ vật] 🎉 ĐÃ CHỌN CỔ VẬT TỐT NHẤT: Thẻ {best_idx} -> [{best_label}]!")
+                    last_chest_pos = None
                     time.sleep(0.65)
                 continue
 
@@ -503,6 +511,29 @@ def run_cli_bot():
                         last_monolith_pos = None
                 else:
                     last_monolith_pos = None
+
+                # Theo dõi Rương cổ vật / Chỉ dẫn rương liên tục kèm bù trừ vector di chuyển
+                if getattr(vision, "chest", None) is not None:
+                    last_chest_pos = vision.chest
+                    last_chest_time = now
+                    c_type = getattr(vision, "chest_type", "treasure_chest")
+                    print(f"📦 [Săn Rương] ƯU TIÊN CAO: Phát hiện {c_type} tại {vision.chest}! Đang dũng mãnh lao tới nhặt...")
+                elif last_chest_pos is not None and (now - last_chest_time <= 3.0):
+                    if previous_direction:
+                        est_cx = int(round(last_chest_pos[0] - 12.0 * previous_direction[0]))
+                        est_cy = int(round(last_chest_pos[1] - 12.0 * previous_direction[1]))
+                        last_chest_pos = (est_cx, est_cy)
+                    if (
+                        -80 <= last_chest_pos[0] < w + 80
+                        and -80 <= last_chest_pos[1] < h + 80
+                        and math.hypot(last_chest_pos[0] - px, last_chest_pos[1] - py) > 8
+                    ):
+                        vision.chest = last_chest_pos
+                        vision.chest_weight = 280.0
+                    else:
+                        last_chest_pos = None
+                else:
+                    last_chest_pos = None
 
                 # Điều khiển né quái thông minh bằng thuật toán trường tiềm năng (Potential Field)
                 dir_x, dir_y = botcore.choose_direction(

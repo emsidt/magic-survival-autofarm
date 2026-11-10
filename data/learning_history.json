@@ -771,5 +771,93 @@
       "spirit"
     ],
     "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 330.7,
+    "prev_avg_sec": 429.7,
+    "diff_sec": -99.0,
+    "kills": 0,
+    "reward": -0.092,
+    "skills": [],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 677.2,
+    "prev_avg_sec": 422.1,
+    "diff_sec": 255.1,
+    "kills": 0,
+    "reward": 0.863,
+    "skills": [],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 884.6,
+    "prev_avg_sec": 441.7,
+    "diff_sec": 442.9,
+    "kills": 0,
+    "reward": 1.433,
+    "skills": [
+      "armageddon",
+      "cyclone",
+      "electric_shock",
+      "electric_zone",
+      "frost_nova",
+      "juggernaut",
+      "magic_circle",
+      "satellite",
+      "shield",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 107.4,
+    "prev_avg_sec": 475.8,
+    "diff_sec": -368.4,
+    "kills": 0,
+    "reward": -0.3,
+    "skills": [
+      "cloaking",
+      "shield",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 168.5,
+    "prev_avg_sec": 447.5,
+    "diff_sec": -279.0,
+    "kills": 0,
+    "reward": -0.249,
+    "skills": [
+      "cloaking",
+      "magic_circle",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 1282.2,
+    "prev_avg_sec": 426.0,
+    "diff_sec": 856.2,
+    "kills": 0,
+    "reward": 1.5,
+    "skills": [
+      "blizzard",
+      "cloaking",
+      "concentration",
+      "electric_shock",
+      "electric_zone",
+      "frost_nova",
+      "satellite",
+      "spirit"
+    ],
+    "combos": []
   }
 ]

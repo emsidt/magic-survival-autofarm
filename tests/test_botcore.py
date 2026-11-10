@@ -1183,6 +1183,22 @@ class VisionTests(unittest.TestCase):
             self.assertEqual(choice2.skill_key, "electric_zone")
             self.assertIn("Electric Zone", choice2.label)
 
+    def test_multiscale_chest_detection_and_armageddon_aliases(self):
+        import botcore
+        # 1. Armageddon aliases include Gothic deformed OCR lines
+        self.assertIn("a eddo n", botcore.SKILL_ALIASES["armageddon"])
+        self.assertIn("remove all enemies", botcore.SKILL_ALIASES["armageddon"])
+
+        # 2. Chest slots on 1080p LDPlayer sit at y=0.385
+        s1 = botcore.get_chest_card_target(1, 0.50, y=0.385)
+        s2 = botcore.get_chest_card_target(2, 0.50, y=0.385)
+        s3 = botcore.get_chest_card_target(3, 0.50, y=0.385)
+        self.assertEqual(s1[1], 0.385)
+        self.assertEqual(s2[1], 0.385)
+        self.assertEqual(s3[1], 0.385)
+        self.assertAlmostEqual(s1[0], 0.265, places=2)
+        self.assertAlmostEqual(s3[0], 0.735, places=2)
+
 
 if __name__ == "__main__":
     unittest.main()
