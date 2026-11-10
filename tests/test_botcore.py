@@ -475,14 +475,18 @@ class VisionTests(unittest.TestCase):
 
             # Test disabled Buy (dimmed <= 110) vs enabled Buy (> 160)
             self.assertFalse(is_shop_buy_enabled(frame_shop))
+            self.assertFalse(is_shop_buy_enabled(frame_shop, buy_pos=b_pos))
             cv2.putText(frame_shop, "BUY", (270, 950), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             self.assertTrue(is_shop_buy_enabled(frame_shop))
+            self.assertTrue(is_shop_buy_enabled(frame_shop, buy_pos=b_pos))
 
             # Test evaluate shop artifact
             cv2.putText(frame_shop, "ASI", (270, 650), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
             cv2.putText(frame_shop, "Special Artifact", (240, 685), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (20, 20, 220), 2)
             cv2.putText(frame_shop, "Increase ATK by 30%", (210, 725), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (20, 220, 20), 1)
-            score, label = evaluate_selected_shop_artifact(frame_shop)
+            score, label = evaluate_selected_shop_artifact(frame_shop, active_skills={"spirit"})
+            self.assertGreaterEqual(score, 400)
+            self.assertIn("Special", label)
             self.assertGreaterEqual(score, 400)
             self.assertIn("Special", label)
 

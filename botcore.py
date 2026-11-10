@@ -1702,21 +1702,25 @@ def detect_mana_orb_currency(frame: np.ndarray) -> Optional[int]:
 def get_shop_item_targets() -> list[tuple[float, float]]:
     """Return normalized screen coordinates for the 8 Merchant Shop items (2 rows x 4 cols)."""
     return [
-        (0.165, 0.335), (0.390, 0.335), (0.615, 0.335), (0.840, 0.335),
-        (0.165, 0.505), (0.390, 0.505), (0.615, 0.505), (0.840, 0.505),
+        (0.22, 0.33), (0.42, 0.33), (0.62, 0.33), (0.82, 0.33),
+        (0.22, 0.50), (0.42, 0.50), (0.62, 0.50), (0.82, 0.50),
     ]
 
 
-def is_shop_buy_enabled(frame: np.ndarray) -> bool:
+def is_shop_buy_enabled(frame: np.ndarray, buy_pos: Optional[tuple[float, float]] = None) -> bool:
     """Return True if the 'Buy' button has active white text (affordable), False if dimmed gray."""
     h, w = frame.shape[:2]
-    y0, y1 = int(h * 0.89), int(h * 0.96)
-    x0, x1 = int(w * 0.40), int(w * 0.60)
-    roi = frame[y0:y1, x0:x1]
+    if buy_pos is not None:
+        bx, by = int(w * buy_pos[0]), int(h * buy_pos[1])
+        roi = frame[max(0, by - 28) : min(h, by + 28), max(0, bx - 65) : min(w, bx + 65)]
+    else:
+        y0, y1 = int(h * 0.88), int(h * 0.96)
+        x0, x1 = int(w * 0.35), int(w * 0.65)
+        roi = frame[y0:y1, x0:x1]
     if roi.size == 0:
         return False
     gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-    return int(np.sum(gray > 160)) >= 30
+    return int(np.sum(gray >= 150)) >= 20 and int(np.max(gray)) >= 170
 
 
 def evaluate_selected_shop_artifact(

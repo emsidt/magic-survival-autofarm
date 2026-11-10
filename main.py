@@ -1053,27 +1053,32 @@ class FarmApp:
                                 best_buy_score = -1
                                 best_buy_label = ""
                                 current_mana = detect_mana_orb_currency(frame)
-                                mana_info = f" (Mana Orbs: {current_mana})" if current_mana is not None else ""
-                                # 1. Kiểm tra món đang được chọn sẵn trên màn hình
-                                if is_shop_buy_enabled(frame):
-                                    s_cur, l_cur = evaluate_selected_shop_artifact(frame, prefer_cc, active_skills=active_skills)
-                                    best_buy_slot = shop_items[0]
-                                    best_buy_score = s_cur
-                                    best_buy_label = l_cur
+                                mana_info = f" ({current_mana} Mana)" if current_mana is not None else ""
+                                self._push("status", f"[Cửa hàng] Mở Thương nhân{mana_info}! Đang duyệt full 8 món...")
 
-                                # 2. Duyệt qua các ô vật phẩm khác nếu chưa quét gần đây
-                                if start_tick - last_shop_scan_time >= 5.0:
-                                    for s_target in shop_items:
-                                        controller.tap(list(s_target), rect)
-                                        time.sleep(0.24)
-                                        f_item = screenshot(rect)
-                                        if is_shop_buy_enabled(f_item):
-                                            s_item, l_item = evaluate_selected_shop_artifact(f_item, prefer_cc, active_skills=active_skills)
-                                            if s_item > best_buy_score:
-                                                best_buy_score = s_item
-                                                best_buy_slot = s_target
-                                                best_buy_label = l_item
-                                    last_shop_scan_time = time.monotonic()
+                                build_skills = set(active_skills)
+                                for p_sk in self.config.get("skill_priority", []):
+                                    clean_sk = str(p_sk).lower().strip().replace("-", "_").replace(" ", "_")
+                                    build_skills.add(clean_sk)
+
+                                # Duyệt qua toàn bộ 8 ô vật phẩm trong cửa hàng
+                                for idx, s_target in enumerate(shop_items, 1):
+                                    controller.tap(list(s_target), rect)
+                                    time.sleep(0.24)
+                                    f_item = screenshot(rect)
+                                    if f_item is None or f_item.size == 0:
+                                        continue
+
+                                    is_affordable = is_shop_buy_enabled(f_item, buy_pos=shop_buy_pos)
+                                    s_item, l_item = evaluate_selected_shop_artifact(f_item, prefer_cc, active_skills=build_skills)
+                                    has_synergy = ("Build:" in l_item) or ("★" in l_item) or ("S-Tier" in l_item) or ("Special" in l_item) or ("Legendary" in l_item)
+
+                                    if is_affordable:
+                                        effective_score = s_item + (1000 if has_synergy else 0)
+                                        if effective_score > best_buy_score:
+                                            best_buy_score = effective_score
+                                            best_buy_slot = s_target
+                                            best_buy_label = l_item
 
                                 # Nếu có món đủ tiền mua -> chọn và bấm BUY!
                                 if best_buy_slot and best_buy_score > 0:
@@ -1084,18 +1089,22 @@ class FarmApp:
                                     last_shop_action_time = now_tick
                                     last_auto_action_time = now_tick
                                     self.rule_counts["mua_do"] = self.rule_counts.get("mua_do", 0) + 1
-                                    self._push("status", f"Cửa hàng: Đủ mana mua [{best_buy_label}]{mana_info} -> Bấm Buy!")
+                                    self._push("status", f"[Cửa hàng] 🎉 Đã mua món tốt nhất hợp build: [{best_buy_label}]!")
                                     auto_action_done = True
-                                    time.sleep(0.6)
+                                    time.sleep(0.65)
+                                    f_after = screenshot(rect)
+                                    shop_x_pos = detect_shop_x_button(f_after) or (0.943, 0.079)
+                                    controller.tap(list(shop_x_pos), rect)
+                                    time.sleep(0.4)
                                 else:
-                                    # Không đủ mana mua món nào hoặc đã mua xong -> Bấm nút 'X' đóng cửa hàng
-                                    shop_x_pos = detect_shop_x_button(frame) or (0.936, 0.079)
+                                    # Không đủ mana mua món nào hoặc không có món hợp build -> Bấm nút 'X' đóng cửa hàng
+                                    shop_x_pos = detect_shop_x_button(frame) or (0.943, 0.079)
                                     controller.tap(list(shop_x_pos), rect)
                                     now_tick = time.monotonic()
                                     last_shop_action_time = now_tick
                                     last_auto_action_time = now_tick
                                     self.rule_counts["dong_cua_hang"] = self.rule_counts.get("dong_cua_hang", 0) + 1
-                                    self._push("status", f"Cửa hàng: Chưa đủ mana mua đồ{mana_info} -> Bấm X đóng cửa hàng cày tiếp!")
+                                    self._push("status", f"[Cửa hàng] Đã duyệt 8 món: Chưa đủ Mana hoặc không có món hợp build -> Đóng shop!")
                                     auto_action_done = True
                                     time.sleep(0.8)
                             continue

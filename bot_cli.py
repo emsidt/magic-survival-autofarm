@@ -324,17 +324,65 @@ def run_cli_bot():
                 if now - last_shop_time >= 1.5:
                     last_shop_time = now
                     mana_val = botcore.detect_mana_orb_currency(frame)
-                    mana_str = f" (Mana: {mana_val})" if mana_val is not None else ""
-                    if botcore.is_shop_buy_enabled(frame):
-                        _, s_lbl = botcore.evaluate_selected_shop_artifact(frame, True, active_skills=active_skills)
+                    mana_str = f" ({mana_val} Mana)" if mana_val is not None else ""
+                    print(f"\n🛒 [Cửa hàng] Mở cửa hàng Thương nhân{mana_str}! Đang duyệt full 8 món đồ...")
+
+                    shop_targets = botcore.get_shop_item_targets()
+                    build_skills = set(active_skills)
+                    for p_sk in config.get("skill_priority", []):
+                        clean_sk = str(p_sk).lower().strip().replace("-", "_").replace(" ", "_")
+                        build_skills.add(clean_sk)
+
+                    best_buy_slot = None
+                    best_buy_score = -1
+                    best_buy_label = ""
+
+                    for idx, s_pos in enumerate(shop_targets, 1):
+                        controller.tap(list(s_pos), rect)
+                        time.sleep(0.24)
+                        f_item = controller.screenshot() if is_adb else frame
+                        if f_item is None or f_item.size == 0:
+                            continue
+
+                        # Kiểm tra xem món này có đủ Mana mua không (nút Buy sáng trắng)
+                        is_affordable = botcore.is_shop_buy_enabled(f_item, buy_pos=shop_buy)
+                        s_score, s_lbl = botcore.evaluate_selected_shop_artifact(
+                            f_item,
+                            prefer_crit_and_cooldown=config.get("prefer_crit_and_cooldown", True),
+                            active_skills=build_skills,
+                        )
+
+                        # Kiểm tra xem món đồ có khớp với build hiện tại hoặc độ hiếm cao không
+                        has_synergy = ("Build:" in s_lbl) or ("★" in s_lbl) or ("S-Tier" in s_lbl) or ("Special" in s_lbl) or ("Legendary" in s_lbl)
+
+                        if is_affordable:
+                            syn_tag = " [HỢP BUILD ⭐]" if has_synergy else ""
+                            print(f"   - Ô {idx}/8: [{s_lbl}] -> 🟢 ĐỦ MANA (Điểm: {s_score}){syn_tag}")
+                            # Ưu tiên vượt trội cho các món đồ hợp build hoặc Tier cao
+                            effective_score = s_score + (1000 if has_synergy else 0)
+                            if effective_score > best_buy_score:
+                                best_buy_score = effective_score
+                                best_buy_slot = s_pos
+                                best_buy_label = s_lbl
+                        else:
+                            print(f"   - Ô {idx}/8: [{s_lbl}] -> 🔴 Chưa đủ Mana")
+
+                    # Quyết định mua hoặc đóng cửa hàng
+                    if best_buy_slot and best_buy_score > 0:
+                        controller.tap(list(best_buy_slot), rect)
+                        time.sleep(0.25)
                         controller.tap(list(shop_buy), rect)
-                        print(f"🛒 [Cửa hàng] Đủ Mana mua [{s_lbl}]{mana_str} -> Đã bấm Buy!")
+                        print(f"🛒 [Cửa hàng] 🎉 ĐÃ MUA MÓN TỐT NHẤT HỢP BUILD: [{best_buy_label}]!")
                         time.sleep(0.65)
-                    else:
-                        x_pos = botcore.detect_shop_x_button(frame) or (0.936, 0.079)
+                        f_after = controller.screenshot() if is_adb else frame
+                        x_pos = botcore.detect_shop_x_button(f_after) or (0.943, 0.079)
                         controller.tap(list(x_pos), rect)
-                        print(f"🛒 [Cửa hàng] Chưa đủ Mana mua đồ{mana_str} -> Bấm 'X' đóng shop farm tiếp!")
-                        time.sleep(0.65)
+                        time.sleep(0.4)
+                    else:
+                        x_pos = botcore.detect_shop_x_button(frame) or (0.943, 0.079)
+                        controller.tap(list(x_pos), rect)
+                        print(f"🛒 [Cửa hàng] Đã duyệt xong 8 món: Không có món phù hợp hoặc chưa đủ Mana -> Bấm 'X' đóng shop farm tiếp!")
+                        time.sleep(0.5)
                 continue
 
             # 12. GIAI ĐOẠN CHIẾN ĐẤU TÍCH CỰC (In Active Combat)
