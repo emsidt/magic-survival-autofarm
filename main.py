@@ -47,6 +47,7 @@ from botcore import (
     detect_die_button,
     detect_enter_area,
     detect_learn_button,
+    detect_mana_orb_currency,
     detect_monolith,
     detect_obtain_button,
     detect_selected,
@@ -1006,6 +1007,8 @@ class FarmApp:
                                 best_buy_slot = None
                                 best_buy_score = -1
                                 best_buy_label = ""
+                                current_mana = detect_mana_orb_currency(frame)
+                                mana_info = f" (Mana Orbs: {current_mana})" if current_mana is not None else ""
                                 # 1. Kiểm tra món đang được chọn sẵn trên màn hình
                                 if is_shop_buy_enabled(frame):
                                     s_cur, l_cur = evaluate_selected_shop_artifact(frame, prefer_cc, active_skills=active_skills)
@@ -1036,7 +1039,7 @@ class FarmApp:
                                     last_shop_action_time = now_tick
                                     last_auto_action_time = now_tick
                                     self.rule_counts["mua_do"] = self.rule_counts.get("mua_do", 0) + 1
-                                    self._push("status", f"Cửa hàng: Đã mua [{best_buy_label}] & bấm Buy!")
+                                    self._push("status", f"Cửa hàng: Đủ mana mua [{best_buy_label}]{mana_info} -> Bấm Buy!")
                                     auto_action_done = True
                                     time.sleep(0.6)
                                 else:
@@ -1047,7 +1050,7 @@ class FarmApp:
                                     last_shop_action_time = now_tick
                                     last_auto_action_time = now_tick
                                     self.rule_counts["dong_cua_hang"] = self.rule_counts.get("dong_cua_hang", 0) + 1
-                                    self._push("status", "Cửa hàng: Không đủ mana mua đồ -> Bấm X đóng cửa hàng cày tiếp!")
+                                    self._push("status", f"Cửa hàng: Chưa đủ mana mua đồ{mana_info} -> Bấm X đóng cửa hàng cày tiếp!")
                                     auto_action_done = True
                                     time.sleep(0.8)
                             continue

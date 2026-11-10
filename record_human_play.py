@@ -135,6 +135,11 @@ def run_human_recorder():
     last_level_up_time = 0.0
     last_seen_cards = None
     in_level_up = False
+    in_shop = False
+    last_shop_time = 0.0
+    last_shop_label = ""
+    last_shop_frame = None
+    last_mana_val = None
     step_count = 0
     death_streak = 0
 
@@ -170,6 +175,10 @@ def run_human_recorder():
                     step_count = 0
                     death_streak = 0
                     in_level_up = False
+                    in_shop = False
+                    last_shop_label = ""
+                    last_shop_frame = None
+                    last_mana_val = None
                     run_id = recorder.start_new_run()
                     print("\n" + "-" * 65)
                     print(f"[🔥 TRẬN ĐẤU BẮT ĐẦU!] Mã trận: {run_id}")
@@ -181,12 +190,16 @@ def run_human_recorder():
                 # 2.1 Phát hiện lên cấp (Level Up)
                 lvl_res = botcore.is_level_up_screen(frame)
                 if lvl_res:
-                    if not in_level_up and (now - last_level_up_time >= 1.0):
+                    ocr_res = botcore._detect_cards_ocr(frame, h, w)
+                    # Safeguard: Bắt buộc phải có ít nhất 1 thẻ có tên kỹ năng / chữ mô tả, hoặc nhận diện được header/button lên cấp
+                    has_content = any(c.skills or c.text_lines for c in ocr_res.values())
+                    if not has_content and lvl_res.reason not in ("header_level_up", "mana_retrieve_button", "combination_star_active"):
+                        pass  # Bỏ qua false-positive trong combat khi không có chữ thực tế
+                    elif not in_level_up and (now - last_level_up_time >= 1.0):
                         in_level_up = True
                         last_level_up_time = now
                         step_count += 1
                         last_level_up_frame = frame.copy()
-                        ocr_res = botcore._detect_cards_ocr(frame, h, w)
                         last_seen_cards = ocr_res
                         num_c = len(ocr_res)
                         print(f"\n[Cấp #{step_count}] Màn hình lên cấp ({num_c} lựa chọn có sẵn):")
@@ -320,7 +333,67 @@ def run_human_recorder():
                     _, lbl = botcore.evaluate_selected_chest_artifact(frame, True, active_skills=active_skills)
                     print(f"[Rương Cổ vật] Bạn đang mở rương: {lbl}")
 
-                # 2.4 KẾT THÚC TRẬN ĐẤU (Nhân vật chết hoặc bấm kết thúc)
+                # 2.4 Cửa hàng Thương Nhân (Merchant Shop - Mua cổ vật bằng Mana Orbs)
+                buy_pos = botcore.detect_buy_button(frame)
+                if buy_pos:
+                    if not in_shop and (now - last_shop_time >= 1.0):
+                        in_shop = True
+                        last_shop_time = now
+                        last_shop_frame = frame.copy()
+                        mana_val = botcore.detect_mana_orb_currency(frame)
+                        last_mana_val = mana_val
+                        _, s_lbl = botcore.evaluate_selected_shop_artifact(frame, prefer_crit_and_cooldown=True, active_skills=active_skills)
+                        last_shop_label = s_lbl
+                        can_buy = botcore.is_shop_buy_enabled(frame)
+                        mana_str = f"{mana_val} Mana Orbs" if mana_val is not None else "Đang đọc..."
+                        status_str = "ĐỦ TIỀN MUA (Nút Buy sáng)!" if can_buy else "Chưa đủ Mana Orb"
+                        print(f"\n[🛒 CỬA HÀNG THƯƠNG NHÂN] Mở cửa hàng mua cổ vật:")
+                        print(f"    - Mana Orbs tích lũy: {mana_str}")
+                        print(f"    - Cổ vật đang xem: [{s_lbl}]")
+                        print(f"    - Trạng thái: {status_str}")
+                    elif in_shop:
+                        _, cur_s_lbl = botcore.evaluate_selected_shop_artifact(frame, prefer_crit_and_cooldown=True, active_skills=active_skills)
+                        if cur_s_lbl and cur_s_lbl != last_shop_label:
+                            last_shop_label = cur_s_lbl
+                            last_shop_frame = frame.copy()
+                            can_buy = botcore.is_shop_buy_enabled(frame)
+                            status_str = "ĐỦ TIỀN MUA!" if can_buy else "Chưa đủ Mana Orb"
+                            print(f"    -> Đổi sang xem: [{cur_s_lbl}] ({status_str})")
+                elif not buy_pos and in_shop:
+                    # Rời khỏi cửa hàng
+                    in_shop = False
+                    click_norm = mouse_tracker.get_last_click_in_rect(rect, since_time=last_shop_time)
+                    bought = False
+                    if click_norm is not None:
+                        cx, cy = click_norm
+                        if cy >= 0.80 and 0.25 <= cx <= 0.75:
+                            bought = True
+                        elif cy <= 0.16 and cx >= 0.75:
+                            bought = False  # Bấm X
+                        else:
+                            bought = True
+                    else:
+                        bought = True
+
+                    elapsed_m = int((now - match_start_time) // 60)
+                    elapsed_s = int((now - match_start_time) % 60)
+                    if bought and last_shop_label:
+                        print(f"    -> [ĐÃ MUA CỔ VẬT]: Bạn vừa mua thành công [{last_shop_label}] bằng Mana Orb! (Thời gian: {elapsed_m:02d}:{elapsed_s:02d})")
+                        recorder.record_decision(
+                            last_shop_frame if last_shop_frame is not None else frame,
+                            "human_shop_buy",
+                            "buy_artifact",
+                            confidence=1.0,
+                            metadata={
+                                "artifact": last_shop_label,
+                                "mana_orbs": last_mana_val,
+                                "time": f"{elapsed_m:02d}:{elapsed_s:02d}",
+                            },
+                        )
+                    else:
+                        print(f"    -> [ĐÃ ĐÓNG CỬA HÀNG]: Bạn đã đóng cửa hàng tiếp tục farm! (Thời gian: {elapsed_m:02d}:{elapsed_s:02d})")
+
+                # 2.5 KẾT THÚC TRẬN ĐẤU (Nhân vật chết hoặc bấm kết thúc)
                 # Safeguards:
                 # 1) Chỉ kích hoạt khi nút Pause || hoàn toàn biến mất (pause_pos is None)
                 # 2) Phải duy trì trạng thái chết/kết thúc ít nhất 3 chu kỳ liên tiếp (>= 0.6s) để triệt tiêu mọi glitch/chớp giật

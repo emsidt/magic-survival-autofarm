@@ -1048,8 +1048,68 @@ class VisionTests(unittest.TestCase):
         # Special Artifact must decisively beat Epic/Rare/Normal
         self.assertGreater(score_spec, score_epic + 8000)
 
+    def test_monster_eyes_in_combat_do_not_trigger_level_up(self):
+        """Red spots (monster eyes) in icon bands must NEVER trigger false level-up when cards have no text."""
+        from botcore import _detect_cards_ocr, is_level_up_screen
+        from unittest.mock import patch, AsyncMock
 
+        # Dark combat frame (mean < 38)
+        frame = np.full((1000, 600, 3), 15, dtype=np.uint8)
+        # Add crimson red spots in card 1 and card 3 icon areas (x = 0.10..0.26, y = 0.28..0.44 and 0.58..0.74)
+        # Red in BGR: (20, 20, 230)
+        frame[300:360, 70:130] = (20, 20, 230)
+        frame[600:660, 70:130] = (20, 20, 230)
 
+        # Mock winocr to return no text (combat screen has no card text)
+        class MockOCRResult:
+            lines = []
+
+        with patch("winocr.recognize_pil", new_callable=AsyncMock) as m_ocr:
+            m_ocr.return_value = MockOCRResult()
+            cards = _detect_cards_ocr(frame, 1000, 600)
+            for idx, c in cards.items():
+                self.assertFalse(c.has_asterisk, f"Card {idx} must not have asterisk from monster red eyes")
+                self.assertFalse(c.is_special_passive)
+
+            det = is_level_up_screen(frame)
+            self.assertFalse(det, "Must NOT detect level up screen during active combat with red monster eyes")
+
+    def test_mana_orb_currency_and_shop_features(self):
+        """Test mana orb currency detection, shop state, and buy button enabled checks."""
+        from botcore import detect_mana_orb_currency, is_merchant_shop, is_shop_buy_enabled
+        from unittest.mock import patch, AsyncMock
+
+        # 1. Mana orb OCR text normalization: 'e. *593 •' -> 1593
+        class MockLine:
+            def __init__(self, text):
+                self.text = text
+
+        class MockOCR:
+            def __init__(self, lines):
+                self.lines = [MockLine(t) for t in lines]
+
+        frame = np.zeros((1000, 600, 3), dtype=np.uint8)
+        with patch("winocr.recognize_pil", new_callable=AsyncMock) as m_ocr:
+            m_ocr.return_value = MockOCR(["e. *593 •"])
+            mana = detect_mana_orb_currency(frame)
+            self.assertEqual(mana, 1593)
+
+        # 2. Buy enabled check: active white button (gray > 160)
+        shop_frame_enabled = np.zeros((1000, 600, 3), dtype=np.uint8)
+        # Button area y = 0.89..0.96, x = 0.40..0.60
+        shop_frame_enabled[900:950, 250:350] = (230, 230, 230)
+        self.assertTrue(is_shop_buy_enabled(shop_frame_enabled))
+
+        shop_frame_disabled = np.zeros((1000, 600, 3), dtype=np.uint8)
+        # Dimmed gray text / dark background
+        shop_frame_disabled[900:950, 250:350] = (50, 50, 50)
+        self.assertFalse(is_shop_buy_enabled(shop_frame_disabled))
+
+        # 3. is_merchant_shop delegation
+        with patch("botcore.detect_buy_button", return_value=(0.50, 0.92)):
+            self.assertTrue(is_merchant_shop(frame))
+        with patch("botcore.detect_buy_button", return_value=None):
+            self.assertFalse(is_merchant_shop(frame))
 
 
 if __name__ == "__main__":

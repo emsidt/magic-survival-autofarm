@@ -716,7 +716,7 @@ def detect_pause_button(frame: np.ndarray, threshold: float = 0.65) -> Optional[
     best_val = 0.0
     best_loc = None
     best_dim = (0, 0)
-    for scale in (0.50, 0.60, 0.70, 0.80, 0.90, 1.0, 1.15, 1.30):
+    for scale in (0.30, 0.35, 0.40, 0.45, 0.50, 0.60, 0.70, 0.80, 0.90, 1.0, 1.15, 1.30):
         stw, sth = int(tw_sz * scale), int(th_sz * scale)
         if stw >= roi.shape[1] or sth >= roi.shape[0] or stw < 5 or sth < 5:
             continue
@@ -1571,70 +1571,132 @@ def evaluate_selected_chest_artifact(
     return (tier_base + bonus, label)
 
 
-def detect_buy_button(frame: np.ndarray, min_confidence: float = 0.70) -> Optional[tuple[float, float]]:
-    """Detect 'Buy' button at the bottom of the Merchant Shop screen."""
-    template_path = _BASE_DIR / "assets" / "buy_button_tight.png"
-    if not template_path.is_file():
-        return None
-    template = cv2.imread(str(template_path), cv2.IMREAD_GRAYSCALE)
-    if template is None:
-        return None
+def detect_buy_button(frame: np.ndarray, min_confidence: float = 0.65) -> Optional[tuple[float, float]]:
+    """Detect 'Buy' button at the bottom of the Merchant Shop screen (y = 0.84..0.98, x = 0.25..0.75)."""
     h, w = frame.shape[:2]
-    y0, y1 = int(h * 0.86), int(h * 0.98)
-    x0, x1 = int(w * 0.30), int(w * 0.70)
+    y0, y1 = int(h * 0.84), int(h * 0.98)
+    x0, x1 = int(w * 0.25), int(w * 0.75)
     roi = frame[y0:y1, x0:x1]
     if roi.size == 0:
         return None
+
+    # 1. Multi-scale template matching across all window resolutions
     gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-    th, tw = template.shape[:2]
-    best_match = None
-    best_score = 0.0
-    for scale in (0.75, 0.90, 1.0, 1.15, 1.30):
-        stw, sth = int(tw * scale), int(th * scale)
-        if stw >= roi.shape[1] or sth >= roi.shape[0]:
+    for tmpl_name in ("buy_button_tight.png", "buy_button.png"):
+        template_path = _BASE_DIR / "assets" / tmpl_name
+        if not template_path.is_file():
             continue
-        rt = cv2.resize(template, (stw, sth))
-        res = cv2.matchTemplate(gray_roi, rt, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, max_loc = cv2.minMaxLoc(res)
-        if max_val > best_score:
-            best_score = max_val
-            best_match = (x0 + max_loc[0] + stw // 2, y0 + max_loc[1] + sth // 2)
-    if best_score >= min_confidence and best_match:
-        return (round(best_match[0] / w, 4), round(best_match[1] / h, 4))
+        template = cv2.imread(str(template_path), cv2.IMREAD_GRAYSCALE)
+        if template is None:
+            continue
+        th, tw = template.shape[:2]
+        best_match = None
+        best_score = 0.0
+        for scale in (0.35, 0.45, 0.55, 0.65, 0.75, 0.85, 1.0, 1.15, 1.30):
+            stw, sth = int(tw * scale), int(th * scale)
+            if stw >= roi.shape[1] or sth >= roi.shape[0] or stw < 10 or sth < 6:
+                continue
+            rt = cv2.resize(template, (stw, sth))
+            res = cv2.matchTemplate(gray_roi, rt, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+            if max_val > best_score:
+                best_score = max_val
+                best_match = (x0 + max_loc[0] + stw // 2, y0 + max_loc[1] + sth // 2)
+        if best_score >= min_confidence and best_match:
+            return (round(best_match[0] / w, 4), round(best_match[1] / h, 4))
+
+    # 2. Fast OCR Fallback: Check if the word 'Buy' is written in the bottom button area
+    try:
+        import asyncio
+        import winocr
+        from PIL import Image
+
+        pil_roi = Image.fromarray(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB))
+        async def _do_buy_ocr():
+            return await winocr.recognize_pil(pil_roi, lang="en")
+        ocr_res = asyncio.run(_do_buy_ocr())
+        for line in ocr_res.lines:
+            t = line.text.lower().strip()
+            if "buy" in t or "b uy" in t:
+                if line.words:
+                    bx = x0 + sum(wd.bounding_rect.x + wd.bounding_rect.width / 2 for wd in line.words) / len(line.words)
+                    by = y0 + sum(wd.bounding_rect.y + wd.bounding_rect.height / 2 for wd in line.words) / len(line.words)
+                    return (round(bx / w, 4), round(by / h, 4))
+                return (0.50, 0.92)
+    except Exception:
+        pass
+
     return None
 
 
-def detect_shop_x_button(frame: np.ndarray, min_confidence: float = 0.70) -> Optional[tuple[float, float]]:
+def detect_shop_x_button(frame: np.ndarray, min_confidence: float = 0.65) -> Optional[tuple[float, float]]:
     """Detect 'X' close button at the top-right of the Merchant Shop screen."""
-    template_path = _BASE_DIR / "assets" / "shop_x_tight.png"
-    if not template_path.is_file():
-        return None
-    template = cv2.imread(str(template_path), cv2.IMREAD_GRAYSCALE)
-    if template is None:
-        return None
     h, w = frame.shape[:2]
     y0, y1 = int(h * 0.02), int(h * 0.14)
-    x0, x1 = int(w * 0.82), int(w * 0.99)
+    x0, x1 = int(w * 0.80), int(w * 0.99)
     roi = frame[y0:y1, x0:x1]
     if roi.size == 0:
         return None
+
     gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-    th, tw = template.shape[:2]
-    best_match = None
-    best_score = 0.0
-    for scale in (0.75, 0.90, 1.0, 1.15, 1.30):
-        stw, sth = int(tw * scale), int(th * scale)
-        if stw >= roi.shape[1] or sth >= roi.shape[0]:
+    for tmpl_name in ("shop_x_tight.png", "shop_x_button.png", "ad_close_x.png"):
+        template_path = _BASE_DIR / "assets" / tmpl_name
+        if not template_path.is_file():
             continue
-        rt = cv2.resize(template, (stw, sth))
-        res = cv2.matchTemplate(gray_roi, rt, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, max_loc = cv2.minMaxLoc(res)
-        if max_val > best_score:
-            best_score = max_val
-            best_match = (x0 + max_loc[0] + stw // 2, y0 + max_loc[1] + sth // 2)
-    if best_score >= min_confidence and best_match:
-        return (round(best_match[0] / w, 4), round(best_match[1] / h, 4))
+        template = cv2.imread(str(template_path), cv2.IMREAD_GRAYSCALE)
+        if template is None:
+            continue
+        th, tw = template.shape[:2]
+        best_match = None
+        best_score = 0.0
+        for scale in (0.35, 0.45, 0.55, 0.65, 0.75, 0.85, 1.0, 1.15, 1.30):
+            stw, sth = int(tw * scale), int(th * scale)
+            if stw >= roi.shape[1] or sth >= roi.shape[0] or stw < 8 or sth < 8:
+                continue
+            rt = cv2.resize(template, (stw, sth))
+            res = cv2.matchTemplate(gray_roi, rt, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+            if max_val > best_score:
+                best_score = max_val
+                best_match = (x0 + max_loc[0] + stw // 2, y0 + max_loc[1] + sth // 2)
+        if best_score >= min_confidence and best_match:
+            return (round(best_match[0] / w, 4), round(best_match[1] / h, 4))
+
     return (0.936, 0.079) if detect_buy_button(frame) is not None else None
+
+
+def is_merchant_shop(frame: np.ndarray) -> bool:
+    """Return True if the Merchant Shop screen is currently open."""
+    return detect_buy_button(frame) is not None
+
+
+def detect_mana_orb_currency(frame: np.ndarray) -> Optional[int]:
+    """Read the player's accumulated mana orb currency displayed in the top-left corner."""
+    h, w = frame.shape[:2]
+    roi = frame[int(h * 0.01) : int(h * 0.10), int(w * 0.02) : int(w * 0.40)]
+    if roi.size == 0:
+        return None
+    try:
+        import asyncio
+        import winocr
+        import re
+        from PIL import Image
+
+        roi_large = cv2.resize(roi, (roi.shape[1] * 4, roi.shape[0] * 4), interpolation=cv2.INTER_CUBIC)
+        pil_img = Image.fromarray(cv2.cvtColor(roi_large, cv2.COLOR_BGR2RGB))
+        async def _ocr():
+            return await winocr.recognize_pil(pil_img, lang="en")
+        res = asyncio.run(_ocr())
+        for line in res.lines:
+            clean = re.sub(r"[*liI!|]", "1", line.text)
+            digits = re.findall(r"\d+", clean)
+            if digits:
+                val = int(max(digits, key=len))
+                if 0 <= val <= 999999:
+                    return val
+    except Exception:
+        pass
+    return None
 
 
 def get_shop_item_targets() -> list[tuple[float, float]]:
@@ -2371,6 +2433,9 @@ def _detect_cards_ocr(frame: np.ndarray, h: int, w: int) -> dict[int, CardSlotDa
             }
         x_ic0, x_ic1 = int(w * 0.10), int(w * 0.26)
         for idx, (y0, y1) in icon_bands.items():
+            # A slot with NO text lines cannot be a valid level-up card (prevents monster eyes from triggering)
+            if not cards[idx].text_lines:
+                continue
             icon_roi = frame[y0:y1, x_ic0:x_ic1]
             if icon_roi.size > 0:
                 hsv_ic = cv2.cvtColor(icon_roi, cv2.COLOR_BGR2HSV)
@@ -2505,7 +2570,7 @@ def is_level_up_screen(frame: np.ndarray) -> LevelUpDetection:
         data = ocr_cards[idx]
         if data.skills or data.freeze_traits or data.combo_traits or data.support_traits:
             return LevelUpDetection(True, f"card_{idx}_skills")
-        if data.has_s_tier or data.has_crit or data.has_cooldown or data.has_survival_synergy or data.has_asterisk or data.is_special_passive:
+        if data.text_lines and (data.has_s_tier or data.has_crit or data.has_cooldown or data.has_survival_synergy or data.has_asterisk or data.is_special_passive):
             return LevelUpDetection(True, f"card_{idx}_meta")
         for line in data.text_lines:
             if any(kw in line for kw in card_kws):
@@ -2522,6 +2587,20 @@ def is_level_up_screen(frame: np.ndarray) -> LevelUpDetection:
         h_res = asyncio.run(_h())
         if any("select magic" in l.text.lower() or "current level" in l.text.lower() or "magic combination" in l.text.lower() or "select attribute" in l.text.lower() for l in h_res.lines):
             return LevelUpDetection(True, "header_level_up")
+    except Exception:
+        pass
+
+    # 5. Check if bottom area has 'Mana 20% Retrieve'
+    b_roi = frame[int(h * 0.84):int(h * 0.98), int(w * 0.20):int(w * 0.80)]
+    try:
+        import asyncio
+        import winocr
+        from PIL import Image
+        async def _b():
+            return await winocr.recognize_pil(Image.fromarray(cv2.cvtColor(b_roi, cv2.COLOR_BGR2RGB)), lang="en")
+        b_res = asyncio.run(_b())
+        if any("retrieve" in l.text.lower() or "mana 20" in l.text.lower() or "mana retrieve" in l.text.lower() for l in b_res.lines):
+            return LevelUpDetection(True, "mana_retrieve_button")
     except Exception:
         pass
 
