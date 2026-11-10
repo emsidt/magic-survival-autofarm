@@ -79,6 +79,8 @@ RULES_PATH = BASE / "rules.json"
 RULE_IMAGE_DIR = BASE / "rules"
 DEFAULTS = {
     "window_title": "Magic Survival",
+    "control_mode": "directinput",
+    "adb_path": r"D:\LDPlayer\LDPlayer9\adb.exe",
     "input_mode": "keyboard",
     "crop_left_px": 65,
     "crop_top_px": 0,
@@ -433,7 +435,14 @@ class FarmApp:
         self.config = {**DEFAULTS, **read_json(CONFIG_PATH, {})}
         self.rules = read_json(RULES_PATH, [])
         self.events = queue.Queue(maxsize=30)
-        self.controller = Controller()
+        if self.config.get("control_mode") == "adb":
+            try:
+                from adb_controller import ADBController
+                self.controller = ADBController(adb_path=self.config.get("adb_path", r"D:\LDPlayer\LDPlayer9\adb.exe"))
+            except Exception:
+                self.controller = Controller()
+        else:
+            self.controller = Controller()
         self.running = threading.Event()
         self.ending = threading.Event()
         self.input_mode = tk.StringVar(value=self.config["input_mode"])
@@ -656,25 +665,27 @@ class FarmApp:
                         time.sleep(1.0)
                         continue
 
-                    is_active, active_wnd = is_game_or_popup_active(hwnd, post_death_phase)
-                    if not is_active:
-                        if hwnd and not post_death_phase:
-                            try:
-                                win32gui.SetForegroundWindow(hwnd)
-                                time.sleep(0.25)
-                                is_active, active_wnd = is_game_or_popup_active(hwnd, post_death_phase)
-                            except Exception:
-                                pass
-                    if not is_active:
-                        controller.release()
-                        self._push("status", "Đang chờ: hãy nhấp cửa sổ game để điều khiển an toàn.")
-                        time.sleep(0.4)
-                        continue
+                    is_adb = hasattr(controller, "screen_width")
+                    if not is_adb:
+                        is_active, active_wnd = is_game_or_popup_active(hwnd, post_death_phase)
+                        if not is_active:
+                            if hwnd and not post_death_phase:
+                                try:
+                                    win32gui.SetForegroundWindow(hwnd)
+                                    time.sleep(0.25)
+                                    is_active, active_wnd = is_game_or_popup_active(hwnd, post_death_phase)
+                                except Exception:
+                                    pass
+                        if not is_active:
+                            controller.release()
+                            self._push("status", "Đang chờ: hãy nhấp cửa sổ game để điều khiển an toàn.")
+                            time.sleep(0.4)
+                            continue
 
                     # Luôn quét chính xác kích thước khung hình chuẩn của game (Client viewport, không dính thanh tiêu đề/viền)
                     rect = game_rectangle(hwnd, self.config)
                     # Nếu có cửa sổ popup độc lập hoàn toàn ngoài cây cửa sổ game:
-                    if active_wnd and active_wnd != hwnd and post_death_phase:
+                    if not is_adb and active_wnd and active_wnd != hwnd and post_death_phase:
                         try:
                             # Tuyệt đối không dùng GetWindowRect vì dính thanh tiêu đề/viền làm lệch tọa độ
                             # Chỉ dùng nếu active_wnd là cửa sổ độc lập (không phải child hay root của game)
@@ -687,7 +698,11 @@ class FarmApp:
                         except Exception:
                             pass
 
-                    frame = screenshot(rect)
+                    if is_adb:
+                        f_adb = controller.screenshot()
+                        frame = f_adb if f_adb is not None else screenshot(rect)
+                    else:
+                        frame = screenshot(rect)
                     found = find_rule(frame, self.rules, str(BASE))
                     direction = None
                     current_vision = None
