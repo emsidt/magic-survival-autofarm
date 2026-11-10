@@ -431,6 +431,19 @@ class FarmApp:
         self.root.title("Magic Survival AutoFarm – PC")
         self.root.geometry("760x860")
         self.root.minsize(700, 780)
+        try:
+            self.root.lift()
+            self.root.attributes("-topmost", True)
+            self.root.after_idle(self.root.attributes, "-topmost", False)
+            self.root.focus_force()
+        except Exception:
+            pass
+        print("=" * 65)
+        print("  🎮 BẢNG ĐIỀU KHIỂN GIAO DIỆN (GUI) ĐÃ KHỞI ĐỘNG 🎮")
+        print("=" * 65)
+        print("[+] Cửa sổ giao diện đang hiển thị trên màn hình.")
+        print("[+] Nhấn F8 để Bắt đầu/Tạm dừng; F9 để Dừng.")
+        print("[*] (Gợi ý: Bạn cũng có thể chạy chế độ dòng lệnh trực tiếp: python bot_cli.py)\n")
         self.autostart = autostart
         self.config = {**DEFAULTS, **read_json(CONFIG_PATH, {})}
         self.rules = read_json(RULES_PATH, [])
@@ -603,6 +616,8 @@ class FarmApp:
         self.pressed_hotkeys.discard(key)
 
     def _push(self, kind, value):
+        if kind == "status":
+            print(f"[*] {value}")
         try:
             self.events.put_nowait((kind, value))
         except queue.Full:
