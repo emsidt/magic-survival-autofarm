@@ -177,7 +177,7 @@ def detect_chest(
     return None
 
 
-def detect_monolith(frame: np.ndarray, min_confidence: float = 0.50) -> Optional[tuple[int, int]]:
+def detect_monolith(frame: np.ndarray, min_confidence: float = 0.45) -> Optional[tuple[int, int]]:
     """Detect the post-wave milestone stone monolith / obelisk with vertical crimson rune glyphs.
 
     In Magic Survival, when a boss wave is cleared, a monolith tower spawns on the map.
@@ -202,7 +202,8 @@ def detect_monolith(frame: np.ndarray, min_confidence: float = 0.50) -> Optional
     best_val = 0.0
     best_pos = None
 
-    for scale in (0.75, 0.90, 1.0, 1.10, 1.25):
+    # Multi-scale coverage from 540p up to 1440p (LDPlayer is typically 1080p, scale ~1.75)
+    for scale in (0.75, 0.90, 1.0, 1.15, 1.30, 1.45, 1.60, 1.75, 1.90, 2.10):
         sw, sh = int(tw * scale), int(th * scale)
         if sw >= w or sh >= h:
             continue
@@ -212,12 +213,15 @@ def detect_monolith(frame: np.ndarray, min_confidence: float = 0.50) -> Optional
         if max_val > best_val:
             mcx = max_loc[0] + sw // 2
             mcy = max_loc[1] + sh // 2
-            # Verify the crimson rune glyph down the stone spire
-            roi_H = H[max(0, mcy - 35): min(h, mcy + 35), max(0, mcx - 30): min(w, mcx + 30)]
-            roi_S = S[max(0, mcy - 35): min(h, mcy + 35), max(0, mcx - 30): min(w, mcx + 30)]
-            roi_V = V[max(0, mcy - 35): min(h, mcy + 35), max(0, mcx - 30): min(w, mcx + 30)]
-            red_count = np.sum(((roi_H <= 14) | (roi_H >= 166)) & (roi_S >= 60) & (roi_V >= 60))
-            if red_count >= 10 and max_val >= min_confidence:
+            # Scaled rune verification box proportional to tower size
+            box_w = max(25, int(sw * 0.28))
+            box_h = max(30, int(sh * 0.28))
+            roi_H = H[max(0, mcy - box_h): min(h, mcy + box_h), max(0, mcx - box_w): min(w, mcx + box_w)]
+            roi_S = S[max(0, mcy - box_h): min(h, mcy + box_h), max(0, mcx - box_w): min(w, mcx + box_w)]
+            roi_V = V[max(0, mcy - box_h): min(h, mcy + box_h), max(0, mcx - box_w): min(w, mcx + box_w)]
+            red_count = np.sum(((roi_H <= 14) | (roi_H >= 166)) & (roi_S >= 50) & (roi_V >= 50))
+            min_red = max(8, int(12 * scale))
+            if red_count >= min_red and max_val >= min_confidence:
                 best_val = max_val
                 best_pos = (mcx, mcy)
 
@@ -329,9 +333,9 @@ def inspect_game(frame: np.ndarray, player: tuple[float, float] = (0.5, 0.5)) ->
     # are NEVER treated as an enemy hazard that repels the player!
     if monolith_pos is not None:
         mx, my = monolith_pos
-        monolith_clear_radius = max(95, int(span * 0.18))
+        monolith_clear_radius = max(110, int(span * 0.18))
         cv2.circle(dark, (mx, my), monolith_clear_radius, 0, -1)
-        cv2.ellipse(dark, (mx, my), (int(monolith_clear_radius * 0.75), int(monolith_clear_radius * 1.35)), 0, 0, 360, 0, -1)
+        cv2.ellipse(dark, (mx, my), (int(monolith_clear_radius * 0.85), int(monolith_clear_radius * 1.45)), 0, 0, 360, 0, -1)
 
     dark = cv2.morphologyEx(dark, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
     count, labels, stats, _ = cv2.connectedComponentsWithStats(dark, 8)
@@ -493,8 +497,8 @@ def choose_direction(
 
         is_charging_monolith = bool(
             getattr(vision, "monolith", None)
-            and monolith_dist < span * 0.50
-            and monolith_dot > 0.35
+            and monolith_dist < span * 0.65
+            and monolith_dot > 0.15
         )
 
         # Danger repulsion: clear collision avoidance with lethal boundary (< 10px) while staying brave
@@ -585,13 +589,13 @@ def choose_direction(
                     safe_m_corridor = 1.0
                 else:
                     if near_danger_dist < 14.0:
-                        safe_m_corridor = 0.20
+                        safe_m_corridor = 0.35
                     else:
-                        safe_m_corridor = max(0.50, 1.0 - forward_danger * 0.50)
-                monolith_pull = 220.0 * eff_m_dot * safe_m_corridor / (0.25 + monolith_dist / (span * 1.2))
+                        safe_m_corridor = max(0.60, 1.0 - forward_danger * 0.40)
+                monolith_pull = 350.0 * eff_m_dot * safe_m_corridor / (0.15 + monolith_dist / (span * 1.5))
                 score += monolith_pull
             if monolith_dot < 0.0:
-                score -= 45.0 * (1.0 - monolith_dot)
+                score -= 80.0 * (1.0 - monolith_dot)
 
         # Suppress patrol when actively locked onto a safe mana orb, chest, or monolith
         patrol_weight = 0.0 if (vision.chest is not None or getattr(vision, "monolith", None) is not None) else (

@@ -90,6 +90,9 @@ def run_cli_bot():
     last_shop_time = 0.0
     last_chest_time = 0.0
     last_learn_time = 0.0
+    last_monolith_pos = None
+    last_monolith_time = 0.0
+    previous_direction = None
     in_shop = False
     last_shop_label = ""
     step_count = 0
@@ -153,6 +156,8 @@ def run_cli_bot():
                     active_skills.clear()
                     skill_levels.clear()
                     maxed_skills.clear()
+                    last_monolith_pos = None
+                    previous_direction = None
                     controller.tap(list(confirm_pos), rect)
                     print(f"📋 [Kết quả] Tự động bấm 'Confirm' quay về sảnh!")
                     time.sleep(1.5)
@@ -199,6 +204,8 @@ def run_cli_bot():
                     run_id = recorder.start_new_run()
                     match_start_time = now
                     step_count = 0
+                    last_monolith_pos = None
+                    previous_direction = None
                     controller.tap(list(ea_pos), rect)
                     print("\n" + "-" * 60)
                     print(f"🔥 [TRẬN ĐẤU MỚI BẮT ĐẦU!] Mã ván: {run_id}")
@@ -461,9 +468,42 @@ def run_cli_bot():
                 if match_start_time == 0.0:
                     match_start_time = now
 
+                player_coords = tuple(config.get("player_position", [0.5, 0.5]))
+                px = int(w * player_coords[0])
+                py = int(h * player_coords[1])
+
+                # Phân tích thực địa: Quái vật, Đá/Tháp qua màn, Rương cổ vật, Mana Orbs
+                vision = botcore.inspect_game(frame, player=player_coords)
+
+                # Theo dõi Tháp qua màn (Monolith) liên tục kèm bù trừ vector di chuyển
+                if getattr(vision, "monolith", None) is not None:
+                    last_monolith_pos = vision.monolith
+                    last_monolith_time = now
+                    print(f"🏛️ [Tháp qua màn] ƯU TIÊN TUYỆT ĐỐI: Phát hiện Tháp tại {vision.monolith}! Đang lao thẳng vào để chạm Tháp nhận Cổ vật Huyền thoại!")
+                elif last_monolith_pos is not None and (now - last_monolith_time <= 3.0):
+                    if previous_direction:
+                        est_mx = int(round(last_monolith_pos[0] - 12.0 * previous_direction[0]))
+                        est_my = int(round(last_monolith_pos[1] - 12.0 * previous_direction[1]))
+                        last_monolith_pos = (est_mx, est_my)
+                    if (
+                        -80 <= last_monolith_pos[0] < w + 80
+                        and -80 <= last_monolith_pos[1] < h + 80
+                        and math.hypot(last_monolith_pos[0] - px, last_monolith_pos[1] - py) > 8
+                    ):
+                        vision.monolith = last_monolith_pos
+                    else:
+                        last_monolith_pos = None
+                else:
+                    last_monolith_pos = None
+
                 # Điều khiển né quái thông minh bằng thuật toán trường tiềm năng (Potential Field)
-                vision = botcore.inspect_game(frame, player=tuple(config.get("player_position", [0.5, 0.5])))
-                dir_x, dir_y = botcore.choose_direction(vision, elapsed=now - match_start_time, player=tuple(config.get("player_position", [0.5, 0.5])))
+                dir_x, dir_y = botcore.choose_direction(
+                    vision,
+                    elapsed=now - match_start_time,
+                    player=player_coords,
+                    previous=previous_direction,
+                )
+                previous_direction = (dir_x, dir_y)
                 controller.move((dir_x, dir_y), rect, config)
 
     except KeyboardInterrupt:

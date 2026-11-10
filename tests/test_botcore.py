@@ -854,6 +854,13 @@ class VisionTests(unittest.TestCase):
             self.assertLess(cdx, -0.85, "Must charge directly West into monolith when near")
             self.assertAlmostEqual(cdy, 0.0, delta=0.45, msg="Must not veer away North or South")
 
+            # 3. Test 1080p high resolution scaling (LDPlayer resolution 1080x1920)
+            img_1080 = cv2.resize(img_m, (1080, 1920))
+            m_pos_1080 = detect_monolith(img_1080)
+            self.assertIsNotNone(m_pos_1080, "Must detect monolith at 1080p LDPlayer resolution")
+            self.assertAlmostEqual(m_pos_1080[0], 350, delta=50)
+            self.assertAlmostEqual(m_pos_1080[1], 1300, delta=50)
+
     def test_chest_color_fallback_and_priority(self):
         from botcore import detect_chest, choose_direction
         import os
