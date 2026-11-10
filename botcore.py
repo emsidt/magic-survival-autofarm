@@ -1121,10 +1121,6 @@ def detect_die_button(frame: np.ndarray, min_confidence: float = 0.68) -> Option
     We match specifically the 'Die' row (bottom 42%) and click its exact center (~80% height
     of the full template) so the click lands squarely on 'Die' instead of the black gap above it.
     """
-    # During active gameplay/combat, the Pause button is present -> player is ALIVE, not on die screen
-    if detect_pause_button(frame) is not None:
-        return None
-
     template_path = _BASE_DIR / "assets" / "die_button.png"
     if not template_path.is_file():
         return None

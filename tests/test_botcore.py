@@ -161,12 +161,14 @@ class VisionTests(unittest.TestCase):
             pos_small = detect_die_button(frame_small)
             self.assertIsNotNone(pos_small)
 
-            # When Pause button is also present (active combat), die_button must be ignored!
+            # When Pause button is also present (as in the real game death overlay),
+            # detect_die_button MUST still detect the Die button!
             pause_tmpl = cv2.imread("assets/pause_button.png")
             if pause_tmpl is not None:
                 pth, ptw = pause_tmpl.shape[:2]
                 frame_die[20:20+pth, 520:520+ptw] = pause_tmpl
-                self.assertIsNone(detect_die_button(frame_die))
+                pos_with_pause = detect_die_button(frame_die)
+                self.assertIsNotNone(pos_with_pause, "Die button must be detected even when top bar pause icon is visible")
 
     def test_chest_detection_and_attraction(self):
         # Create a game frame with chest on the right side
