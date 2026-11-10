@@ -220,20 +220,44 @@ def run_cli_bot():
                 if now - last_level_up_time >= 1.2:
                     last_level_up_time = now
                     step_count += 1
-                    target, chosen_name = botcore.choose_best_artifact_or_card(
+
+                    # 8.1 Kiểm tra xem có mở khóa Phép Kết Hợp Fusion (ngôi sao đỏ góc trên-phải) không
+                    combo_star_pos = botcore.detect_combination_star(frame)
+                    if combo_star_pos:
+                        controller.tap(list(combo_star_pos), rect)
+                        time.sleep(0.45)
+                        f_combo = controller.screenshot() if is_adb else frame
+                        combo_choice = botcore.find_best_combination_option(f_combo, config.get("skill_priority"))
+                        if combo_choice:
+                            combo_target, combo_label, combo_key = combo_choice
+                            controller.tap(list(combo_target), rect)
+                            time.sleep(0.35)
+                            f_conf = controller.screenshot() if is_adb else frame
+                            btn_learn = botcore.detect_learn_button(f_conf)
+                            if btn_learn:
+                                controller.tap(list(btn_learn), rect)
+                                print(f"✨ [Phép kết hợp Fusion] Đã mở khóa: [{combo_label}] ({combo_key})!")
+                                time.sleep(0.65)
+                                continue
+
+                    # 8.2 Chọn thẻ kỹ năng tối ưu
+                    choice = config.get("card_choice", 1)
+                    choice_res = botcore.choose_best_artifact_or_card(
                         frame,
-                        rules,
-                        str(BASE_DIR),
-                        active_skills=active_skills,
+                        default_choice=choice,
                         skill_priority=config.get("skill_priority"),
-                        prefer_freeze_traits=config.get("prefer_freeze_traits", True),
                         prefer_crit_and_cooldown=config.get("prefer_crit_and_cooldown", True),
+                        prefer_freeze_traits=config.get("prefer_freeze_traits", True),
+                        active_skills=active_skills,
                     )
+                    card_idx, target = choice_res
+                    choice_label = getattr(choice_res, "label", f"Thẻ {card_idx}")
                     if target:
                         controller.tap(list(target), rect)
-                        if chosen_name:
-                            active_skills.add(chosen_name)
-                        print(f"⭐ [Cấp #{step_count}] Đã chọn: [{chosen_name or 'Kỹ năng ưu tiên'}]")
+                        chosen_sk = getattr(choice_res, "chosen_skill", None)
+                        if chosen_sk:
+                            active_skills.add(chosen_sk)
+                        print(f"⭐ [Cấp #{step_count}] Đã chọn Thẻ {card_idx}: [{choice_label}]")
                         time.sleep(0.65)
                 continue
 
