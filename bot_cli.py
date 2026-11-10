@@ -207,15 +207,51 @@ def run_cli_bot():
                     time.sleep(1.2)
                 continue
 
-            # 7. Phát hiện quảng cáo có nút X -> Bấm X tắt
-            ad_x = botcore.detect_close_button(frame)
-            if ad_x:
+            # 7. MÀN HÌNH CHỌN THUỘC TÍNH (Level 4/7 Trait / Select Attribute - Có nút Learn)
+            if botcore.is_attribute_screen(frame) or botcore.detect_learn_button(frame) is not None:
                 controller.release()
-                if now - last_auto_action_time >= 1.5:
-                    last_auto_action_time = now
-                    controller.tap(list(ad_x), rect)
-                    print("📺 [Quảng cáo] Đã tự động bấm nút 'X' đóng quảng cáo!")
-                    time.sleep(1.0)
+                match_running = True
+                if now - last_learn_time >= 1.2:
+                    last_learn_time = now
+                    circles = botcore.get_attribute_circle_targets()
+                    
+                    # Duyệt và đánh giá 3 nhánh thuộc tính (1: Top, 2: Bottom-Left, 3: Bottom-Right)
+                    best_c_idx = 1
+                    best_c_score = -1
+                    best_c_label = ""
+                    best_c_parent = ""
+
+                    for c_idx in (1, 2, 3):
+                        controller.tap(list(circles[c_idx]), rect)
+                        time.sleep(0.35)
+                        f_snap = controller.screenshot() if is_adb else frame
+                        s_att, l_att, p_sk = botcore.evaluate_selected_attribute(f_snap)
+                        if s_att > best_c_score:
+                            best_c_score = s_att
+                            best_c_idx = c_idx
+                            best_c_label = l_att
+                            if p_sk:
+                                best_c_parent = p_sk
+                        # Nếu gặp nhánh Hợp thể tối thượng (score >= 500), chốt ngay lập tức
+                        if best_c_score >= 500:
+                            break
+
+                    # Tự động chọn nhánh tối ưu nhất
+                    controller.tap(list(circles[best_c_idx]), rect)
+                    time.sleep(0.25)
+
+                    # Bấm nút "Learn" xác nhận
+                    f_learn = controller.screenshot() if is_adb else frame
+                    learn_target = botcore.detect_learn_button(f_learn) or (0.50, 0.8786)
+                    controller.tap(list(learn_target), rect)
+
+                    if best_c_parent:
+                        active_skills.add(best_c_parent)
+                        skill_levels[best_c_parent] = 7
+                        maxed_skills.add(best_c_parent)
+                        print(f"🏆 [MAX LEVEL] Kỹ năng [{best_c_parent}] đã hoàn thành nhánh Cấp 7 (MAX)!")
+                    print(f"🌀 [Thuộc tính Cấp 7] Đã học nhánh: [{best_c_label}] (Kỹ năng: {best_c_parent or 'Unknown'})")
+                    time.sleep(0.8)
                 continue
 
             # 8. MÀN HÌNH LÊN CẤP (Level Up)
@@ -281,29 +317,7 @@ def run_cli_bot():
                         time.sleep(0.65)
                 continue
 
-            # 9. MÀN HÌNH CHỌN THUỘC TÍNH LEVEL 7 (Learn button)
-            learn_pos = botcore.detect_learn_button(frame)
-            if learn_pos:
-                controller.release()
-                match_running = True
-                if now - last_learn_time >= 1.5:
-                    last_learn_time = now
-                    s_att, l_att, p_sk = botcore.evaluate_selected_attribute(frame)
-                    circles = botcore.get_attribute_circle_targets()
-                    if circles:
-                        controller.tap(list(circles[0]), rect)
-                        time.sleep(0.2)
-                    controller.tap(list(learn_pos), rect)
-                    if p_sk:
-                        active_skills.add(p_sk)
-                        skill_levels[p_sk] = 7
-                        maxed_skills.add(p_sk)
-                        print(f"🏆 [MAX LEVEL] Kỹ năng [{p_sk}] đã hoàn thành nhánh Cấp 7 (MAX)!")
-                    print(f"🌀 [Thuộc tính Cấp 7] Đã học nhánh: [{l_att}] (Thuộc: {p_sk})")
-                    time.sleep(0.65)
-                continue
-
-            # 10. MÀN HÌNH RƯƠNG CỔ VẬT (Obtain button)
+            # 9. MÀN HÌNH RƯƠNG CỔ VẬT (Obtain button)
             obtain_pos = botcore.detect_obtain_button(frame)
             if obtain_pos:
                 controller.release()
@@ -429,7 +443,18 @@ def run_cli_bot():
                         time.sleep(0.5)
                 continue
 
-            # 12. GIAI ĐOẠN CHIẾN ĐẤU TÍCH CỰC (In Active Combat)
+            # 12. Phát hiện quảng cáo có nút X -> Bấm X tắt
+            ad_x = botcore.detect_close_button(frame)
+            if ad_x:
+                controller.release()
+                if now - last_auto_action_time >= 1.5:
+                    last_auto_action_time = now
+                    controller.tap(list(ad_x), rect)
+                    print("📺 [Quảng cáo] Đã tự động bấm nút 'X' đóng quảng cáo!")
+                    time.sleep(1.0)
+                continue
+
+            # 13. GIAI ĐOẠN CHIẾN ĐẤU TÍCH CỰC (In Active Combat)
             pause_pos = botcore.detect_pause_button(frame)
             if pause_pos:
                 match_running = True

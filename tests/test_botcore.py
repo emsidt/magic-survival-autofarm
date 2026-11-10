@@ -537,6 +537,10 @@ class VisionTests(unittest.TestCase):
             self.assertAlmostEqual(pos[0], 0.50, delta=0.08)
             self.assertAlmostEqual(pos[1], 0.89, delta=0.04)
 
+            from botcore import is_attribute_screen, detect_close_button
+            self.assertTrue(is_attribute_screen(frame_learn))
+            self.assertIsNone(detect_close_button(frame_learn), "detect_close_button must NEVER trigger on attribute screen!")
+
         circles = get_attribute_circle_targets()
         self.assertEqual(len(circles), 3)
         self.assertEqual(circles[1], (0.50, 0.29))

@@ -65,6 +65,7 @@ from botcore import (
     get_shop_item_targets,
     get_upgrade_target,
     inspect_game,
+    is_attribute_screen,
     is_level_up_screen,
     is_shop_buy_enabled,
     is_three_card_chest,
@@ -1115,8 +1116,8 @@ class FarmApp:
                             continue
 
                         # B0.2 MÀN HÌNH CHỌN THUỘC TÍNH LEVEL 7 (Select Attribute có nút "Learn" ở dưới)
-                        learn_pos = detect_learn_button(frame)
-                        if learn_pos:
+                        if is_attribute_screen(frame) or detect_learn_button(frame) is not None:
+                            learn_pos = detect_learn_button(frame) or (0.50, 0.8786)
                             controller.release()
                             self.previous_direction = None
                             uncertain_since = 0.0

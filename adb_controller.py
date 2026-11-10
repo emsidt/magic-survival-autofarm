@@ -73,13 +73,24 @@ class ADBController:
 
             if devices:
                 self.device = devices[0]
-                # Query screen resolution
-                wm_res = self._run_adb(["shell", "wm", "size"], timeout=3.0)
-                wm_out = wm_res.stdout.decode("utf-8", errors="ignore")
-                m = re.search(r"Physical size:\s*(\d+)x(\d+)", wm_out) or re.search(r"(\d+)x(\d+)", wm_out)
-                if m:
-                    self.screen_width = int(m.group(1))
-                    self.screen_height = int(m.group(2))
+                # Query screen resolution (prefer active screencap dimensions)
+                frame = self.screenshot()
+                if frame is not None:
+                    self.screen_height, self.screen_width = frame.shape[:2]
+                else:
+                    disp_res = self._run_adb(["shell", "dumpsys", "window", "displays"], timeout=3.0)
+                    disp_out = disp_res.stdout.decode("utf-8", errors="ignore")
+                    m_cur = re.search(r"cur=(\d+)x(\d+)", disp_out)
+                    if m_cur:
+                        self.screen_width = int(m_cur.group(1))
+                        self.screen_height = int(m_cur.group(2))
+                    else:
+                        wm_res = self._run_adb(["shell", "wm", "size"], timeout=3.0)
+                        wm_out = wm_res.stdout.decode("utf-8", errors="ignore")
+                        m = re.search(r"Physical size:\s*(\d+)x(\d+)", wm_out) or re.search(r"(\d+)x(\d+)", wm_out)
+                        if m:
+                            self.screen_width = int(m.group(1))
+                            self.screen_height = int(m.group(2))
         except Exception:
             pass
 

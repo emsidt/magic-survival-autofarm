@@ -738,15 +738,19 @@ def detect_close_button(frame: np.ndarray, threshold: float = 0.62) -> Optional[
     """Scan top-right and top-left corners for ad close 'X' buttons, circled X, or Skip '>>' buttons.
 
     Safeguarded to strictly ignore Title Screen, Game Lobby, Endgame Confirm screen,
-    active gameplay Pause Button, and Settings Gear.
+    active gameplay Pause Button, Settings Gear, Chest Obtain screen, Shop screen, and Select Attribute screen.
     """
-    # 1. If Title Screen, Lobby, Confirm, Die screen, or In-game Pause button is active, NEVER detect an ad close button!
+    # 1. If Title Screen, Lobby, Confirm, Die screen, Pause button, or Game Modal is active, NEVER detect an ad close button!
     if (detect_start_game(frame) is not None or 
         detect_enter_area(frame) is not None or 
         detect_selected(frame) is not None or
         detect_confirm_button(frame) is not None or
         detect_die_button(frame) is not None or
-        detect_pause_button(frame) is not None):
+        detect_pause_button(frame) is not None or
+        detect_obtain_button(frame) is not None or
+        detect_buy_button(frame) is not None or
+        detect_learn_button(frame) is not None or
+        is_attribute_screen(frame)):
         return None
 
     # 2. Check if Settings Gear is present to avoid clicking near it
@@ -755,12 +759,13 @@ def detect_close_button(frame: np.ndarray, threshold: float = 0.62) -> Optional[
     h, w = frame.shape[:2]
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-    # Ad close buttons appear strictly in the outer corners (top 16% of screen)
+    # Ad close buttons appear strictly in the outer corners (top 9% of screen, max 160px)
+    corner_h = min(int(h * 0.09), 160)
     corners = [
         # Top-right corner (standard position for Google AdMob, Unity, AppLovin mobile ads)
-        (int(w * 0.70), 0, w, int(h * 0.16)),
+        (int(w * 0.72), 0, w, corner_h),
         # Top-left corner (position in Google Play Games portrait ads)
-        (0, 0, int(w * 0.30), int(h * 0.16)),
+        (0, 0, int(w * 0.28), corner_h),
     ]
 
     best_coord = None
@@ -1855,37 +1860,84 @@ def evaluate_selected_shop_artifact(
     return (tier_base + bonus, label)
 
 
-def detect_learn_button(frame: np.ndarray, min_confidence: float = 0.70) -> Optional[tuple[float, float]]:
-    """Detect 'Learn' confirm button at the bottom of the Level 7 'Select Attribute' screen."""
+def detect_learn_button(frame: np.ndarray, min_confidence: float = 0.65) -> Optional[tuple[float, float]]:
+    """Detect 'Learn' confirm button at the bottom of the Level 4/7 'Select Attribute' screen."""
     template_path = _BASE_DIR / "assets" / "learn_button_tight.png"
-    if not template_path.is_file():
-        return None
-    template = cv2.imread(str(template_path), cv2.IMREAD_GRAYSCALE)
-    if template is None:
-        return None
     h, w = frame.shape[:2]
-    y0, y1 = int(h * 0.83), int(h * 0.95)
-    x0, x1 = int(w * 0.30), int(w * 0.70)
+    y0, y1 = int(h * 0.80), int(h * 0.96)
+    x0, x1 = int(w * 0.25), int(w * 0.75)
     roi = frame[y0:y1, x0:x1]
     if roi.size == 0:
         return None
-    gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-    th, tw = template.shape[:2]
-    best_match = None
-    best_score = 0.0
-    for scale in (0.75, 0.90, 1.0, 1.15, 1.30):
-        stw, sth = int(tw * scale), int(th * scale)
-        if stw >= roi.shape[1] or sth >= roi.shape[0]:
-            continue
-        rt = cv2.resize(template, (stw, sth))
-        res = cv2.matchTemplate(gray_roi, rt, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, max_loc = cv2.minMaxLoc(res)
-        if max_val > best_score:
-            best_score = max_val
-            best_match = (x0 + max_loc[0] + stw // 2, y0 + max_loc[1] + sth // 2)
-    if best_score >= min_confidence and best_match:
-        return (round(best_match[0] / w, 4), round(best_match[1] / h, 4))
+
+    if template_path.is_file():
+        template = cv2.imread(str(template_path), cv2.IMREAD_GRAYSCALE)
+        if template is not None:
+            gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+            th, tw = template.shape[:2]
+            best_match = None
+            best_score = 0.0
+            for scale in (0.75, 0.90, 1.0, 1.15, 1.30, 1.50, 1.80, 2.00, 2.20):
+                stw, sth = int(tw * scale), int(th * scale)
+                if stw >= roi.shape[1] or sth >= roi.shape[0]:
+                    continue
+                rt = cv2.resize(template, (stw, sth))
+                res = cv2.matchTemplate(gray_roi, rt, cv2.TM_CCOEFF_NORMED)
+                _, max_val, _, max_loc = cv2.minMaxLoc(res)
+                if max_val > best_score:
+                    best_score = max_val
+                    best_match = (x0 + max_loc[0] + stw // 2, y0 + max_loc[1] + sth // 2)
+            if best_score >= min_confidence and best_match:
+                return (round(best_match[0] / w, 4), round(best_match[1] / h, 4))
+
+    # Fast OCR fallback for 'Learn' button
+    try:
+        import asyncio
+        import winocr
+        from PIL import Image
+        pil_roi = Image.fromarray(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB))
+        async def _ocr_learn():
+            return await winocr.recognize_pil(pil_roi, lang="en")
+        ocr_res = asyncio.run(_ocr_learn())
+        for line in ocr_res.lines:
+            if "learn" in line.text.lower():
+                if line.words:
+                    r = line.words[0].bounding_rect
+                    cx = x0 + int(r.x + r.width / 2)
+                    cy = y0 + int(r.y + r.height / 2)
+                    return (round(cx / w, 4), round(cy / h, 4))
+                return (0.50, 0.88)
+    except Exception:
+        pass
+
     return None
+
+
+def is_attribute_screen(frame: np.ndarray) -> bool:
+    """Detect if the Magic Level 4/7 'Select Attribute' screen is open."""
+    # 1. Direct positive check: Learn button exists
+    if detect_learn_button(frame) is not None:
+        return True
+
+    # 2. Check title 'Select Attribute' in top 22%
+    h, w = frame.shape[:2]
+    try:
+        import asyncio
+        import winocr
+        from PIL import Image
+        roi_top = frame[int(h * 0.05):int(h * 0.22), int(w * 0.15):int(w * 0.85)]
+        if roi_top.size > 0:
+            pil_roi = Image.fromarray(cv2.cvtColor(roi_top, cv2.COLOR_BGR2RGB))
+            async def _ocr_attr():
+                return await winocr.recognize_pil(pil_roi, lang="en")
+            res = asyncio.run(_ocr_attr())
+            txt = " ".join(l.text.lower() for l in res.lines)
+            if "select" in txt and ("attri" in txt or "bute" in txt):
+                return True
+    except Exception:
+        pass
+
+    return False
 
 
 def get_attribute_circle_targets() -> dict[int, tuple[float, float]]:
@@ -2594,6 +2646,8 @@ def is_level_up_screen(frame: np.ndarray) -> LevelUpDetection:
         return LevelUpDetection(False, "buy_button")
     if detect_learn_button(frame) is not None:
         return LevelUpDetection(False, "learn_button")
+    if is_attribute_screen(frame):
+        return LevelUpDetection(False, "attribute_screen")
     if detect_die_button(frame) is not None:
         return LevelUpDetection(False, "die_button")
     if detect_confirm_button(frame) is not None:
