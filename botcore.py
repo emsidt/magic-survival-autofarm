@@ -1394,6 +1394,22 @@ COMBINATION_COMPONENTS: dict[str, list[str]] = {
     "demon_equation": ["fireball", "energy_bolt"],
     "frenzy": ["flash_shock", "spirit"],
     "prism_spree": ["arcane_ray", "spirit"],
+    "gate_of_creation": ["magic_circle", "shield"],
+    "door_of_creation": ["magic_circle", "shield"],
+    "master_of_storms": ["cyclone", "electric_shock"],
+    "lightning_breath": ["incineration", "electric_shock"],
+    "brand_of_fire": ["incineration", "fireball"],
+    "plasma_beam": ["arcane_ray", "satellite"],
+    "pandemonium": ["fireball", "incineration"],
+    "deluge": ["tsunami", "frost_nova"],
+    "war_climate": ["meteor", "blizzard"],
+    "meissner_effect": ["electric_zone", "flash_shock"],
+    "genesis": ["frost_nova", "meteor"],
+    "great_rift": ["frost_nova", "meteor"],
+    "winter_storm": ["blizzard", "cyclone"],
+    "bloody_sacrament": ["flash_shock", "shield"],
+    "runaway_electricity": ["electric_shock", "satellite"],
+    "heart_of_lightning": ["electric_shock", "arcane_ray"],
 }
 
 
@@ -2172,8 +2188,18 @@ SKILL_ALIASES: dict[str, list[str]] = {
     "winter_storm": ["winter storm", "winterstorm"],
     "flying_swords": ["flying swords", "flyingswords"],
     "door_of_creation": ["door of creation", "doorofcreation"],
+    "gate_of_creation": ["gate of creation", "gateofcreation"],
     "runaway_electricity": ["runaway electricity", "runawayelectricity"],
     "heart_of_lightning": ["heart of lightning", "heartoflightning"],
+    "master_of_storms": ["master of storms", "master of storm", "masterofstorms"],
+    "lightning_breath": ["lightning breath", "lightningbreath"],
+    "brand_of_fire": ["brand of fire", "brandoffire"],
+    "plasma_beam": ["plasma beam", "plasmabeam"],
+    "pandemonium": ["pandemonium"],
+    "deluge": ["deluge"],
+    "war_climate": ["war climate", "warclimate"],
+    "meissner_effect": ["meissner effect", "meissnereffect"],
+    "genesis": ["genesis"],
 
     # Component skills
     "spirit": ["spirit", "spirits", "spirit's"],
@@ -2809,39 +2835,44 @@ def is_level_up_screen(frame: np.ndarray) -> LevelUpDetection:
     return LevelUpDetection(False, "none")
 
 
-def detect_combination_star(frame: np.ndarray, threshold: float = 0.65) -> Optional[tuple[float, float]]:
+def detect_combination_star(frame: np.ndarray, threshold: float = 0.58) -> Optional[tuple[float, float]]:
     """Detect the glowing red/pink 7-pointed Combination Star in the upper-right corner of the level-up screen.
     Returns relative coords (x, y) if a fusion is unlocked and available to be learned.
     Strictly verifies that the star is ACTIVELY GLOWING RED/PINK.
     When the star is dull/grey/inactive (no fusion available), returns None!
     """
+    if is_attribute_screen(frame) or is_chest_screen(frame) or detect_die_button(frame) is not None:
+        return None
+
     h, w = frame.shape[:2]
+    # Combination star is strictly situated in the upper right corner (y: 6%..22%, x: 76%..98%)
     y0, y1 = int(h * 0.06), int(h * 0.22)
-    x0, x1 = int(w * 0.78), int(w * 0.98)
+    x0, x1 = int(w * 0.76), int(w * 0.98)
     roi = frame[y0:y1, x0:x1]
     if roi.shape[0] < 20 or roi.shape[1] < 20:
         return None
 
     # Strict red glow verification:
-    # A glowing star has crimson/pink/bright-red glow (H in [150..180] or [0..14], S >= 60, V >= 70).
+    # A glowing star has crimson/pink/bright-red glow (H in [148..180] or [0..16], S >= 50, V >= 60).
     # The dull/grey star has almost zero saturated red pixels (< 40px).
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
     H, S, V = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
-    red_mask = (((H >= 150) | (H <= 14)) & (S >= 60) & (V >= 70)).astype(np.uint8)
+    red_mask = (((H >= 148) | (H <= 16)) & (S >= 50) & (V >= 60)).astype(np.uint8)
     total_red = int(np.sum(red_mask))
-    if total_red < 180:
+    if total_red < 150:
         return None
 
     # Match the star itself before considering its color. Other red game effects can
     # appear in this corner, so a red contour alone is not evidence of a fusion.
     tmpl_path = _BASE_DIR / "assets/combination_star.png"
+    best_score = 0.0
+    best_pos = None
+
     if tmpl_path.is_file():
         tmpl = cv2.imread(str(tmpl_path))
         if tmpl is not None:
             rh, rw = roi.shape[:2]
-            best_score = 0.0
-            best_pos = None
-            for scale in (0.75, 0.85, 1.0, 1.15, 1.25):
+            for scale in (0.70, 0.80, 0.85, 0.95, 1.05, 1.20, 1.35, 1.50, 1.70, 1.85, 2.00, 2.15):
                 th, tw = int(tmpl.shape[0] * scale), int(tmpl.shape[1] * scale)
                 if th >= rh or tw >= rw:
                     continue
@@ -2849,9 +2880,8 @@ def detect_combination_star(frame: np.ndarray, threshold: float = 0.65) -> Optio
                 res = cv2.matchTemplate(roi, t, cv2.TM_CCOEFF_NORMED)
                 _, max_val, _, max_loc = cv2.minMaxLoc(res)
                 if max_val > best_score:
-                    # Verify the matched region contains genuine glowing red pixels
                     m_roi_red = red_mask[max_loc[1] : max_loc[1] + th, max_loc[0] : max_loc[0] + tw]
-                    if np.sum(m_roi_red) >= max(150, int(th * tw * 0.08)):
+                    if np.sum(m_roi_red) >= max(100, int(th * tw * 0.05)):
                         best_score = max_val
                         best_pos = (
                             round(float(max_loc[0] + tw / 2 + x0) / w, 3),
@@ -2859,6 +2889,21 @@ def detect_combination_star(frame: np.ndarray, threshold: float = 0.65) -> Optio
                         )
             if best_score >= threshold and best_pos:
                 return best_pos
+
+    # Connected component fallback: centroid of the red hollow star cluster
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(red_mask, 8)
+    for i in range(1, num_labels):
+        area = stats[i, cv2.CC_STAT_AREA]
+        cw = stats[i, cv2.CC_STAT_WIDTH]
+        ch = stats[i, cv2.CC_STAT_HEIGHT]
+        aspect = float(cw) / max(1, ch)
+        extent = float(area) / max(1, cw * ch)
+        if area >= max(160, int(roi.shape[0] * roi.shape[1] * 0.03)) and 0.60 <= aspect <= 1.40 and 0.15 <= extent <= 0.60:
+            cx, cy = centroids[i]
+            return (
+                round(float(x0 + cx) / w, 3),
+                round(float(y0 + cy) / h, 3),
+            )
 
     return None
 
@@ -2900,7 +2945,9 @@ def find_best_combination_option(
             "perpetual_engine", "overmind", "demon_equation", "frenzy", "prism_spree",
             "blast_furnace", "inferno", "avatar", "hyperion", "great_rift",
             "bloody_sacrament", "deus_ex_machina", "breath_of_fire", "winter_storm",
-            "flying_swords", "door_of_creation", "runaway_electricity", "heart_of_lightning",
+            "flying_swords", "door_of_creation", "gate_of_creation", "runaway_electricity", "heart_of_lightning",
+            "master_of_storms", "lightning_breath", "brand_of_fire", "plasma_beam",
+            "pandemonium", "deluge", "war_climate", "meissner_effect", "genesis",
         }
 
         for line in res.lines:

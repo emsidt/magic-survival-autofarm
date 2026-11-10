@@ -305,29 +305,34 @@ def run_cli_bot():
                     # 8.1 Kiểm tra xem có mở khóa Phép Kết Hợp Fusion (ngôi sao đỏ góc trên-phải) không
                     combo_star_pos = botcore.detect_combination_star(frame)
                     if combo_star_pos:
+                        print(f"✨ [Phép kết hợp Fusion] Phát hiện Ngôi sao Đỏ tại {combo_star_pos}! Đang bấm mở menu Hợp thể...")
                         controller.tap(list(combo_star_pos), rect)
-                        time.sleep(0.45)
+                        time.sleep(0.55)
                         f_combo = controller.screenshot() if is_adb else frame
                         combo_choice = botcore.find_best_combination_option(f_combo, config.get("skill_priority"))
                         if combo_choice:
                             combo_target, combo_label, combo_key = combo_choice
+                            print(f"✨ [Phép kết hợp Fusion] Chọn hợp thể tốt nhất: [{combo_label}] tại {combo_target}")
                             controller.tap(list(combo_target), rect)
-                            time.sleep(0.35)
+                            time.sleep(0.40)
                             f_conf = controller.screenshot() if is_adb else frame
-                            btn_learn = botcore.detect_learn_button(f_conf)
-                            if btn_learn:
-                                controller.tap(list(btn_learn), rect)
-                                active_skills.add(combo_key)
-                                maxed_skills.add(combo_key)
-                                if combo_key in botcore.COMBINATION_COMPONENTS:
-                                    for comp in botcore.COMBINATION_COMPONENTS[combo_key]:
-                                        active_skills.add(comp)
-                                        skill_levels[comp] = 7
-                                        maxed_skills.add(comp)
-                                        print(f"🏆 [MAX FUSION] Kỹ năng thành phần [{comp}] đã hợp thể tối đa vào [{combo_label}]!")
-                                print(f"✨ [Phép kết hợp Fusion] Đã mở khóa: [{combo_label}] ({combo_key})!")
-                                time.sleep(0.65)
-                                continue
+                            btn_learn = botcore.detect_learn_button(f_conf) or (0.50, 0.88)
+                            controller.tap(list(btn_learn), rect)
+                            active_skills.add(combo_key)
+                            maxed_skills.add(combo_key)
+                            if combo_key in botcore.COMBINATION_COMPONENTS:
+                                for comp in botcore.COMBINATION_COMPONENTS[combo_key]:
+                                    active_skills.add(comp)
+                                    skill_levels[comp] = 7
+                                    maxed_skills.add(comp)
+                                    print(f"🏆 [MAX FUSION] Kỹ năng thành phần [{comp}] đã hợp thể tối đa vào [{combo_label}]!")
+                            print(f"✨ [Phép kết hợp Fusion] 🎉 ĐÃ HỌC THÀNH CÔNG: [{combo_label}] ({combo_key})!")
+                            time.sleep(0.65)
+                            continue
+                        else:
+                            print("✨ [Phép kết hợp Fusion] Chưa có nhánh hợp thể kích hoạt -> Đóng menu quay lại chọn thẻ.")
+                            controller.press_esc()
+                            time.sleep(0.4)
 
                     # 8.2 Chọn thẻ kỹ năng tối ưu
                     choice = config.get("card_choice", 1)

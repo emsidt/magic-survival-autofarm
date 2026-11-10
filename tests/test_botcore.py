@@ -766,6 +766,21 @@ class VisionTests(unittest.TestCase):
             self.assertAlmostEqual(star_pos[0], 0.91, delta=0.04)
             self.assertAlmostEqual(star_pos[1], 0.14, delta=0.04)
 
+        # 2a. Level 26 screen with glowing red 7-pointed star (original and 1080p)
+        lvl26_path = r"C:/Users/User/.gemini/antigravity/brain/2dc840cb-72eb-45f9-92e9-a3fe999f18b4/.user_uploaded/media_1794314195828_4b489029.png"
+        if os.path.isfile(lvl26_path):
+            img_lvl26 = cv2.imread(lvl26_path)
+            star_pos_orig = detect_combination_star(img_lvl26)
+            self.assertIsNotNone(star_pos_orig)
+            self.assertAlmostEqual(star_pos_orig[0], 0.856, delta=0.04)
+            self.assertAlmostEqual(star_pos_orig[1], 0.136, delta=0.04)
+
+            img_lvl26_1080 = cv2.resize(img_lvl26, (1080, 1920))
+            star_pos_1080 = detect_combination_star(img_lvl26_1080)
+            self.assertIsNotNone(star_pos_1080)
+            self.assertAlmostEqual(star_pos_1080[0], 0.855, delta=0.04)
+            self.assertAlmostEqual(star_pos_1080[1], 0.136, delta=0.04)
+
         # 2b. Uploaded image with DULL inactive star: MUST return None!
         dull_path = r"C:/Users/User/.gemini/antigravity/brain/2dc840cb-72eb-45f9-92e9-a3fe999f18b4/.user_uploaded/media_1794152496577_40652778.png"
         if os.path.isfile(dull_path):
