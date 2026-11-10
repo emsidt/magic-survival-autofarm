@@ -658,15 +658,17 @@ class FarmApp:
                         self._push("status", "Đã dừng vì hết giới hạn thời gian.")
                         continue
 
-                    hwnd = locate_game(self.config["window_title"])
-                    if not hwnd:
-                        controller.release()
-                        self._push("status", "Không tìm thấy cửa sổ Magic Survival.")
-                        time.sleep(1.0)
-                        continue
-
                     is_adb = hasattr(controller, "screen_width")
-                    if not is_adb:
+                    if is_adb:
+                        rect = {"left": 0, "top": 0, "width": controller.screen_width, "height": controller.screen_height}
+                    else:
+                        hwnd = locate_game(self.config["window_title"])
+                        if not hwnd:
+                            controller.release()
+                            self._push("status", "Không tìm thấy cửa sổ Magic Survival.")
+                            time.sleep(1.0)
+                            continue
+
                         is_active, active_wnd = is_game_or_popup_active(hwnd, post_death_phase)
                         if not is_active:
                             if hwnd and not post_death_phase:
@@ -682,21 +684,21 @@ class FarmApp:
                             time.sleep(0.4)
                             continue
 
-                    # Luôn quét chính xác kích thước khung hình chuẩn của game (Client viewport, không dính thanh tiêu đề/viền)
-                    rect = game_rectangle(hwnd, self.config)
-                    # Nếu có cửa sổ popup độc lập hoàn toàn ngoài cây cửa sổ game:
-                    if not is_adb and active_wnd and active_wnd != hwnd and post_death_phase:
-                        try:
-                            # Tuyệt đối không dùng GetWindowRect vì dính thanh tiêu đề/viền làm lệch tọa độ
-                            # Chỉ dùng nếu active_wnd là cửa sổ độc lập (không phải child hay root của game)
-                            if not win32gui.IsChild(hwnd, active_wnd) and win32gui.GetAncestor(active_wnd, win32con.GA_ROOT) != hwnd:
-                                cl, ct, cr, cb = win32gui.GetClientRect(active_wnd)
-                                ox, oy = win32gui.ClientToScreen(active_wnd, (cl, ct))
-                                pw, ph = cr - cl, cb - ct
-                                if pw >= 150 and ph >= 150:
-                                    rect = {"left": ox, "top": oy, "width": pw, "height": ph}
-                        except Exception:
-                            pass
+                        # Luôn quét chính xác kích thước khung hình chuẩn của game (Client viewport, không dính thanh tiêu đề/viền)
+                        rect = game_rectangle(hwnd, self.config)
+                        # Nếu có cửa sổ popup độc lập hoàn toàn ngoài cây cửa sổ game:
+                        if active_wnd and active_wnd != hwnd and post_death_phase:
+                            try:
+                                # Tuyệt đối không dùng GetWindowRect vì dính thanh tiêu đề/viền làm lệch tọa độ
+                                # Chỉ dùng nếu active_wnd là cửa sổ độc lập (không phải child hay root của game)
+                                if not win32gui.IsChild(hwnd, active_wnd) and win32gui.GetAncestor(active_wnd, win32con.GA_ROOT) != hwnd:
+                                    cl, ct, cr, cb = win32gui.GetClientRect(active_wnd)
+                                    ox, oy = win32gui.ClientToScreen(active_wnd, (cl, ct))
+                                    pw, ph = cr - cl, cb - ct
+                                    if pw >= 150 and ph >= 150:
+                                        rect = {"left": ox, "top": oy, "width": pw, "height": ph}
+                            except Exception:
+                                pass
 
                     if is_adb:
                         f_adb = controller.screenshot()
