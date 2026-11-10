@@ -1199,6 +1199,19 @@ class VisionTests(unittest.TestCase):
         self.assertAlmostEqual(s1[0], 0.265, places=2)
         self.assertAlmostEqual(s3[0], 0.735, places=2)
 
+        # 3. Attribute circle targets & Learn active state
+        targets = botcore.get_attribute_circle_targets()
+        self.assertEqual(targets[1], (0.50, 0.29))
+        self.assertEqual(targets[2], (0.31, 0.44))
+        self.assertEqual(targets[3], (0.68, 0.44))
+
+        # Test learn active state on blank vs bright learn
+        blank = np.zeros((1000, 600, 3), dtype=np.uint8)
+        self.assertFalse(botcore.is_learn_button_active(blank))
+        bright_learn = np.zeros((1000, 600, 3), dtype=np.uint8)
+        bright_learn[860:910, 240:360] = 255
+        self.assertTrue(botcore.is_learn_button_active(bright_learn))
+
 
 if __name__ == "__main__":
     unittest.main()

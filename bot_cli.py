@@ -239,8 +239,10 @@ def run_cli_bot():
                     best_c_label = ""
                     best_c_parent = ""
 
+                    last_clicked_circle = None
                     for c_idx in (1, 2, 3):
                         controller.tap(list(circles[c_idx]), rect)
+                        last_clicked_circle = c_idx
                         time.sleep(0.35)
                         f_snap = controller.screenshot() if is_adb else frame
                         s_att, l_att, p_sk = botcore.evaluate_selected_attribute(f_snap)
@@ -254,14 +256,33 @@ def run_cli_bot():
                         if best_c_score >= 500:
                             break
 
-                    # Tự động chọn nhánh tối ưu nhất
-                    controller.tap(list(circles[best_c_idx]), rect)
-                    time.sleep(0.25)
+                    # Đảm bảo nhánh tốt nhất được chọn (chỉ bấm nếu chưa được chọn sẵn)
+                    if last_clicked_circle != best_c_idx:
+                        controller.tap(list(circles[best_c_idx]), rect)
+                        time.sleep(0.35)
 
-                    # Bấm nút "Learn" xác nhận
-                    f_learn = controller.screenshot() if is_adb else frame
-                    learn_target = botcore.detect_learn_button(f_learn) or (0.50, 0.8786)
-                    controller.tap(list(learn_target), rect)
+                    # Kiểm tra xem nút Learn đã sáng trắng (kích hoạt) chưa
+                    f_check = controller.screenshot() if is_adb else frame
+                    if not botcore.is_learn_button_active(f_check):
+                        # Nếu nút Learn chưa kích hoạt, bấm lại vào vòng tròn để chọn dứt khoát
+                        controller.tap(list(circles[best_c_idx]), rect)
+                        time.sleep(0.40)
+                        f_check = controller.screenshot() if is_adb else frame
+
+                    # Bấm nút "Learn" xác nhận (kiểm tra đến khi màn hình Attribute đóng)
+                    learn_target = botcore.detect_learn_button(f_check) or (0.50, 0.8786)
+                    for attempt in range(3):
+                        controller.tap(list(learn_target), rect)
+                        time.sleep(0.45)
+                        f_after = controller.screenshot() if is_adb else frame
+                        if not botcore.is_attribute_screen(f_after) and botcore.detect_learn_button(f_after) is None:
+                            break
+                        if attempt < 2:
+                            # Nếu vẫn chưa đóng, bấm lại vòng tròn và Learn
+                            controller.tap(list(circles[best_c_idx]), rect)
+                            time.sleep(0.35)
+                            controller.tap(list(learn_target), rect)
+                            time.sleep(0.45)
 
                     if best_c_parent:
                         active_skills.add(best_c_parent)
@@ -269,7 +290,7 @@ def run_cli_bot():
                         maxed_skills.add(best_c_parent)
                         print(f"🏆 [MAX LEVEL] Kỹ năng [{best_c_parent}] đã hoàn thành nhánh Cấp 7 (MAX)!")
                     print(f"🌀 [Thuộc tính Cấp 7] Đã học nhánh: [{best_c_label}] (Kỹ năng: {best_c_parent or 'Unknown'})")
-                    time.sleep(0.8)
+                    time.sleep(0.65)
                 continue
 
             # 8. MÀN HÌNH LÊN CẤP (Level Up)

@@ -2023,6 +2023,20 @@ def evaluate_selected_attribute(frame: np.ndarray) -> tuple[int, str, str]:
     return score, tag, parent_skill
 
 
+def is_learn_button_active(frame: np.ndarray) -> bool:
+    """Return True if the 'Learn' button on the 'Select Attribute' screen is active (bright white).
+    Returns False if unselected/dimmed gray.
+    """
+    h, w = frame.shape[:2]
+    y0, y1 = int(h * 0.85), int(h * 0.92)
+    x0, x1 = int(w * 0.38), int(w * 0.62)
+    roi = frame[y0:y1, x0:x1]
+    if roi.size == 0:
+        return False
+    gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    return bool(np.max(gray) >= 180 and np.sum(gray >= 160) >= 30)
+
+
 class CardChoice(tuple):
     """2-tuple (card_index, target_coords) with optional .label, .skill_key, .trait_key."""
     def __new__(cls, idx: int, target: tuple[float, float], label: str = "", skill_key: str = "", trait_key: str = ""):
