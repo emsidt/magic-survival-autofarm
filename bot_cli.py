@@ -495,28 +495,8 @@ def run_cli_bot():
                         time.sleep(0.5)
                 continue
 
-            # 12. Phát hiện quảng cáo (Video, Playable ad, AdMob) -> Bấm X hoặc Close tắt
-            ad_x = botcore.detect_close_button(frame)
-            if ad_x:
-                controller.release()
-                match_running = False
-                if now - last_auto_action_time >= 1.2:
-                    last_auto_action_time = now
-                    controller.tap(list(ad_x), rect)
-                    print(f"📺 [Quảng cáo] Đã tự động bấm nút 'X' tại {ad_x} đóng quảng cáo!")
-                    time.sleep(1.2)
-                continue
-            elif botcore.is_ad_screen(frame):
-                controller.release()
-                match_running = False
-                if now - last_auto_action_time >= 3.0:
-                    last_auto_action_time = now
-                    print("📺 [Quảng cáo] Đang trên màn hình quảng cáo -> Bấm ESC/Back bỏ qua quảng cáo...")
-                    controller.press_esc()
-                    time.sleep(1.0)
-                continue
-
-            # 13. GIAI ĐOẠN CHIẾN ĐẤU TÍCH CỰC (In Active Combat)
+            # 12. GIAI ĐOẠN CHIẾN ĐẤU TÍCH CỰC (In Active Combat)
+            # Khi nút Pause (||) xuất hiện trên thanh HUD -> Nhân vật đang sống và chiến đấu trực tiếp!
             pause_pos = botcore.detect_pause_button(frame)
             if pause_pos:
                 match_running = True
@@ -591,6 +571,40 @@ def run_cli_bot():
                 )
                 previous_direction = (dir_x, dir_y)
                 controller.move((dir_x, dir_y), rect, config)
+                continue
+
+            # 13. TỰ ĐỘNG TIẾP TỤC NẾU BỊ TẠM DỪNG (Pause Menu Auto-Resume)
+            resume_pos = botcore.detect_resume_button(frame)
+            if resume_pos:
+                controller.release()
+                match_running = True
+                if now - last_auto_action_time >= 1.0:
+                    last_auto_action_time = now
+                    print(f"▶️ [Tự phục hồi] Phát hiện menu Tạm dừng -> Bấm 'Resume' tại {resume_pos} để tiếp tục chơi!")
+                    controller.tap(list(resume_pos), rect)
+                    time.sleep(0.4)
+                continue
+
+            # 14. PHÁT HIỆN QUẢNG CÁO NGOÀI TRẬN ĐẤU (Video, Playable ad, AdMob) -> Bấm X hoặc Close tắt
+            ad_x = botcore.detect_close_button(frame)
+            if ad_x:
+                controller.release()
+                match_running = False
+                if now - last_auto_action_time >= 1.2:
+                    last_auto_action_time = now
+                    controller.tap(list(ad_x), rect)
+                    print(f"📺 [Quảng cáo] Đã tự động bấm nút 'X' tại {ad_x} đóng quảng cáo!")
+                    time.sleep(1.2)
+                continue
+            elif botcore.is_ad_screen(frame):
+                controller.release()
+                match_running = False
+                if now - last_auto_action_time >= 3.0:
+                    last_auto_action_time = now
+                    print("📺 [Quảng cáo] Đang trên màn hình quảng cáo -> Bấm ESC/Back bỏ qua quảng cáo...")
+                    controller.press_esc()
+                    time.sleep(1.0)
+                continue
 
     except KeyboardInterrupt:
         print("\n[!] Đã nhận lệnh dừng từ bàn phím. Đang giải phóng bộ điều khiển...")

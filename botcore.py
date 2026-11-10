@@ -737,7 +737,7 @@ def detect_pause_button(frame: np.ndarray, threshold: float = 0.70) -> Optional[
     best_val = 0.0
     best_loc = None
     best_dim = (0, 0)
-    for scale in (0.30, 0.35, 0.40, 0.45, 0.50, 0.60, 0.70, 0.80, 0.90, 1.0, 1.15, 1.30):
+    for scale in (0.35, 0.45, 0.55, 0.70, 0.85, 1.0, 1.15, 1.30, 1.45, 1.60, 1.80):
         stw, sth = int(tw_sz * scale), int(th_sz * scale)
         if stw >= roi.shape[1] or sth >= roi.shape[0] or stw < 5 or sth < 5:
             continue
@@ -749,7 +749,7 @@ def detect_pause_button(frame: np.ndarray, threshold: float = 0.70) -> Optional[
             best_loc = max_loc
             best_dim = (stw, sth)
     if best_val >= threshold and best_loc:
-        cx = int(w * 0.80) + best_loc[0] + best_dim[0] // 2
+        cx = x_start + best_loc[0] + best_dim[0] // 2
         cy = best_loc[1] + best_dim[1] // 2
         return (round(cx / w, 4), round(cy / h, 4))
     return None
@@ -795,6 +795,7 @@ def detect_close_button(frame: np.ndarray, threshold: float = 0.62) -> Optional[
 
     templates = []
     tmpl_x_path = _BASE_DIR / "assets" / "ad_close_x.png"
+    tmpl_x = None
     if tmpl_x_path.is_file():
         tmpl_x = cv2.imread(str(tmpl_x_path), cv2.IMREAD_GRAYSCALE)
         if tmpl_x is not None:
@@ -805,6 +806,7 @@ def detect_close_button(frame: np.ndarray, threshold: float = 0.62) -> Optional[
 
     # Circled X (white filled circle with black X - standard in Google AdMob, Candy Crush, AppLovin, Unity ads)
     tmpl_circ_path = _BASE_DIR / "assets" / "ad_close_circle_x.png"
+    tmpl_c = None
     if tmpl_circ_path.is_file():
         tmpl_c = cv2.imread(str(tmpl_circ_path), cv2.IMREAD_GRAYSCALE)
         if tmpl_c is not None:
@@ -814,7 +816,7 @@ def detect_close_button(frame: np.ndarray, threshold: float = 0.62) -> Optional[
                 templates.append(cv2.resize(tmpl_c, (sw, sh)))
 
     # Synthetic X crosses (crisp white cross on black)
-    for sz in (12, 16, 20, 26, 32):
+    for sz in (20, 26, 32, 40):
         t_w = np.zeros((sz, sz), dtype=np.uint8)
         th = max(2, sz // 7)
         cv2.line(t_w, (3, 3), (sz - 4, sz - 4), 255, th)
@@ -822,7 +824,7 @@ def detect_close_button(frame: np.ndarray, threshold: float = 0.62) -> Optional[
         templates.append(t_w)
 
     # Circled X (white circle and cross on black - standard in Google/Unity/AppLovin ads)
-    for sz in (18, 24, 30, 36):
+    for sz in (22, 28, 36, 44):
         t_circ = np.zeros((sz, sz), dtype=np.uint8)
         r = sz // 2 - 2
         cv2.circle(t_circ, (sz // 2, sz // 2), r, 255, 2)
@@ -831,8 +833,11 @@ def detect_close_button(frame: np.ndarray, threshold: float = 0.62) -> Optional[
         cv2.line(t_circ, (sz - pad, pad), (pad, sz - pad), 255, 2)
         templates.append(t_circ)
 
-    # Inverted templates (dark cross on light background for white-background ads)
-    templates.extend([cv2.bitwise_not(t) for t in list(templates)])
+    # Invert real templates for dark crosses on light background ads
+    if tmpl_x is not None:
+        templates.append(cv2.bitwise_not(tmpl_x))
+    if tmpl_c is not None:
+        templates.append(cv2.bitwise_not(tmpl_c))
 
     # Fast-Forward / Skip Arrow (>> or >)
     for h_sz in (16, 20, 24, 28):
@@ -952,6 +957,44 @@ def is_ad_screen(frame: np.ndarray) -> bool:
     except Exception:
         pass
     return False
+
+
+def detect_resume_button(frame: np.ndarray) -> Optional[tuple[float, float]]:
+    """Detect 'Resume' button when the game is paused, allowing automatic resumption."""
+    # When active gameplay is running with visible Pause button, we are NOT paused
+    if detect_pause_button(frame) is not None:
+        return None
+    if (detect_start_game(frame) is not None or 
+        detect_enter_area(frame) is not None or 
+        detect_selected(frame) is not None or 
+        detect_confirm_button(frame) is not None or
+        detect_die_button(frame) is not None):
+        return None
+    try:
+        import asyncio
+        import winocr
+        from PIL import Image
+
+        h, w = frame.shape[:2]
+        roi = frame[int(h * 0.20):int(h * 0.85), int(w * 0.15):int(w * 0.85)]
+        pil_img = Image.fromarray(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB))
+
+        async def _ocr_res():
+            return await winocr.recognize_pil(pil_img, lang="en")
+
+        res = asyncio.run(_ocr_res())
+        for line in res.lines:
+            text_low = line.text.strip().lower()
+            if "resume" in text_low or "continue" in text_low:
+                for word in line.words:
+                    if "resume" in word.text.lower() or "continue" in word.text.lower():
+                        r = word.bounding_rect
+                        cx = int(w * 0.15) + r.x + r.width / 2
+                        cy = int(h * 0.20) + r.y + r.height / 2
+                        return (round(cx / w, 4), round(cy / h, 4))
+    except Exception:
+        pass
+    return None
 
 
 def detect_confirm_button(frame: np.ndarray, min_confidence: float = 0.70) -> Optional[tuple[float, float]]:
