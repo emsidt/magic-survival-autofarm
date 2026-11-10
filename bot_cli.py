@@ -88,8 +88,11 @@ def run_cli_bot():
     last_die_time = 0.0
     last_confirm_time = 0.0
     last_shop_time = 0.0
-    last_chest_time = 0.0
+    last_chest_modal_time = 0.0
     last_chest_pos = None
+    last_chest_hunt_time = 0.0
+    last_chest_log_time = 0.0
+    last_logged_chest_pos = None
     last_learn_time = 0.0
     last_monolith_pos = None
     last_monolith_time = 0.0
@@ -366,8 +369,8 @@ def run_cli_bot():
             if obtain_pos or botcore.is_chest_screen(frame):
                 controller.release()
                 match_running = True
-                if now - last_chest_time >= 1.2:
-                    last_chest_time = now
+                if now - last_chest_modal_time >= 1.2:
+                    last_chest_modal_time = now
                     obtain_x, obtain_y = obtain_pos or (0.50, 0.812)
                     prefer_cc = config.get("prefer_crit_and_cooldown", True)
 
@@ -550,11 +553,19 @@ def run_cli_bot():
 
                 # Theo dõi Rương cổ vật / Chỉ dẫn rương liên tục kèm bù trừ vector di chuyển
                 if getattr(vision, "chest", None) is not None:
-                    last_chest_pos = vision.chest
-                    last_chest_time = now
+                    raw_c = vision.chest
+                    last_chest_pos = (int(raw_c[0]), int(raw_c[1]))
+                    last_chest_hunt_time = now
                     c_type = getattr(vision, "chest_type", "treasure_chest")
-                    print(f"📦 [Săn Rương] ƯU TIÊN CAO: Phát hiện {c_type} tại {vision.chest}! Đang dũng mãnh lao tới nhặt...")
-                elif last_chest_pos is not None and (now - last_chest_time <= 3.0):
+                    if (
+                        last_logged_chest_pos is None
+                        or math.hypot(last_chest_pos[0] - last_logged_chest_pos[0], last_chest_pos[1] - last_logged_chest_pos[1]) > 50
+                        or (now - last_chest_log_time >= 3.0)
+                    ):
+                        print(f"📦 [Săn Rương] ƯU TIÊN CAO: Phát hiện {c_type} tại {last_chest_pos}! Đang dũng mãnh lao tới nhặt...")
+                        last_logged_chest_pos = last_chest_pos
+                        last_chest_log_time = now
+                elif last_chest_pos is not None and (now - last_chest_hunt_time <= 3.0):
                     if previous_direction:
                         est_cx = int(round(last_chest_pos[0] - 12.0 * previous_direction[0]))
                         est_cy = int(round(last_chest_pos[1] - 12.0 * previous_direction[1]))

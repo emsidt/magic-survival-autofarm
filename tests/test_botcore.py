@@ -230,6 +230,31 @@ class VisionTests(unittest.TestCase):
         target = detect_chest(frame)
         self.assertIsNone(target, "Must never detect the player character as a chest")
 
+        # 2. Player character sprite on 1080p LDPlayer: candidate 52px away from player center (540, 960)
+        # Must be strictly excluded by min_player_dist (~86px on 1080p)
+        frame_1080 = np.full((1920, 1080, 3), 110, dtype=np.uint8)
+        t_icon = cv2.imread("assets/chest_icon.png")
+        if t_icon is not None:
+            ih, iw = t_icon.shape[:2]
+            # Place icon at (488, 954), exactly where the user reported the false detection
+            frame_1080[954 - ih // 2 : 954 - ih // 2 + ih, 488 - iw // 2 : 488 - iw // 2 + iw] = t_icon
+            res_near_player = detect_chest(frame_1080, player=(0.5, 0.5))
+            self.assertIsNone(res_near_player, "Must reject chest matches within player character radius (52px on 1080p)")
+
+        # 3. Indicator badges in battlefield center vs HUD perimeter:
+        # Off-screen indicator badges only exist along outer perimeter (x < 0.22, x > 0.78, y < 0.16, y > 0.84)
+        if t_icon is not None:
+            ih, iw = t_icon.shape[:2]
+            frame_center = np.full((1920, 1080, 3), 110, dtype=np.uint8)
+            frame_center[700:700+ih, 500:500+iw] = t_icon  # Center of battlefield
+            res_center = detect_chest(frame_center, player=(0.5, 0.5))
+            self.assertIsNone(res_center, "Indicator templates in center of playfield must be rejected")
+
+            frame_edge = np.full((1920, 1080, 3), 110, dtype=np.uint8)
+            frame_edge[960:960+ih, 980:980+iw] = t_icon  # Right HUD perimeter (x ~ 0.91 > 0.78)
+            res_edge = detect_chest(frame_edge, player=(0.5, 0.5))
+            self.assertIsNotNone(res_edge, "Indicator templates at screen perimeter must be detected")
+
     def test_multi_chest_priority_and_dark_zone(self):
         # 1. Black Box priority over Treasure Chest
         field = np.full((800, 500, 3), [70, 110, 110], dtype=np.uint8)

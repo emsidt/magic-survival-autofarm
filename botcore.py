@@ -45,22 +45,22 @@ class ChestTarget(tuple):
 
 
 CHEST_SPECS = [
-    ("black_box", "assets/chests/black_box.png", 36.0),
-    ("reliquary", "assets/chests/reliquary.png", 30.0),
-    ("treasure_chest", "assets/chests/treasure_chest.png", 24.0),
-    ("treasure_chest", "assets/chest_icon.png", 24.0),
-    ("treasure_chest", "assets/chest_indicator.png", 26.0),
+    ("black_box", "assets/chests/black_box.png", 36.0, False),
+    ("reliquary", "assets/chests/reliquary.png", 30.0, False),
+    ("treasure_chest", "assets/chests/treasure_chest.png", 24.0, False),
+    ("treasure_chest", "assets/chest_icon.png", 24.0, True),
+    ("treasure_chest", "assets/chest_indicator.png", 26.0, True),
 ]
 
-_CACHED_SMALL_CHEST_TEMPLATES: list[tuple[str, np.ndarray, float, int, int]] = []
+_CACHED_SMALL_CHEST_TEMPLATES: list[tuple[str, np.ndarray, float, int, int, bool]] = []
 
 
-def _get_fast_chest_templates() -> list[tuple[str, np.ndarray, float, int, int]]:
+def _get_fast_chest_templates() -> list[tuple[str, np.ndarray, float, int, int, bool]]:
     global _CACHED_SMALL_CHEST_TEMPLATES
     if _CACHED_SMALL_CHEST_TEMPLATES:
         return _CACHED_SMALL_CHEST_TEMPLATES
     res = []
-    for chest_type, rel_path, weight in CHEST_SPECS:
+    for chest_type, rel_path, weight, is_indicator in CHEST_SPECS:
         path = _BASE_DIR / rel_path
         if not path.is_file():
             continue
@@ -73,9 +73,9 @@ def _get_fast_chest_templates() -> list[tuple[str, np.ndarray, float, int, int]]
             tw = max(14, int(round(bw * scale)))
             th = max(12, int(round(bh * scale)))
             st = cv2.resize(base_tmpl, (tw, th))
-            res.append((chest_type, st, weight, tw, th))
+            res.append((chest_type, st, weight, tw, th, is_indicator))
             if "indicator" in rel_path:
-                res.append((chest_type, cv2.flip(st, 1), weight, tw, th))
+                res.append((chest_type, cv2.flip(st, 1), weight, tw, th, is_indicator))
     _CACHED_SMALL_CHEST_TEMPLATES = res
     return _CACHED_SMALL_CHEST_TEMPLATES
 
@@ -98,7 +98,9 @@ def _verify_chest_color(roi_bgr: np.ndarray, chest_type: str = "treasure_chest")
         dark_pixels = (V <= 50)
         if np.sum(bright_gold) / total_px > 0.35 and np.sum(dark_pixels) / total_px < 0.04:
             return False
-        return bool((np.sum(wood) / total_px >= 0.025) or (np.sum(badge) / total_px >= 0.08))
+        has_wood_chest = (np.sum(wood) / total_px >= 0.05) and (np.sum(dark_pixels) / total_px >= 0.03)
+        has_badge = (np.sum(badge) / total_px >= 0.08)
+        return bool(has_wood_chest or has_badge)
     elif chest_type == "reliquary":
         red = ((H <= 16) | (H >= 164)) & (S >= 45) & (V >= 45)
         stone = (S <= 65) & (V >= 115) & (V <= 235)
@@ -118,7 +120,7 @@ def _verify_chest_color(roi_bgr: np.ndarray, chest_type: str = "treasure_chest")
 
 def detect_chest(
     frame: np.ndarray,
-    min_confidence: float = 0.48,
+    min_confidence: float = 0.55,
     player: tuple[float, float] = (0.5, 0.5),
 ) -> Optional[ChestTarget]:
     """Fast, multi-scale artifact chest & off-screen HUD chest indicator detector
@@ -130,14 +132,14 @@ def detect_chest(
     templates = _get_fast_chest_templates()
     if isinstance(min_confidence, (tuple, list)):
         player = tuple(min_confidence)
-        min_confidence = 0.48
+        min_confidence = 0.55
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     fh, fw = gray.shape[:2]
     span = min(fw, fh)
     small = cv2.resize(gray, (fw // 2, fh // 2))
 
     px, py = int(fw * player[0]), int(fh * player[1])
-    min_player_dist = max(25, int(span * 0.048))
+    min_player_dist = max(55, int(span * 0.08))
     top_hud_y = int(fh * 0.075)
 
     candidates = []
@@ -145,17 +147,21 @@ def detect_chest(
 
     # Multi-scale template matching (handles on-field chests + left/right indicator badges)
     if templates:
-        for ctype, tmpl, weight, tw, th in templates:
+        for ctype, tmpl, weight, tw, th, is_indicator in templates:
             if tmpl.shape[0] >= small.shape[0] or tmpl.shape[1] >= small.shape[1]:
                 continue
             res = cv2.matchTemplate(small, tmpl, cv2.TM_CCOEFF_NORMED)
             locs = np.where(res >= min_confidence)
             for pt_y, pt_x in zip(*locs):
                 val = float(res[pt_y, pt_x])
-                cx = pt_x * 2 + tw
-                cy = pt_y * 2 + th
+                cx = int(pt_x * 2 + tw)
+                cy = int(pt_y * 2 + th)
                 if cy < top_hud_y or math.hypot(cx - px, cy - py) < min_player_dist:
                     continue
+                # Off-screen indicators ONLY exist along the HUD perimeter, NEVER in the middle of battle
+                if is_indicator:
+                    if (int(fw * 0.22) <= cx <= int(fw * 0.78)) and (int(fh * 0.16) <= cy <= int(fh * 0.84)):
+                        continue
                 if all(math.hypot(cx - ox, cy - oy) > 30 for ox, oy in all_positions):
                     roi = frame[max(0, cy - 25) : min(fh, cy + 25), max(0, cx - 25) : min(fw, cx + 25)]
                     if _verify_chest_color(roi, ctype):
@@ -542,7 +548,7 @@ def choose_direction(
             tdot = (tdx * direction[0] + tdy * direction[1]) / tdist
             if tdot > 0:
                 # Decisive, strong pull towards the target mana orb!
-                mana_score += (tbw * 4.5) * (tdot ** 1.1) * t_safety * safe_path
+                mana_score += (tbw * 5.5) * (tdot ** 1.05) * t_safety * safe_path
 
         if safe_path > 0:
             cluster_bonus = 0.0
@@ -556,8 +562,8 @@ def choose_direction(
                         gx_c = min(w - 1, max(0, gx))
                         if vision.distance[gy_c, gx_c] < 8.0:
                             continue  # Skip orbs inside lethal core
-                        cluster_bonus += (bw * 0.55) * (dot ** 1.2) / (0.15 + dist / (span * 0.50))
-            mana_score += min(60.0, cluster_bonus) * safe_path
+                        cluster_bonus += (bw * 0.65) * (dot ** 1.15) / (0.15 + dist / (span * 0.50))
+            mana_score += min(75.0, cluster_bonus) * safe_path
 
         # If a chest is nearby/on-screen, suppress mana orbs that pull away from the chest
         if vision.chest and chest_dist > 4:
