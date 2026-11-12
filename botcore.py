@@ -213,7 +213,7 @@ def detect_chest(
     return None
 
 
-def detect_monolith(frame: np.ndarray, min_confidence: float = 0.38) -> Optional[tuple[int, int]]:
+def detect_monolith(frame: np.ndarray, min_confidence: float = 0.48) -> Optional[tuple[int, int]]:
     """Detect the post-wave milestone stone monolith / obelisk with vertical crimson rune glyphs.
 
     In Magic Survival, when a boss wave is cleared, a monolith tower spawns on the map.
@@ -238,8 +238,8 @@ def detect_monolith(frame: np.ndarray, min_confidence: float = 0.38) -> Optional
     best_val = 0.0
     best_pos = None
 
-    # Dense scale range from 0.65 to 2.25 with step 0.06 (covers 540p up to 1440p)
-    scales = np.arange(0.65, 2.25, 0.06)
+    # Dense scale range from 0.70 to 2.25 with step 0.06 (covers 540p up to 1440p)
+    scales = np.arange(0.70, 2.25, 0.06)
     for scale in scales:
         sw, sh = max(14, int(tw * scale / 2)), max(16, int(th * scale / 2))
         if sw >= small.shape[1] or sh >= small.shape[0]:
@@ -250,14 +250,25 @@ def detect_monolith(frame: np.ndarray, min_confidence: float = 0.38) -> Optional
         if max_val > best_val and max_val >= min_confidence:
             mcx = int((max_loc[0] + sw / 2) * 2)
             mcy = int((max_loc[1] + sh / 2) * 2)
-            box_w = max(20, int(sw * 0.55))
-            box_h = max(25, int(sh * 0.55))
+            # Monolith tower is a physical ground obstacle:
+            # its center is NEVER in the top status bar or top-left avatar icon
+            if mcy < int(h * 0.12):
+                continue
+            if mcx < int(w * 0.18) and mcy < int(h * 0.18):
+                continue
+            box_w = max(24, int(sw * 0.65))
+            box_h = max(30, int(sh * 0.65))
             roi_H = H[max(0, mcy - box_h): min(h, mcy + box_h), max(0, mcx - box_w): min(w, mcx + box_w)]
             roi_S = S[max(0, mcy - box_h): min(h, mcy + box_h), max(0, mcx - box_w): min(w, mcx + box_w)]
             roi_V = V[max(0, mcy - box_h): min(h, mcy + box_h), max(0, mcx - box_w): min(w, mcx + box_w)]
+            # Distinctive vertical crimson rune glyph in center of monolith
             red_count = np.sum(((roi_H <= 14) | (roi_H >= 166)) & (roi_S >= 50) & (roi_V >= 50))
-            min_red = max(6, int(8 * scale))
-            if red_count >= min_red:
+            # Real monolith has a prominent vertical rune fissure (at least 28-35px red)
+            min_red = max(28, int(35 * scale))
+            # Verify stone body (moderate brightness, low saturation gray rock)
+            gray_stone = np.sum((roi_S <= 45) & (roi_V >= 40) & (roi_V <= 210))
+            min_stone = max(40, int(50 * scale))
+            if red_count >= min_red and gray_stone >= min_stone:
                 best_val = max_val
                 best_pos = (mcx, mcy)
 

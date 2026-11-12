@@ -878,6 +878,11 @@ class VisionTests(unittest.TestCase):
         blank = np.full((1000, 600, 3), 100, dtype=np.uint8)
         self.assertIsNone(detect_monolith(blank))
 
+        # False positive in top-left avatar/HUD zone (e.g. 91, 155) must be rejected
+        hud_frame = np.full((1000, 600, 3), 100, dtype=np.uint8)
+        cv2.circle(hud_frame, (91, 155), 25, (0, 0, 255), -1)
+        self.assertIsNone(detect_monolith(hud_frame))
+
         # 2. Uploaded image with post-wave milestone monolith:
         img_path = r"C:/Users/User/.gemini/antigravity/brain/2dc840cb-72eb-45f9-92e9-a3fe999f18b4/.user_uploaded/media_1794152395302_9c8311df.png"
         if os.path.isfile(img_path):
