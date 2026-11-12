@@ -153,6 +153,25 @@ class PickupMovementTests(unittest.TestCase):
         self.assertAlmostEqual(w_peak[0] ** 2 + w_peak[1] ** 2, 1.0, delta=0.01)
         self.assertNotEqual(w_peak[1], 0.0)
 
+    def test_boss_proactive_long_range_avoidance_even_with_forward_momentum(self):
+        """When an Elite/Boss is detected at long range, choose_direction must proactively steer away even if previously moving towards it."""
+        mask = np.zeros((1000, 1000), np.uint8)
+        dist = np.full((1000, 1000), 500.0, np.float32)
+        # Boss on the right at distance 260px (760, 500), player at center (500, 500)
+        v = Vision(mask, dist, [], True, 0.8, bosses=[(760, 500, 120)])
+        # Previous movement was directly right towards the boss (1.0, 0.0)
+        d = choose_direction(v, 0.0, previous=(1.0, 0.0), player=(0.5, 0.5))
+        self.assertLess(d[0], -0.3, f"Expected proactive retreat away from boss (dx < -0.3), got dx={d[0]}")
+
+    def test_chest_behind_boss_does_not_cause_kamikaze_charge(self):
+        """A chest positioned behind an Elite/Boss must not lure the player into charging through the boss."""
+        mask = np.zeros((1000, 1000), np.uint8)
+        dist = np.full((1000, 1000), 500.0, np.float32)
+        # Boss on the right at (700, 500), chest further right at (850, 500)
+        v = Vision(mask, dist, [], True, 0.8, chest=(850, 500), bosses=[(700, 500, 120)])
+        d = choose_direction(v, 0.0, previous=(1.0, 0.0), player=(0.5, 0.5), active_skills={"spirit", "electric_zone"})
+        self.assertLess(d[0], -0.1, f"Expected steering away from boss rather than charging into it for chest, got dx={d[0]}")
+
 
 if __name__ == "__main__":
     unittest.main()

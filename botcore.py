@@ -353,13 +353,14 @@ def detect_boss_monsters(frame: np.ndarray) -> list[tuple[int, int, int]]:
             stats[i, cv2.CC_STAT_WIDTH],
             stats[i, cv2.CC_STAT_HEIGHT],
         )
-        # Boss health bars are distinct horizontal lines (wide relative to height)
-        if bw >= max(35, int(span * 0.075)) and (bw / max(1, bh)) >= 4.0:
+        # Boss health bars are distinct horizontal lines (wide relative to height, thin height)
+        if bw >= max(35, int(span * 0.075)) and (bw / max(1, bh)) >= 4.5 and bh <= max(12, int(span * 0.025)):
             cx, cy = centroids[i]
             # In Magic Survival, the boss entity sits directly above its health bar.
-            boss_radius = int(max(bw * 0.95, span * 0.14))
+            # Elite/Boss monsters have massive hitboxes (much wider than their health bar).
+            boss_radius = int(max(bw * 1.15, span * 0.16))
             boss_cx = int(cx)
-            boss_cy = int(cy - boss_radius * 0.85)
+            boss_cy = int(cy - boss_radius * 0.80)
             boss_cx = max(0, min(w - 1, boss_cx))
             boss_cy = max(0, min(h - 1, boss_cy))
             bosses.append((boss_cx, boss_cy, boss_radius))
@@ -430,7 +431,7 @@ def inspect_game(frame: np.ndarray, player: tuple[float, float] = (0.5, 0.5)) ->
     # Elite/Boss monster detection ('quái to' with horizontal red health bar):
     bosses = detect_boss_monsters(frame) if gameplay else []
     for bcx, bcy, br in bosses:
-        cv2.circle(dark, (bcx, bcy), int(br * 1.20), 255, -1)
+        cv2.circle(dark, (bcx, bcy), int(br * 1.50), 255, -1)
     # Crucial: mask out the player's own dark character sprite at center so
     # distanceTransform measures distance to real enemies, not the player itself!
     # Clears both circular base and vertical humanoid/robe ellipse.
@@ -582,11 +583,11 @@ def _approach_pickup(
     direction = (dx / distance, dy / distance)
     # Boss & Elite avoidance: Never charge towards or near a giant boss!
     for bcx, bcy, br in getattr(vision, "bosses", []):
-        if math.hypot(target[0] - bcx, target[1] - bcy) < br * 1.30:
+        if math.hypot(target[0] - bcx, target[1] - bcy) < br * 2.2:
             return None
         t = max(0.0, min(1.0, ((bcx - px) * dx + (bcy - py) * dy) / (distance * distance)))
         proj_x, proj_y = px + t * dx, py + t * dy
-        if math.hypot(bcx - proj_x, bcy - proj_y) < br * 1.15:
+        if math.hypot(bcx - proj_x, bcy - proj_y) < br * 1.9:
             return None
     clearance = max(3.0, span * 0.012)
     # Dense path samples avoid stepping over thin enemies/walls between rays.
@@ -712,7 +713,7 @@ def choose_direction(
             d_px = float(vision.distance[gy_c, gx_c])
             if d_px < 6.0:
                 continue  # Skip orbs inside lethal enemy core
-            if any(math.hypot(gx - bcx, gy - bcy) < br * 1.30 for bcx, bcy, br in getattr(vision, "bosses", [])):
+            if any(math.hypot(gx - bcx, gy - bcy) < br * 2.0 for bcx, bcy, br in getattr(vision, "bosses", [])):
                 continue  # Skip orbs inside/near boss danger zone
             gem_safety = min(1.0, max(0.40, (d_px - 5.0) / 16.0))
             align = ((dx * previous[0] + dy * previous[1]) / dist) if previous else 0.0
@@ -733,7 +734,7 @@ def choose_direction(
             pickup_target = vision.chest
     elif pickup_target is None and best_orb is not None:
         pickup_target = (best_orb[0], best_orb[1])
-    boss_emergency = any(math.hypot(px - bcx, py - bcy) < br * 1.35 for bcx, bcy, br in getattr(vision, "bosses", []))
+    boss_emergency = any(math.hypot(px - bcx, py - bcy) < br * 2.2 for bcx, bcy, br in getattr(vision, "bosses", []))
     if not boss_emergency and pickup_target is not None and _hazard_path_clear(hazard, (px, py), pickup_target):
         approach = _approach_pickup(vision, pickup_target, (px, py), has_nearest_target_attack)
         if approach is not None:
@@ -821,6 +822,7 @@ def choose_direction(
             getattr(vision, "monolith", None)
             and monolith_dist < span * 0.65
             and monolith_dot > 0.15
+            and not boss_emergency
         )
 
         # Danger repulsion: clear collision avoidance with lethal boundary (< 10px) while staying brave
@@ -839,9 +841,11 @@ def choose_direction(
                 score -= 8.5 * (threat_align - 0.25)
 
         # Severe Boss / Elite Monster Avoidance ("Né quái to"):
+        # Actively repel from any giant monster from a wide, safe perimeter
         boss_penalty = 0.0
         boss_bonus = 0.0
         boss_blocks_mana = False
+        boss_blocks_chest = False
         for bcx, bcy, br in getattr(vision, "bosses", []):
             bdx, bdy = bcx - px, bcy - py
             bdist = math.hypot(bdx, bdy)
@@ -850,15 +854,25 @@ def choose_direction(
             b_dir_x, b_dir_y = bdx / bdist, bdy / bdist
             boss_dot = direction[0] * b_dir_x + direction[1] * b_dir_y
             b_clearance = bdist - br
-            danger_reach = span * 0.42
+            danger_reach = max(br * 2.6, span * 0.70)
             if b_clearance < danger_reach:
                 danger_intensity = max(0.0, (danger_reach - b_clearance) / danger_reach)
-                if boss_dot > -0.10:
+                if boss_dot > -0.25:
                     boss_blocks_mana = True
-                    boss_penalty += 300.0 * danger_intensity * (boss_dot + 0.10)
-                elif boss_dot < -0.30:
-                    boss_bonus += 50.0 * danger_intensity * (-boss_dot)
+                    boss_penalty += 1500.0 * (danger_intensity ** 1.2) * (boss_dot + 0.25)
+                    if danger_intensity > 0.30 and boss_dot > -0.05:
+                        boss_penalty += 1000.0
+                if boss_dot < -0.10:
+                    boss_bonus += 450.0 * danger_intensity * (-boss_dot)
+                # If chest lies in the general direction of this boss or boss is near, suppress chest approach
+                if vision.chest and chest_dist > 4:
+                    cdx, cdy = vision.chest[0] - px, vision.chest[1] - py
+                    dot_cb = (cdx * bdx + cdy * bdy) / (max(1.0, chest_dist) * bdist)
+                    if dot_cb > 0.20 or bdist < br * 2.0:
+                        boss_blocks_chest = True
         score = score - boss_penalty + boss_bonus
+        if boss_blocks_chest:
+            allow_chest_approach = False
 
         # Path factor for movement
         path_safe_factor = max(0.20, 1.0 - forward_danger * 1.20)
@@ -906,7 +920,7 @@ def choose_direction(
         score += mana_score
 
         # High priority for artifact chest / chest indicator:
-        if vision.chest and chest_dist > 4:
+        if vision.chest and chest_dist > 4 and not boss_blocks_chest:
             if chest_dot > -0.15:
                 base_weight = max(260.0 if allow_chest_approach else 160.0, getattr(vision, "chest_weight", 24.0) * (8.5 if allow_chest_approach else 6.5))
                 eff_dot = max(0.18, chest_dot) ** 0.50
@@ -920,7 +934,7 @@ def choose_direction(
                 score -= 60.0 * (1.0 - chest_dot)
 
         # High priority for wave-milestone monolith:
-        if getattr(vision, "monolith", None) and monolith_dist > 4:
+        if getattr(vision, "monolith", None) and monolith_dist > 4 and not boss_emergency:
             if monolith_dot > -0.20:
                 eff_m_dot = max(0.15, monolith_dot) ** 0.50
                 if is_charging_monolith:
@@ -942,10 +956,11 @@ def choose_direction(
         score += patrol_weight * path_safe_factor * (direction[0] * patrol[0] + direction[1] * patrol[1])
         if previous:
             align_prev = direction[0] * previous[0] + direction[1] * previous[1]
-            # Smooth forward momentum:
-            score += 1.4 * align_prev
-            # Anti-reversal penalty (only stops sharp 180-degree hard reversals):
-            if align_prev < -0.75:
+            # Smooth forward momentum (reduced when dodging boss so bot can turn on a dime):
+            prev_weight = 0.25 if boss_emergency else 1.4
+            score += prev_weight * align_prev
+            # Anti-reversal penalty (only when NOT dodging a boss; in boss emergency, immediate 180-degree retreat is desired!):
+            if not boss_emergency and align_prev < -0.75:
                 score -= 1.8 * (-0.75 - align_prev)
         if score > best_score:
             best_score = score
