@@ -8,5 +8,5 @@ echo     MAGIC SURVIVAL AUTOFARM - CHAY TRUC TIEP TERMINAL
 echo ===============================================================
 echo.
 call .\.venv\Scripts\activate.bat
-python bot_cli.py
+python bot_cli.py %*
 pause

@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import math
 from pathlib import Path
+import sys
 import time
 
 
@@ -37,12 +38,74 @@ def run_cli_bot():
         except Exception:
             pass
 
-    control_mode = config.get("control_mode", "adb")
-    adb_path = config.get("adb_path", r"D:\LDPlayer\LDPlayer9\adb.exe")
+    # 1. Nhận diện chế độ qua tham số dòng lệnh (CLI args)
+    # Hỗ trợ: python bot_cli.py 1, python bot_cli.py ld, python bot_cli.py 2, python bot_cli.py google
+    selected_mode = None
+    args = [a.lower().strip() for a in sys.argv[1:]]
+    for arg in args:
+        if arg in ("1", "ld", "ldplayer", "--ld", "--ldplayer", "-ld"):
+            selected_mode = "adb"
+            break
+        elif arg in ("2", "google", "gplay", "googleplay", "pc", "windows", "desktop", "--google", "--gplay", "--pc"):
+            selected_mode = "desktop"
+            break
 
+    current_mode = config.get("control_mode", "desktop")
+    default_choice = "1" if current_mode == "adb" else "2"
+
+    # 2. Nếu không có tham số dòng lệnh, mở menu chọn tương tác trong terminal
+    if selected_mode is None:
+        is_interactive = False
+        try:
+            is_interactive = bool(sys.stdin and hasattr(sys.stdin, "isatty") and sys.stdin.isatty())
+        except Exception:
+            is_interactive = False
+
+        if is_interactive:
+            print("\n" + "=" * 60)
+            print("  CHỌN NỀN TẢNG ĐIỀU KHIỂN:")
+            print("=" * 60)
+            tag_1 = " [Đang lưu mặc định]" if default_choice == "1" else ""
+            tag_2 = " [Đang lưu mặc định]" if default_choice == "2" else ""
+            print(f"  [1] 📱 LDPlayer (Chạy ngầm qua ADB, không chiếm chuột/phím){tag_1}")
+            print(f"  [2] 🖥️ Google Play Games PC (Chạy cửa sổ Windows, phím WASD){tag_2}")
+            print("=" * 60)
+            try:
+                user_input = input(f"👉 Chọn nền tảng [1 hoặc 2] (Bấm Enter để dùng [{default_choice}]): ").strip().lower()
+                if user_input in ("1", "ld", "ldplayer"):
+                    selected_mode = "adb"
+                elif user_input in ("2", "google", "gplay", "pc", "windows", "desktop"):
+                    selected_mode = "desktop"
+                elif user_input == "":
+                    selected_mode = "adb" if default_choice == "1" else "desktop"
+                else:
+                    print(f"[*] Lựa chọn không hợp lệ; dùng mặc định: {'LDPlayer' if default_choice == '1' else 'Google Play Games PC'}")
+                    selected_mode = "adb" if default_choice == "1" else "desktop"
+            except (EOFError, KeyboardInterrupt):
+                print("\n[!] Đã hủy thao tác.")
+                return
+        else:
+            selected_mode = current_mode
+
+    control_mode = selected_mode
+    config["control_mode"] = control_mode
+    if control_mode == "desktop":
+        config["input_mode"] = "keyboard"
+    else:
+        config["input_mode"] = "touch"
+
+    # Tự động lưu cấu hình lựa chọn để lần sau Enter là xong
+    try:
+        if hasattr(CONFIG_PATH, "write_text"):
+            CONFIG_PATH.write_text(json.dumps(config, indent=2, ensure_ascii=False), encoding="utf-8")
+    except Exception:
+        pass
+
+    adb_path = config.get("adb_path", r"D:\LDPlayer\LDPlayer9\adb.exe")
     controller = None
+
     if control_mode == "adb":
-        print(f"[*] Chế độ điều khiển: ADB NGẦM (LDPlayer)")
+        print(f"\n[*] Chế độ điều khiển: ADB NGẦM (LDPlayer)")
         print(f"[*] Đường dẫn adb: {adb_path}")
         try:
             from adb_controller import ADBController
@@ -58,7 +121,7 @@ def run_cli_bot():
             print(f"[!] Không khởi tạo được ADB: {e}")
             return
     else:
-        print("[*] Chế độ điều khiển: DirectInput (Google Play Games / Windows)")
+        print("\n[*] Chế độ điều khiển: DirectInput (Google Play Games PC / Windows)")
         import main
         controller = main.Controller()
         h_init = main.locate_game(config.get("window_title", "Magic Survival"))

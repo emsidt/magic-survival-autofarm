@@ -1,8 +1,8 @@
 {
   "window_title": "Magic Survival",
-  "control_mode": "desktop",
+  "control_mode": "adb",
   "adb_path": "D:\\LDPlayer\\LDPlayer9\\adb.exe",
-  "input_mode": "keyboard",
+  "input_mode": "touch",
   "crop_left_px": 0,
   "crop_top_px": 0,
   "crop_right_px": 0,
@@ -32,7 +32,9 @@
       "max_player_level": 10
     }
   },
-  "nearest_target_skills": ["telekinetic_sword"],
+  "nearest_target_skills": [
+    "telekinetic_sword"
+  ],
   "skill_priority": [
     "telekinetic_sword",
     "spirit",
