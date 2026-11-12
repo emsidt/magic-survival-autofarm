@@ -328,6 +328,7 @@ def format_match_summary(
     report: Optional[dict[str, Any]] = None,
     character: str = "",
     gold: int = 0,
+    gems: int = 0,
     kills: int = 0,
     game_map: str = "",
 ) -> tuple[str, str]:
@@ -395,6 +396,9 @@ def format_match_summary(
         else:
             lines.append(f"🗺️  Bản đồ: {game_map.title()}")
     lines.append(f"⏱️  Thời gian sống: {survival_detail} {diff_str}".strip())
+    lines.append(f"💰  Phần thưởng trận: +{gold:,} Vàng | 💎 +{gems:,} Gem")
+    if kills > 0:
+        lines.append(f"⚔️  Số quái hạ gục: {kills:,}")
     if is_dict_report and report and "reward" in report:
         lines.append(f"🎯  Điểm cộng/trừ AI: {reward_str} điểm (Ván #{n_runs} | Mốc TB mới: {n_m:02d}:{n_s:02d})")
     elif survival_seconds > 0:
@@ -406,12 +410,10 @@ def format_match_summary(
     if skill_delta_lines:
         lines.append("📊  Điểm cộng/trừ từng kỹ năng:")
         lines.extend(skill_delta_lines)
-    if gold > 0 or kills > 0:
-        lines.append(f"💰  Phần thưởng: {gold:,} Vàng | {kills:,} Quái hạ gục")
     lines.append("=" * 65)
 
     summary_block = "\n".join(lines)
-    status_line = f"🏁 [Kết quả ván] ⏱️ {survival_str} | Điểm AI: {reward_str} | Skill: {skills_summary}"
+    status_line = f"🏁 [Kết quả ván] ⏱️ {survival_str} | Điểm AI: {reward_str} | 💰 +{gold:,} Vàng | 💎 +{gems:,} Gem | Skill: {skills_summary}"
     return summary_block, status_line
 
 
@@ -426,6 +428,7 @@ def finish_match(
     character: str = "",
     combos: Optional[list[str]] = None,
     gold: int = 0,
+    gems: int = 0,
     kills: int = 0,
     game_map: str = "",
 ):
@@ -453,6 +456,7 @@ def finish_match(
             report=None,
             character=character,
             gold=gold,
+            gems=gems,
             kills=kills,
             game_map=game_map,
         )
@@ -481,6 +485,7 @@ def finish_match(
         report=report,
         character=character,
         gold=gold,
+        gems=gems,
         kills=kills,
         game_map=game_map,
     )
@@ -490,5 +495,8 @@ def finish_match(
         report["status_line"] = status_line
         report["skills"] = list(active_set)
         report["skill_levels"] = levels
+        report["gold"] = gold
+        report["gems"] = gems
+        report["kills"] = kills
 
     return report

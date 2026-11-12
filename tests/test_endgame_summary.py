@@ -114,6 +114,25 @@ class TestEndgameSummary(unittest.TestCase):
             self.assertEqual(cur_small["gold"], 9684)
             self.assertEqual(cur_small["gems"], 156)
 
+    def test_format_match_summary_with_gold_and_gems(self):
+        summary_block, status_line = format_match_summary(
+            survival_seconds=300.0,
+            active_skills={"spirit"},
+            skill_levels={"spirit": 1},
+            gold=4110,
+            gems=24,
+            kills=12655,
+        )
+        self.assertIn("+4,110 Vàng", summary_block)
+        self.assertIn("+24 Gem", summary_block)
+        self.assertIn("12,655", summary_block)
+        self.assertIn("+4,110 Vàng", status_line)
+        self.assertIn("+24 Gem", status_line)
+
+    def test_detect_results_stats_none_and_empty(self):
+        self.assertEqual(botcore.detect_results_stats(None), {"kills": 0, "gold": 0, "gems": 0})
+        self.assertEqual(botcore.detect_results_stats(np.zeros((10, 10, 3), np.uint8)), {"kills": 0, "gold": 0, "gems": 0})
+
 
 if __name__ == "__main__":
     unittest.main()

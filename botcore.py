@@ -1574,6 +1574,76 @@ def detect_results_survival_time(frame: np.ndarray) -> Optional[tuple[int, int, 
     return None
 
 
+def detect_results_stats(frame: np.ndarray) -> dict[str, int]:
+    """Detect kills, gold, and gems on the 'Experiment Failed' / Results screen.
+    Returns {'kills': int, 'gold': int, 'gems': int}.
+    """
+    if frame is None or frame.size == 0:
+        return {"kills": 0, "gold": 0, "gems": 0}
+    h, w = frame.shape[:2]
+    # In Magic Survival 'Experiment Failed' screen:
+    # Kills is at y: 40%..55%
+    # Gold and Gems rewards are at y: 56%..76% (Gold on left: x < 48%, Gems on right: x >= 48%)
+    y0, y1 = int(h * 0.40), int(h * 0.76)
+    roi = frame[y0:y1, :]
+    if roi.size == 0:
+        return {"kills": 0, "gold": 0, "gems": 0}
+
+    def _clean_digits(txt: str) -> Optional[int]:
+        # Handle stylized numbers in Magic Survival font (O/o -> 0, l/t/I/i -> 1)
+        t = txt.replace("O", "0").replace("o", "0").replace("l", "1").replace("t", "1").replace("I", "1").replace("i", "1")
+        d = re.sub(r"[^\d]", "", t)
+        return int(d) if d else None
+
+    try:
+        import asyncio
+        import winocr
+        from PIL import Image
+
+        async def _ocr(p_img):
+            return await winocr.recognize_pil(p_img, lang="en")
+
+        pil_img = Image.fromarray(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB))
+        res = asyncio.run(_ocr(pil_img))
+        kills, gold, gems = 0, 0, 0
+        for l in res.lines:
+            for wrd in l.words:
+                y_pct = (y0 + wrd.bounding_rect.y) / h
+                x_pct = wrd.bounding_rect.x / w
+                val = _clean_digits(wrd.text)
+                if val is not None:
+                    if 0.41 <= y_pct <= 0.54 and kills == 0:
+                        kills = val
+                    elif 0.56 <= y_pct <= 0.74:
+                        if x_pct < 0.48 and gold == 0:
+                            gold = val
+                        elif x_pct >= 0.48 and gems == 0:
+                            gems = val
+
+        if gold == 0:
+            gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+            norm = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
+            pil_norm = Image.fromarray(norm)
+            res_norm = asyncio.run(_ocr(pil_norm))
+            for l in res_norm.lines:
+                for wrd in l.words:
+                    y_pct = (y0 + wrd.bounding_rect.y) / h
+                    x_pct = wrd.bounding_rect.x / w
+                    val = _clean_digits(wrd.text)
+                    if val is not None:
+                        if 0.41 <= y_pct <= 0.54 and kills == 0:
+                            kills = val
+                        elif 0.56 <= y_pct <= 0.74:
+                            if x_pct < 0.48 and gold == 0:
+                                gold = val
+                            elif x_pct >= 0.48 and gems == 0:
+                                gems = val
+        return {"kills": kills, "gold": gold, "gems": gems}
+    except Exception:
+        pass
+    return {"kills": 0, "gold": 0, "gems": 0}
+
+
 def detect_confirm_button(frame: np.ndarray, min_confidence: float = 0.70) -> Optional[tuple[float, float]]:
     """Detect 'Confirm' button at the bottom of the 'Experiment Failed' / Results screen."""
     # During active gameplay/combat, the Pause button is present -> player is ALIVE, not on results screen

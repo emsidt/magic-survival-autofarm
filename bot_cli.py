@@ -125,6 +125,8 @@ def run_cli_bot():
     last_rule_click = {}
     last_boss_alert_time = 0.0
     last_focus_warning = 0.0
+    last_lobby_gold: Optional[int] = None
+    last_lobby_gems: Optional[int] = None
 
     try:
         while True:
@@ -271,17 +273,24 @@ def run_cli_bot():
                                 time_mult = 1.24 if str(config.get("game_map", "depth")).lower().strip() == "depth" else 1.0
                                 if last_known_game_timer_sec <= 0.0 and match_start_time > 0.0:
                                     last_known_game_timer_sec = max(0.0, (now - match_start_time) * time_mult)
+                                stats = botcore.detect_results_stats(frame)
                                 rep = finish_match(
                                     recorder, learner, frame, last_known_game_timer_sec,
                                     active_skills, config.get("skill_priority", []),
                                     skill_levels=skill_levels,
                                     character=config.get("character", "summoner"),
                                     game_map=config.get("game_map", "depth"),
+                                    gold=stats.get("gold", 0),
+                                    gems=stats.get("gems", 0),
+                                    kills=stats.get("kills", 0),
                                 )
                                 if rep and isinstance(rep, dict) and "summary_text" in rep:
                                     print(rep["summary_text"])
                                 else:
-                                    print("[AI] Đã ghi kết quả ván." if rep else "[AI] Không đọc được đồng hồ game; bỏ qua học từ ván này.")
+                                    g_val = stats.get("gold", 0)
+                                    gm_val = stats.get("gems", 0)
+                                    k_val = stats.get("kills", 0)
+                                    print(f"💰 [Phần thưởng ván] +{g_val:,} Vàng | 💎 +{gm_val:,} Gem | ⚔️ {k_val:,} Quái")
                             match_start_time = 0.0
                             active_skills.clear()
                             skill_levels.clear()
@@ -325,6 +334,13 @@ def run_cli_bot():
                                 g_s = f"{gold:,} Vàng" if gold is not None else "---"
                                 gem_s = f"{gems:,} Gem" if gems is not None else "---"
                                 cur_info = f" [💰 {g_s} | 💎 {gem_s}]"
+                                if last_lobby_gold is not None and gold is not None and gold >= last_lobby_gold:
+                                    diff_g = gold - last_lobby_gold
+                                    diff_gm = (gems - last_lobby_gems) if (gems is not None and last_lobby_gems is not None and gems >= last_lobby_gems) else 0
+                                    if diff_g > 0 or diff_gm > 0:
+                                        print(f"🎉 [Tổng kết sau trận] Vừa cộng: +{diff_g:,} Vàng | 💎 +{diff_gm:,} Gem (Tổng: {g_s} | {gem_s})")
+                                last_lobby_gold = gold
+                                last_lobby_gems = gems
                             if now - last_auto_action_time >= 1.5:
                                 last_auto_action_time = now
                                 controller.tap(list(sg_pos), rect)

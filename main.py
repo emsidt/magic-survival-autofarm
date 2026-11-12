@@ -910,11 +910,16 @@ class FarmApp:
                                             last_known_game_timer_sec = max(last_known_game_timer_sec, float(t_fin[2]))
                                         if last_known_game_timer_sec <= 0.0 and match_start_time > 0.0:
                                             last_known_game_timer_sec = max(0.0, start_tick - match_start_time)
+                                        stats = botcore.detect_results_stats(frame)
                                         report = finish_match(
                                             self.recorder, self.learner, frame, last_known_game_timer_sec,
                                             active_skills, self.config.get("skill_priority", []),
                                             skill_levels=skill_levels,
                                             character=self.config.get("character", "summoner"),
+                                            game_map=self.config.get("game_map", "depth"),
+                                            gold=stats.get("gold", 0),
+                                            gems=stats.get("gems", 0),
+                                            kills=stats.get("kills", 0),
                                         )
                                         if report and isinstance(report, dict) and "summary_text" in report:
                                             print(report["summary_text"])
