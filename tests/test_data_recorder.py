@@ -1,6 +1,7 @@
 import shutil
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 import numpy as np
 
@@ -48,6 +49,40 @@ class TestDataRecorder(unittest.TestCase):
         self.assertEqual(recorder.start_new_run(), "")
         dummy_frame = np.zeros((50, 50, 3), dtype=np.uint8)
         self.assertIsNone(recorder.record_decision(dummy_frame, "level_up", "card_1"))
+
+    def test_fast_restarts_do_not_overwrite_previous_run(self):
+        recorder = DataRecorder()
+        first = recorder.start_new_run()
+        recorder.record_decision(np.zeros((10, 10, 3), np.uint8), "level_up", "card_1")
+        second = recorder.start_new_run()
+        self.assertNotEqual(first, second)
+        self.assertTrue((self.test_dir / first / "step_0001_level_up.png").is_file())
+
+    def test_image_failure_does_not_log_nonexistent_image(self):
+        recorder = DataRecorder()
+        recorder.start_new_run()
+        with patch("data_recorder.cv2.imwrite", return_value=False), self.assertLogs(level="ERROR"):
+            self.assertIsNone(recorder.record_decision(np.zeros((10, 10, 3), np.uint8), "level_up", "card_1"))
+        self.assertFalse((recorder.current_run_dir / "decisions.jsonl").exists())
+        self.assertEqual(recorder.step_index, 0)
+
+    def test_pruning_only_removes_completed_owned_runs(self):
+        foreign = self.test_dir / "human_demo"
+        foreign.mkdir()
+        incomplete = self.test_dir / "run_in_progress"
+        incomplete.mkdir()
+        recorder = DataRecorder(max_runs=1)
+        completed = recorder.start_new_run()
+        recorder.finish_run()
+        current = recorder.start_new_run()
+        self.assertFalse((self.test_dir / completed).exists())
+        self.assertTrue((self.test_dir / current).exists())
+        self.assertTrue(foreign.exists())
+        self.assertTrue(incomplete.exists())
+
+    def test_invalid_retention_is_rejected(self):
+        with self.assertRaises(ValueError):
+            DataRecorder(max_runs=0)
 
 
 if __name__ == "__main__":

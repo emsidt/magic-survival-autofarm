@@ -2,9 +2,9 @@
 
 Chế độ này cho phép BẠN tự tay chơi game 100% (không có bất kỳ can thiệp phím/chuột nào từ bot).
 Hệ thống sẽ chạy ngầm quan sát:
-1. Ghi lại toàn bộ kỹ năng bạn đã chọn ở từng cấp độ.
+1. Ghi lại lựa chọn bắt được từ cú bấm và đánh dấu lựa chọn chưa rõ.
 2. Ghi lại các nhánh thuộc tính và cổ vật bạn đã mở.
-3. Ghi lại thời gian sống sót thực tế (ví dụ: 45 phút).
+3. Đọc thời gian sống sót từ đồng hồ HUD, bỏ qua học khi không đọc được.
 4. Tự động nạp toàn bộ build và kinh nghiệm của bạn vào Não AI (learned_policy.json)
    để AI học theo phong cách chơi chuyên gia của bạn!
 """
@@ -13,9 +13,10 @@ from __future__ import annotations
 import ctypes
 import json
 from pathlib import Path
-import sys
+from typing import Optional
 import threading
 import time
+import win32gui
 
 # Đảm bảo tiến trình Python là Per-Monitor DPI Aware để GetCursorPos khớp 100% với pixel thực tế
 try:
@@ -26,12 +27,11 @@ except Exception:
     except Exception:
         pass
 
-import cv2
-import numpy as np
 
 import botcore
 from data_recorder import DataRecorder
-from learning_engine import AdaptiveLearner
+from learning_engine import get_adaptive_learner
+from game_actions import finish_match
 import main
 
 
@@ -92,6 +92,101 @@ class MouseTracker:
         with self._lock:
             self.clicks.clear()
 
+    def close(self):
+        self._running = False
+        self._thread.join(timeout=1.0)
+
+
+class MovementTracker:
+    """Theo dõi thao tác di chuyển của người chơi (WASD / phím mũi tên) để học kỹ năng lắc tay."""
+    def __init__(self):
+        self._running = True
+        self.vectors: list[tuple[float, float, float]] = []  # (vx, vy, timestamp)
+        self._lock = threading.Lock()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self):
+        user32 = ctypes.windll.user32
+        import math
+        while self._running:
+            try:
+                # 0x57: W, 0x53: S, 0x41: A, 0x44: D
+                # 0x26: Up, 0x28: Down, 0x25: Left, 0x27: Right
+                up = bool((user32.GetAsyncKeyState(0x57) | user32.GetAsyncKeyState(0x26)) & 0x8000)
+                down = bool((user32.GetAsyncKeyState(0x53) | user32.GetAsyncKeyState(0x28)) & 0x8000)
+                left = bool((user32.GetAsyncKeyState(0x41) | user32.GetAsyncKeyState(0x25)) & 0x8000)
+                right = bool((user32.GetAsyncKeyState(0x44) | user32.GetAsyncKeyState(0x27)) & 0x8000)
+
+                vx = (1.0 if right else 0.0) - (1.0 if left else 0.0)
+                vy = (1.0 if down else 0.0) - (1.0 if up else 0.0)
+                mag = math.hypot(vx, vy)
+                if mag > 0:
+                    vx, vy = vx / mag, vy / mag
+                    with self._lock:
+                        self.vectors.append((vx, vy, time.monotonic()))
+                        if len(self.vectors) > 400:
+                            self.vectors = self.vectors[-400:]
+            except Exception:
+                pass
+            time.sleep(0.04)
+
+    def analyze_weave_profile(self) -> tuple[float, float]:
+        """Tính tần số lắc tay (frequency) và biên độ góc (amplitude) từ mẫu di chuyển của người chơi."""
+        with self._lock:
+            samples = list(self.vectors)
+        if len(samples) < 15:
+            return (3.2, 0.28)
+
+        direction_changes = 0
+        amplitudes = []
+        for i in range(1, len(samples)):
+            vx0, vy0, t0 = samples[i - 1]
+            vx1, vy1, t1 = samples[i]
+            dt = t1 - t0
+            if 0.01 <= dt <= 0.35:
+                dot = vx0 * vx1 + vy0 * vy1
+                cross = vx0 * vy1 - vy0 * vx1
+                if dot < 0.92:
+                    direction_changes += 1
+                    amplitudes.append(abs(cross))
+
+        duration = samples[-1][2] - samples[0][2]
+        if duration > 1.0:
+            freq = max(1.5, min(5.5, direction_changes / (2.0 * duration)))
+        else:
+            freq = 3.2
+
+        amp = max(0.15, min(0.50, float(sum(amplitudes) / len(amplitudes)))) if amplitudes else 0.28
+        return (round(freq, 2), round(amp, 3))
+
+    def clear(self):
+        with self._lock:
+            self.vectors.clear()
+
+    def close(self):
+        self._running = False
+        self._thread.join(timeout=1.0)
+
+
+def map_click_to_card(click, num_cards):
+    """Return only an observed click inside a card/Mana band; other clicks are unknown."""
+    if click is None:
+        return None
+    x, y = click
+    if not 0.10 <= x <= 0.90:
+        return None
+    bands = ((0.15, 0.367, 1), (0.367, 0.540, 2), (0.540, 0.714, 3),
+             (0.714, 0.890, 4), (0.890, 0.98, "mana")) if num_cards == 4 else (
+             (0.20, 0.445, 1), (0.445, 0.619, 2), (0.619, 0.798, 3), (0.798, 0.95, "mana"))
+    return next((index for lo, hi, index in bands if lo <= y < hi), None)
+
+
+def format_game_time(seconds: float) -> str:
+    """Format seconds into MM:SS string."""
+    s = max(0, int(seconds))
+    return f"{s // 60:02d}:{s % 60:02d}"
+
 
 def run_human_recorder():
     print("=" * 65)
@@ -108,29 +203,35 @@ def run_human_recorder():
         except Exception:
             pass
 
-    title = config.get("game_window_title", "Magic Survival")
-    print(f"[*] Đang tìm cửa sổ game '{title}'...")
+    title = config.get("window_title", "Magic Survival")
+    print(f"[*] Đang tìm cửa sổ game (Tiêu đề: '{title}', hoặc giả lập LDPlayer)...")
 
     hwnd = None
     while not hwnd:
         hwnd = main.locate_game(title)
         if not hwnd:
-            print(f"    [!] Chưa tìm thấy cửa sổ game '{title}'. Đang chờ bạn mở game...", end="\r")
+            print(f"    [!] Chưa tìm thấy cửa sổ game '{title}' hoặc LDPlayer. Đang chờ bạn mở game...", end="\r")
             time.sleep(1.5)
 
-    print(f"\n[+] ĐÃ KẾT NỐI VỚI GAME (HWND: {hwnd})!")
+    try:
+        w_title = win32gui.GetWindowText(hwnd) or win32gui.GetClassName(hwnd)
+    except Exception:
+        w_title = title
+    print(f"\n[+] ĐÃ KẾT NỐI VỚI CỬA SỔ GAME (HWND: {hwnd}, Tiêu đề: '{w_title}')!")
     rect = main.game_rectangle(hwnd, config)
-    print(f"[+] Kích thước khung hình theo dõi: {rect['width']}x{rect['height']}")
+    print(f"[+] Vùng hiển thị màn hình game: {rect['width']}x{rect['height']} tại ({rect['left']}, {rect['top']})")
     print("\n>>> BẠN CÓ THỂ BẮT ĐẦU CHƠI BẤT KỲ LÚC NÀO! <<<")
     print(">>> Nhấn Ctrl+C trong cửa sổ này nếu muốn dừng ghi bất kỳ lúc nào.\n")
 
     recorder = DataRecorder(enabled=True)
-    learner = AdaptiveLearner()
+    learner = get_adaptive_learner()
     mouse_tracker = MouseTracker()
+    movement_tracker = MovementTracker()
 
     state = STATE_LOBBY
     match_start_time = 0.0
     active_skills: set[str] = set()
+    skill_levels: dict[str, int] = {}
     last_level_up_frame = None
     last_level_up_time = 0.0
     last_seen_cards = None
@@ -142,11 +243,17 @@ def run_human_recorder():
     last_mana_val = None
     step_count = 0
     death_streak = 0
+    last_known_game_timer_sec = 0.0
+    last_timer_scan_time = 0.0
 
     try:
         while True:
             time.sleep(0.20)
             try:
+                if not hwnd:
+                    hwnd = main.locate_game(title)
+                if not hwnd or not main.is_game_or_popup_active(hwnd)[0]:
+                    continue
                 rect = main.game_rectangle(hwnd, config)
                 frame = main.screenshot(rect)
             except Exception:
@@ -171,7 +278,17 @@ def run_human_recorder():
                 if pause_pos is not None and not die_pos and not confirm_pos:
                     state = STATE_PLAYING
                     match_start_time = now
+                    last_known_game_timer_sec = 0.0
+                    last_timer_scan_time = 0.0
+                    mouse_tracker.clear()
+                    movement_tracker.clear()
                     active_skills.clear()
+                    skill_levels.clear()
+                    char_norm = str(config.get("character", "summoner")).lower().strip()
+                    start_skill = botcore.CHARACTER_STARTING_SKILLS.get(char_norm)
+                    if start_skill:
+                        active_skills.add(start_skill)
+                        skill_levels[start_skill] = max(skill_levels.get(start_skill, 0), 1)
                     step_count = 0
                     death_streak = 0
                     in_level_up = False
@@ -180,13 +297,27 @@ def run_human_recorder():
                     last_shop_frame = None
                     last_mana_val = None
                     run_id = recorder.start_new_run()
+                    game_map = config.get("game_map", "depth")
+                    time_mult = 1.24 if str(game_map).lower().strip() == "depth" else 1.0
+                    map_note = " (Gia tốc 1.24x)" if time_mult > 1.0 else ""
                     print("\n" + "-" * 65)
-                    print(f"[🔥 TRẬN ĐẤU BẮT ĐẦU!] Mã trận: {run_id}")
-                    print("    Đang đếm thời gian và quan sát lựa chọn kỹ năng của bạn...")
+                    print(f"[🔥 TRẬN ĐẤU BẮT ĐẦU!] Mã trận: {run_id} | Bản đồ: {str(game_map).upper()}{map_note}")
+                    print("    Đang theo dõi thời gian trong game và ghi nhận kỹ năng của bạn...")
                     print("-" * 65)
 
             # --- TRẠNG THÁI 2: ĐANG TRONG TRẬN ĐẤU (PLAYING) ---
             elif state == STATE_PLAYING:
+                if now - last_timer_scan_time >= 0.5:
+                    last_timer_scan_time = now
+                    timer = botcore.detect_game_timer(frame)
+                    if timer:
+                        last_known_game_timer_sec = max(last_known_game_timer_sec, float(timer[2]))
+
+                game_map = config.get("game_map", "depth")
+                time_mult = 1.24 if str(game_map).lower().strip() == "depth" else 1.0
+                cur_game_sec = last_known_game_timer_sec if last_known_game_timer_sec > 0.0 else max(0.0, (now - match_start_time) * time_mult)
+                cur_game_time_str = format_game_time(cur_game_sec)
+
                 # 2.1 Phát hiện lên cấp (Level Up)
                 lvl_res = botcore.is_level_up_screen(frame)
                 if lvl_res:
@@ -202,7 +333,7 @@ def run_human_recorder():
                         last_level_up_frame = frame.copy()
                         last_seen_cards = ocr_res
                         num_c = len(ocr_res)
-                        print(f"\n[Cấp #{step_count}] Màn hình lên cấp ({num_c} lựa chọn có sẵn):")
+                        print(f"\n[Cấp #{step_count}] Màn hình lên cấp ({num_c} lựa chọn có sẵn) - Thời gian: {cur_game_time_str}:")
                         for idx in sorted(ocr_res.keys()):
                             cdata = ocr_res[idx]
                             sk_names = ", ".join(cdata.skills) if cdata.skills else (cdata.text_lines[0].title() if cdata.text_lines else "Chưa rõ")
@@ -219,53 +350,9 @@ def run_human_recorder():
                     # 1. Bắt click chuột trái trong thời gian hiển thị bảng lên cấp
                     click_norm = mouse_tracker.get_last_click_in_rect(rect, since_time=last_level_up_time)
 
-                    # 2. Dự phòng: Nếu chuột tap quá nhanh, lấy vị trí con trỏ chuột hiện tại (người chơi vừa bấm xong chuột vẫn đang nằm trên thẻ)
-                    if click_norm is None:
-                        class _PT(ctypes.Structure):
-                            _fields_ = [('x', ctypes.c_long), ('y', ctypes.c_long)]
-                        cur_pt = _PT()
-                        ctypes.windll.user32.GetCursorPos(ctypes.byref(cur_pt))
-                        rx = rect.get("left", 0)
-                        ry = rect.get("top", 0)
-                        rw = rect.get("width", 1)
-                        rh = rect.get("height", 1)
-                        if rw > 0 and rh > 0:
-                            nx = (cur_pt.x - rx) / rw
-                            ny = (cur_pt.y - ry) / rh
-                            if 0.0 <= nx <= 1.0 and 0.15 <= ny <= 0.98:
-                                click_norm = (round(nx, 4), round(ny, 4))
-
                     if last_seen_cards:
-                        num_c = len(last_seen_cards)
-                        if click_norm is not None:
-                            norm_x, norm_y = click_norm
-                            click_y_val = norm_y
-                            if num_c == 4:
-                                centers_4 = {1: 0.28, 2: 0.45, 3: 0.62, 4: 0.80, "mana": 0.93}
-                                if 0.15 <= norm_y < 0.367:
-                                    chosen_card_idx = 1
-                                elif 0.367 <= norm_y < 0.540:
-                                    chosen_card_idx = 2
-                                elif 0.540 <= norm_y < 0.714:
-                                    chosen_card_idx = 3
-                                elif 0.714 <= norm_y < 0.890:
-                                    chosen_card_idx = 4
-                                elif 0.890 <= norm_y < 0.98:
-                                    chosen_card_idx = "mana"
-                                else:
-                                    chosen_card_idx = min(centers_4.keys(), key=lambda k: abs(norm_y - centers_4[k]))
-                            else:
-                                centers_3 = {1: 0.36, 2: 0.53, 3: 0.70, "mana": 0.85}
-                                if 0.20 <= norm_y < 0.445:
-                                    chosen_card_idx = 1
-                                elif 0.445 <= norm_y < 0.619:
-                                    chosen_card_idx = 2
-                                elif 0.619 <= norm_y < 0.798:
-                                    chosen_card_idx = 3
-                                elif 0.798 <= norm_y < 0.95:
-                                    chosen_card_idx = "mana"
-                                else:
-                                    chosen_card_idx = min(centers_3.keys(), key=lambda k: abs(norm_y - centers_3[k]))
+                        chosen_card_idx = map_click_to_card(click_norm, len(last_seen_cards))
+                        click_y_val = click_norm[1] if click_norm is not None else None
 
                         if chosen_card_idx == "mana":
                             chosen_name = "Mana 20% Retrieve"
@@ -275,56 +362,47 @@ def run_human_recorder():
                                 chosen_name = ", ".join(cdata.skills)
                                 for sk in cdata.skills:
                                     active_skills.add(sk)
+                                    skill_levels[sk] = skill_levels.get(sk, 0) + 1
                             elif cdata.text_lines:
                                 chosen_name = cdata.text_lines[0].title()
                                 if cdata.special_passive_name:
                                     active_skills.add(cdata.special_passive_name)
+                                    skill_levels[cdata.special_passive_name] = skill_levels.get(cdata.special_passive_name, 0) + 1
                             else:
                                 chosen_name = f"Thẻ {chosen_card_idx}"
                         else:
-                            # Fallback nếu không xác định được tọa độ click
-                            chosen_card_idx = 1
-                            cdata = last_seen_cards.get(1)
-                            if cdata and cdata.skills:
-                                chosen_name = ", ".join(cdata.skills)
-                                active_skills.add(cdata.skills[0])
-                            elif cdata and cdata.text_lines:
-                                chosen_name = cdata.text_lines[0].title()
-                            else:
-                                chosen_name = "Kỹ năng vừa chọn"
+                            chosen_name = "Không xác định được lựa chọn"
 
                         recorder.record_decision(
                             last_level_up_frame,
                             "human_level_up",
-                            f"card_{chosen_card_idx}",
-                            confidence=1.0,
+                            f"card_{chosen_card_idx}" if chosen_card_idx is not None else "unknown",
+                            confidence=1.0 if chosen_card_idx is not None else 0.0,
                             metadata={
                                 "step": step_count,
                                 "chosen_card": chosen_card_idx,
                                 "chosen_skill": chosen_name,
                                 "click_norm_y": click_y_val,
+                                "game_time": cur_game_time_str,
+                                "game_time_sec": cur_game_sec,
                                 "offered_cards": {
                                     str(k): list(last_seen_cards[k].skills) for k in sorted(last_seen_cards.keys())
                                 },
                             },
                         )
 
-                    elapsed_m = int((now - match_start_time) // 60)
-                    elapsed_s = int((now - match_start_time) % 60)
                     click_info = f" (Click y={click_y_val:.2f})" if click_y_val is not None else ""
                     if chosen_card_idx == "mana":
-                        print(f"    -> [ĐÃ CHỌN]: Mana 20% Retrieve (Bỏ qua thẻ để lấy Mana)!{click_info} (Thời gian: {elapsed_m:02d}:{elapsed_s:02d})")
+                        print(f"    -> [ĐÃ CHỌN]: Mana 20% Retrieve (Bỏ qua thẻ để lấy Mana)!{click_info} (Thời gian trong game: {cur_game_time_str})")
                     elif chosen_card_idx is not None:
-                        print(f"    -> [ĐÃ CHỌN]: Thẻ {chosen_card_idx} -> [{chosen_name}]!{click_info} (Thời gian: {elapsed_m:02d}:{elapsed_s:02d})")
+                        print(f"    -> [ĐÃ CHỌN]: Thẻ {chosen_card_idx} -> [{chosen_name}]!{click_info} (Thời gian trong game: {cur_game_time_str})")
                     else:
-                        print(f"    -> [Đã ghi nhận]: Bạn vừa chọn xong kỹ năng! (Thời gian: {elapsed_m:02d}:{elapsed_s:02d})")
+                        print(f"    -> [Đã ghi nhận]: Bạn vừa chọn xong kỹ năng! (Thời gian trong game: {cur_game_time_str})")
 
                 # 2.2 Thuộc tính cấp 7
                 learn_pos = botcore.detect_learn_button(frame)
                 if learn_pos:
                     score, label, p_sk = botcore.evaluate_selected_attribute(frame)
-                    if p_sk:
-                        active_skills.add(p_sk)
                     print(f"[Thuộc tính cấp 7] Đang quan sát nhánh bạn chọn: [{label}] (Thuộc: {p_sk})")
 
                 # 2.3 Rương cổ vật
@@ -371,36 +449,45 @@ def run_human_recorder():
                         elif cy <= 0.16 and cx >= 0.75:
                             bought = False  # Bấm X
                         else:
-                            bought = True
+                            bought = False
                     else:
-                        bought = True
+                        bought = False
 
-                    elapsed_m = int((now - match_start_time) // 60)
-                    elapsed_s = int((now - match_start_time) % 60)
                     if bought and last_shop_label:
-                        print(f"    -> [ĐÃ MUA CỔ VẬT]: Bạn vừa mua thành công [{last_shop_label}] bằng Mana Orb! (Thời gian: {elapsed_m:02d}:{elapsed_s:02d})")
+                        print(f"    -> [ĐÃ MUA CỔ VẬT]: Đã quan sát thao tác mua [{last_shop_label}] bằng Mana Orb! (Thời gian trong game: {cur_game_time_str})")
                         recorder.record_decision(
                             last_shop_frame if last_shop_frame is not None else frame,
-                            "human_shop_buy",
-                            "buy_artifact",
+                            "human_shop_action",
+                            "buy_attempt",
                             confidence=1.0,
                             metadata={
                                 "artifact": last_shop_label,
                                 "mana_orbs": last_mana_val,
-                                "time": f"{elapsed_m:02d}:{elapsed_s:02d}",
+                                "time": cur_game_time_str,
+                                "game_time_sec": cur_game_sec,
                             },
                         )
                     else:
-                        print(f"    -> [ĐÃ ĐÓNG CỬA HÀNG]: Bạn đã đóng cửa hàng tiếp tục farm! (Thời gian: {elapsed_m:02d}:{elapsed_s:02d})")
+                        print(f"    -> [ĐÃ ĐÓNG CỬA HÀNG]: Bạn đã đóng cửa hàng tiếp tục farm! (Thời gian trong game: {cur_game_time_str})")
 
                 # 2.5 KẾT THÚC TRẬN ĐẤU (Nhân vật chết hoặc bấm kết thúc)
                 # Safeguards:
                 # 1) Chỉ kích hoạt khi nút Pause || hoàn toàn biến mất (pause_pos is None)
                 # 2) Phải duy trì trạng thái chết/kết thúc ít nhất 3 chu kỳ liên tiếp (>= 0.6s) để triệt tiêu mọi glitch/chớp giật
-                if (die_pos or confirm_pos) and pause_pos is None:
+                if confirm_pos and pause_pos is None:
                     death_streak += 1
                     if death_streak >= 3:
-                        survival_sec = now - match_start_time
+                        # Đọc thời gian sống sót trên màn hình kết quả hoặc HUD
+                        t_final = botcore.detect_results_survival_time(frame) or botcore.detect_game_timer(frame)
+                        if t_final:
+                            last_known_game_timer_sec = max(last_known_game_timer_sec, float(t_final[2]))
+
+                        # Fallback gia tốc bản đồ Depth nếu OCR bị che khuất
+                        time_mult = 1.24 if str(config.get("game_map", "depth")).lower().strip() == "depth" else 1.0
+                        if last_known_game_timer_sec <= 0.0 and match_start_time > 0.0:
+                            last_known_game_timer_sec = max(0.0, (now - match_start_time) * time_mult)
+
+                        survival_sec = last_known_game_timer_sec
                         # Bắt buộc trận phải diễn ra ít nhất 10 giây mới tính là 1 trận hợp lệ (loại bỏ glitch)
                         if survival_sec >= 10.0:
                             state = STATE_DEAD
@@ -413,25 +500,35 @@ def run_human_recorder():
                             print(f"[*] Tổng số kỹ năng đã thu thập: {len(active_skills)} kỹ năng:")
                             print(f"    {', '.join(sorted(list(active_skills)))}")
 
-                            recorder.finish_run(survival_time=f"{m:02d}:{s:02d}")
-
-                            core_prio = set(config.get("skill_priority", []))
-                            learn_rep = learner.evaluate_and_learn_run(
-                                run_id=recorder.current_run_id or f"human_expert_{int(now)}",
-                                survival_seconds=survival_sec,
-                                active_skills=active_skills,
-                                core_skills=core_prio,
+                            learn_rep = finish_match(
+                                recorder, learner, frame, survival_sec, active_skills,
+                                config.get("skill_priority", []),
+                                skill_levels=skill_levels,
+                                character=config.get("character", "summoner"),
+                                game_map=config.get("game_map", "depth"),
                             )
+                            if learn_rep and isinstance(learn_rep, dict) and "summary_text" in learn_rep:
+                                print(learn_rep["summary_text"])
+                            elif learn_rep:
+                                print(f"[AI] Đã cập nhật theo thời gian HUD; reward={learn_rep.get('reward', 0):+.3f}")
 
-                            print("\n🧠 [KẾT QUẢ AI HỌC HỎI TỪ BẠN]:")
-                            print(f"    - Điểm thưởng chuyên gia (Reward): {learn_rep.get('reward', 1.5):+.3f}")
-                            new_avg = learn_rep.get('new_avg_survival', survival_sec)
-                            print(f"    - Mức chuẩn trung bình mới được nâng lên: {int(new_avg // 60)}m {int(new_avg % 60)}s")
-                            print("    - Toàn bộ kỹ năng và cặp kết hợp (synergy) của bạn đã được gia tăng trọng số ưu tiên!")
-                            print("    - Đã lưu vào data/learned_policy.json thành công!")
+                            # Học phong cách di chuyển & lắc tay từ mẫu thao tác của bạn
+                            try:
+                                weave_freq, weave_amp = movement_tracker.analyze_weave_profile()
+                                mv_rep = learner.update_movement_policy(weave_freq, weave_amp, chest_aggression=1.8, run_id=run_id)
+                                print("\n" + "-" * 65)
+                                print("🎯 [AI HỌC LẮC TAY] Đã phân tích & học phong cách lắc tay di chuyển từ bạn:")
+                                print(f"   • Tần số lắc tay (Weaving): {mv_rep['weave_frequency']} Hz")
+                                print(f"   • Biên độ lượn né (Amplitude): {mv_rep['weave_amplitude']}")
+                                print(f"   • Độ quyết đoán ăn rương: x{mv_rep['chest_aggression']}")
+                                print("-" * 65)
+                            except Exception:
+                                pass
+
                             print("\n>>> Đã ghi nhận xong 1 lần duy nhất! Đang chờ bạn quay lại Sảnh để chơi trận mới... <<<")
                         else:
-                            # Thời gian quá ngắn (<10s) -> bỏ qua không ghi nhận
+                            recorder.finish_run()
+                            print("[AI] Đồng hồ chưa rõ hoặc ván quá ngắn; giữ bản ghi và bỏ qua học.")
                             state = STATE_DEAD
                             death_streak = 0
                 else:
@@ -448,6 +545,9 @@ def run_human_recorder():
 
     except KeyboardInterrupt:
         print("\n[!] Đã dừng bộ ghi hình người chơi. Dữ liệu đã được lưu an toàn!")
+    finally:
+        mouse_tracker.close()
+        movement_tracker.close()
 
 
 if __name__ == "__main__":

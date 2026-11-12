@@ -81,10 +81,26 @@ Mở `config.json` bằng VS Code, sửa khi bot đã dừng:
 | `joystick_radius_px` | Quãng kéo chuột | `65` |
 | `fps` | Lần đánh giá mỗi giây | `6` |
 | `max_session_minutes` | Thời gian tối đa trước khi dừng | `120` |
+| `character` | Nhân vật phải chọn trước khi xác nhận Selected; hiện có mẫu Summoner | `summoner` |
+| `nearest_target_skills` | Các kỹ năng tự nhắm quái gần nhất; bot chỉ áp dụng khi đã xác nhận sở hữu trong ván | `["telekinetic_sword"]` |
 
 Tọa độ đi từ **0 (trái/trên)** đến **1 (phải/dưới)** tính trên phần ảnh game được chụp, không tính thanh tiêu đề Windows và thanh Google Play Games phía trái.
 
+Trước khi vào trận, bot bấm biểu tượng **Summoner** trong màn 24 nhân vật, chụp lại để đọc tên ở đầu màn hình, rồi mới bấm **Selected** và kiểm tra màn **Enter Area**. Không tìm được biểu tượng hoặc không đọc đúng tên thì bot giữ ở bước chọn nhân vật và thử lại. Mẫu biểu tượng nằm ở `assets/characters/summoner.png`; cấu hình tên khác cần có ảnh mẫu tương ứng. Tắt `auto_restart` cũng tắt bước chọn nhân vật tự động.
+
+Bot ưu tiên đi thẳng tới rương/orb khi đoạn đường tới món đồ đủ trống, không né chỉ vì có quái ở phía sau món đồ. Với kỹ năng trong `nearest_target_skills`, bot có thể áp sát thêm nếu quái chắn đường cũng là quái gần nhất nhìn thấy. Bot vẫn né khi quái áp sát hoặc đường bị chặn bởi vùng tối/đám quái lớn. Đây là quyết định từ ảnh mỗi lần quét, chưa đo sát thương hay thời gian hồi chiêu. Danh sách mặc định chỉ có Sword; thêm mã kỹ năng khác khi đã xác nhận cơ chế nhắm mục tiêu của nó. Đặt `[]` để tắt phần áp sát dựa trên auto-aim. Thay đổi áp dụng cho cả GUI và CLI sau khi khởi động lại bot.
+
 ## 6. Xử lý lỗi thường gặp
+
+Khu tối rộng trong đợt sóng được giữ thành vùng cấm riêng: việc loại trừ hình nhân vật, rương hoặc tháp không được xóa vùng này. Bot không đi vào đó để nhặt đồ, kể cả khi có Sword; nếu đã nằm trong vùng tối thì ưu tiên thoát ra chỗ sáng gần nhất.
+
+Vòng chiến đấu phân tích ảnh tối đa 540 px chiều rộng, kiểm tra HUD và tiêu đề menu trước khi chọn hướng, tránh quét toàn bộ menu trên mỗi ảnh đang chơi. Di chuyển ADB được duy trì giữa các lần phân tích, với thời hạn 1 giây tính từ ảnh dùng để chọn hướng, bao gồm thời gian phân tích; gặp menu thì nhả di chuyển trước khi xử lý. Một lệnh vuốt đã gửi vẫn có thể chạy hết 350 ms. Phép đo offline gần nhất trên ảnh mẫu `tests/fixtures/movement/combat.png` có trung vị khoảng 0,30 giây; số này chưa gồm thời gian chụp ảnh và truyền ADB, không phải FPS chơi thật.
+
+Bot tìm các nút chữ **Đóng / Close / Skip / Bỏ qua** trước khi tìm biểu tượng X. Sau mỗi lần đóng, bot đọc lại màn hình; không gửi thêm Back ngay sau nút đóng. CLI gặp timeout ADB hoặc mất ảnh giữa chuỗi thao tác sẽ nhả điều khiển và lấy ảnh mới.
+
+GUI và CLI cùng kiểm tra màn rương sau từng lần xem cổ vật, đọc lại vị trí Obtain trước khi nhận và xác nhận màn đã chuyển. Bộ đếm lên cấp chỉ tăng sau khi chọn thành công; ưu tiên cấp nhân vật đọc từ dòng **Current Level**.
+
+Sau crash, màn **Restore Gold** được nhận diện riêng và bot bấm **Confirm** để nhận vàng. Bản ghi đang dang dở được đóng mà không dùng màn khôi phục vàng làm kết quả học của một ván hoàn tất.
 
 - **Bot không chạy:** kiểm tra game đang ở cửa sổ trước mặt, tiêu đề chứa `Magic Survival`, nhập `F8` (không phải F9).
 - **Game không nhận WASD:** tự nhấn WASD thử; kiểm tra gán joystick trong Controls Editor, hoặc chuyển sang chế độ chuột.
@@ -98,7 +114,7 @@ Tọa độ đi từ **0 (trái/trên)** đến **1 (phải/dưới)** tính tr�
 ## 7. Giới hạn hiện tại và hướng phát triển
 
 - AI di chuyển hiện dùng **heuristic thị giác**, không phải mô hình đã được huấn luyện trên gameplay Magic Survival. Những hiệu ứng mới, tông màu map mới, quái không có màu tối hoặc vật thể che chắn có thể gây nhận diện sai.
-- Mặc định mỗi lần nâng cấp sẽ bấm một vị trí bạn đã dạy; chưa đánh giá tên phép/độ mạnh build theo ngữ cảnh. Có thể dạy thêm từng anchor nhận diện thẻ phép cụ thể nếu chúng ổn định trên màn hình.
+- Chọn phép/cổ vật dùng OCR, ảnh mẫu, danh sách ưu tiên và kỹ năng đã ghi nhận. Khi OCR không đủ thông tin, có thể dùng ô mặc định trong cấu hình; bot chưa đánh giá đầy đủ sát thương, hồi chiêu và sức mạnh thực tế của build.
 - Chưa có OCR để đọc chính xác vàng/đá xanh. Số lần bot bấm quy tắc **không tương đương** tài nguyên thu được.
 - Chưa xác minh game cho phép tự động hóa. Công cụ không có chức năng né phát hiện hoặc vượt qua cơ chế bảo vệ.
 - Vùng game mẫu có nền xám và quái đen theo ảnh của bạn. Với bản đồ khác, `botcore.py` cần tinh chỉnh ngưỡng màu.

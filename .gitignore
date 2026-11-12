@@ -23,6 +23,7 @@ roi_*.png
 test_*.png
 cards_lvl.png
 header_lvl.png
+scratch/
 
 # Keep learned AI models and rules
 !data/learned_policy.json

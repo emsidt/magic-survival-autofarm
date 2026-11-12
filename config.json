@@ -12,17 +12,27 @@
     0.5
   ],
   "joystick_position": [
-    0.08,
-    0.12
+    0.5,
+    0.65
   ],
-  "joystick_radius_px": 65,
+  "joystick_radius_px": 180,
   "fps": 30,
   "max_session_minutes": 120,
   "auto_levelup": true,
   "card_choice": 1,
   "auto_close_ads": true,
   "auto_restart": true,
+  "character": "summoner",
+  "game_map": "depth",
   "auto_chest": true,
+  "enable_human_weave": true,
+  "early_priority_skills": {
+    "electric_zone": {
+      "target_level": 4,
+      "max_player_level": 10
+    }
+  },
+  "nearest_target_skills": ["telekinetic_sword"],
   "skill_priority": [
     "telekinetic_sword",
     "spirit",
@@ -34,6 +44,7 @@
     "current_overload",
     "vortex",
     "neutron_generation",
+    "electric_zone",
     "blizzard",
     "frost_nova",
     "tsunami",
@@ -47,7 +58,6 @@
     "shield",
     "cloaking",
     "armageddon",
-    "electric_zone",
     "arcane_ray",
     "fast_casting",
     "haste",

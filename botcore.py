@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 import math
 from pathlib import Path
 import re
+import unicodedata
 from typing import Optional
 
 import cv2
@@ -53,6 +54,22 @@ CHEST_SPECS = [
 ]
 
 _CACHED_SMALL_CHEST_TEMPLATES: list[tuple[str, np.ndarray, float, int, int, bool]] = []
+_IMAGE_CACHE: dict[tuple[str, int], Optional[np.ndarray]] = {}
+
+
+def get_cached_image(path: Union[str, Path], flags: int = cv2.IMREAD_COLOR) -> Optional[np.ndarray]:
+    """Read image from disk once and cache in memory to eliminate repeated disk I/O."""
+    p_str = str(path)
+    key = (p_str, flags)
+    cached = _IMAGE_CACHE.get(key)
+    if cached is not None:
+        return cached
+    if not Path(p_str).is_file():
+        return None
+    img = cv2.imread(p_str, flags)
+    if img is not None:
+        _IMAGE_CACHE[key] = img
+    return img
 
 
 def _get_fast_chest_templates() -> list[tuple[str, np.ndarray, float, int, int, bool]]:
@@ -193,9 +210,7 @@ def detect_monolith(frame: np.ndarray, min_confidence: float = 0.45) -> Optional
     Uses multi-scale template matching against assets/monolith.png and verifies the crimson core rune.
     """
     template_path = _BASE_DIR / "assets" / "monolith.png"
-    if not template_path.is_file():
-        return None
-    tmpl = cv2.imread(str(template_path))
+    tmpl = get_cached_image(template_path)
     if tmpl is None:
         return None
 
@@ -251,6 +266,8 @@ class Vision:
     modal: bool = False
     panel_fraction: float = 0.0
     monolith: Optional[tuple[int, int]] = None
+    hazard_mask: Optional[np.ndarray] = None
+    bosses: list[tuple[int, int, int]] = field(default_factory=list)
 
 
 def measure_modal_panel(gray: np.ndarray) -> float:
@@ -281,6 +298,74 @@ def _extract_orbs(mask: np.ndarray, max_area: int = 250) -> list[tuple[int, int]
     return orbs
 
 
+def detect_wave_darkness(gray: np.ndarray) -> np.ndarray:
+    """Estimate terrain shading, suppressing small bright spell/orb holes."""
+    h, w = gray.shape
+    small = cv2.resize(gray, (160, max(1, round(h * 160 / w))), interpolation=cv2.INTER_AREA)
+    terrain = cv2.medianBlur(small, 9)
+    terrain = cv2.GaussianBlur(terrain, (9, 9), 0)
+    top = int(terrain.shape[0] * 0.10)
+    baseline = float(np.percentile(terrain[top:], 75))
+    threshold = max(48.0, min(80.0, baseline * 0.72))
+    dim = (terrain <= threshold).astype(np.uint8) * 255
+    dim[:top] = 0
+    count, labels, stats, _ = cv2.connectedComponentsWithStats(dim, 8)
+    mask = np.zeros_like(dim)
+    for label in range(1, count):
+        x, y, bw, bh, area = stats[label]
+        touches_edge = x <= 2 or x + bw >= 158 or y + bh >= dim.shape[0] - 2
+        if touches_edge and area >= 160 * 160 * 0.04 and max(bw, bh) >= 160 * 0.4:
+            mask[labels == label] = 255
+    # Light from a spell inside darkness is not a safe island to escape into.
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    cv2.drawContours(mask, contours, -1, 255, cv2.FILLED)
+    return cv2.resize(mask, (w, h), interpolation=cv2.INTER_NEAREST)
+
+
+def detect_boss_monsters(frame: np.ndarray) -> list[tuple[int, int, int]]:
+    """Detect Elite and Boss monsters ('quái to') by locating their prominent red health bars.
+
+    Returns a list of (boss_center_x, boss_center_y, boss_radius) for each detected boss.
+    """
+    h, w = frame.shape[:2]
+    span = min(w, h)
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    # Bright red health bar: HSV hue in [0..12] or [168..180], S >= 95, V >= 95
+    red_hsv = ((hsv[:, :, 0] <= 12) | (hsv[:, :, 0] >= 168)) & (hsv[:, :, 1] >= 95) & (hsv[:, :, 2] >= 95)
+    red_rgb = (frame[:, :, 2] >= 130) & (frame[:, :, 0] <= 90) & (frame[:, :, 1] <= 90)
+    red_mask = (red_hsv | red_rgb).astype(np.uint8) * 255
+    # HUD exclusion: top 9.5% contains timer, pause button, gem counts
+    red_mask[: int(h * 0.095)] = 0
+    red_mask[int(h * 0.985) :] = 0
+    red_mask[:, : int(w * 0.015)] = 0
+    red_mask[:, int(w * 0.985) :] = 0
+
+    # Bridge small gaps in the health bar caused by hits or segment division
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 3))
+    red_closed = cv2.morphologyEx(red_mask, cv2.MORPH_CLOSE, kernel)
+
+    cnt, labels, stats, centroids = cv2.connectedComponentsWithStats(red_closed, 8)
+    bosses: list[tuple[int, int, int]] = []
+    for i in range(1, cnt):
+        bx, by, bw, bh = (
+            stats[i, cv2.CC_STAT_LEFT],
+            stats[i, cv2.CC_STAT_TOP],
+            stats[i, cv2.CC_STAT_WIDTH],
+            stats[i, cv2.CC_STAT_HEIGHT],
+        )
+        # Boss health bars are distinct horizontal lines (wide relative to height)
+        if bw >= max(35, int(span * 0.075)) and (bw / max(1, bh)) >= 4.0:
+            cx, cy = centroids[i]
+            # In Magic Survival, the boss entity sits directly above its health bar.
+            boss_radius = int(max(bw * 0.95, span * 0.14))
+            boss_cx = int(cx)
+            boss_cy = int(cy - boss_radius * 0.85)
+            boss_cx = max(0, min(w - 1, boss_cx))
+            boss_cy = max(0, min(h - 1, boss_cy))
+            bosses.append((boss_cx, boss_cy, boss_radius))
+    return bosses
+
+
 def inspect_game(frame: np.ndarray, player: tuple[float, float] = (0.5, 0.5)) -> Vision:
     """Detect enemy shadows, chests, and Mana orbs (Purple L -> Gold M -> Blue S) in a BGR game crop."""
     h, w = frame.shape[:2]
@@ -298,6 +383,19 @@ def inspect_game(frame: np.ndarray, player: tuple[float, float] = (0.5, 0.5)) ->
     panel_fraction = measure_modal_panel(gray)
     modal = panel_fraction >= 0.55 or float(np.mean(gray)) < 22.0
     gameplay = (not modal) and bg_fraction >= 0.12
+
+    # An ad screen with an ad close button or ad keywords must NEVER be treated as combat gameplay:
+    if gameplay and detect_pause_button(frame) is None and detect_game_timer(frame) is None:
+        if is_ad_screen(frame):
+            return Vision(
+                enemy_mask=np.zeros((h, w), dtype=np.uint8),
+                distance=np.full((h, w), 500.0, dtype=np.float32),
+                gems=[],
+                gameplay=False,
+                background_fraction=bg_fraction,
+                modal=True,
+                panel_fraction=panel_fraction,
+            )
     chest_target = detect_chest(frame, player=player) if gameplay else None
     chest_pos = (chest_target[0], chest_target[1]) if chest_target else None
     chest_type = getattr(chest_target, "chest_type", "treasure_chest")
@@ -316,15 +414,23 @@ def inspect_game(frame: np.ndarray, player: tuple[float, float] = (0.5, 0.5)) ->
     void_cand[: int(h * 0.095)] = 0  # HUD is not void
     cnt_v, lbl_v, stats_v, _ = cv2.connectedComponentsWithStats(void_cand, 8)
     void_mask = np.zeros((h, w), dtype=np.uint8)
+    hazard_mask = detect_wave_darkness(gray)
     for i in range(1, cnt_v):
         if stats_v[i, cv2.CC_STAT_AREA] >= 1500 and stats_v[i, cv2.CC_STAT_WIDTH] >= 20:
             void_mask[lbl_v == i] = 255
+        if (stats_v[i, cv2.CC_STAT_AREA] >= max(1500, span * span * 0.025)
+                and max(stats_v[i, cv2.CC_STAT_WIDTH], stats_v[i, cv2.CC_STAT_HEIGHT]) >= span * 0.35):
+            hazard_mask[lbl_v == i] = 255
 
     enemy_mask = (enemy_pixels.astype(np.uint8) * 255)
     enemy_mask[:, : int(w * 0.015)] = 0
     enemy_mask[:, int(w * 0.985) :] = 0
     dark = enemy_mask | void_mask
     dark[: int(h * 0.095)] = 0  # HUD is not an enemy.
+    # Elite/Boss monster detection ('quái to' with horizontal red health bar):
+    bosses = detect_boss_monsters(frame) if gameplay else []
+    for bcx, bcy, br in bosses:
+        cv2.circle(dark, (bcx, bcy), int(br * 1.20), 255, -1)
     # Crucial: mask out the player's own dark character sprite at center so
     # distanceTransform measures distance to real enemies, not the player itself!
     # Clears both circular base and vertical humanoid/robe ellipse.
@@ -346,6 +452,8 @@ def inspect_game(frame: np.ndarray, player: tuple[float, float] = (0.5, 0.5)) ->
         cv2.circle(dark, (mx, my), monolith_clear_radius, 0, -1)
         cv2.ellipse(dark, (mx, my), (int(monolith_clear_radius * 0.85), int(monolith_clear_radius * 1.45)), 0, 0, 360, 0, -1)
 
+    # Loot/player exclusions must never carve a passage through a wave's dark zone.
+    dark |= hazard_mask
     dark = cv2.morphologyEx(dark, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8))
     count, labels, stats, _ = cv2.connectedComponentsWithStats(dark, 8)
     enemy = np.zeros((h, w), np.uint8)
@@ -363,20 +471,25 @@ def inspect_game(frame: np.ndarray, player: tuple[float, float] = (0.5, 0.5)) ->
     # 1. Blue/cyan dots: Mana orb (S) - Small Mana (bright glowing neon cyan)
     blue = cv2.inRange(hsv, (75, 38, 125), (130, 255, 255))
     blue[: int(h * 0.095)] = 0
-    cv2.circle(blue, (px, py), int(span * 0.05), 0, -1)
-    gems = _extract_orbs(blue, 250)
+    # Keep orbs visible until close to pickup range, while masking out the player's own
+    # sprite/hat/cloak highlight so the character never chases its own body.
+    orb_clear_rx = max(12, int(span * 0.032))
+    orb_clear_ry = max(16, int(span * 0.048))
+    cv2.ellipse(blue, (px, py), (orb_clear_rx, orb_clear_ry), 0, 0, 360, 0, -1)
+    orb_area_scale = (span / 500.0) ** 2
+    gems = _extract_orbs(blue, max(40, int(250 * orb_area_scale)))
 
     # 2. Gold/yellow dots: Mana orb (M) - Medium Mana (bright glowing yellow/gold, avoid olive ground & red enemy aura)
     gold = cv2.inRange(hsv, (15, 75, 155), (36, 255, 255))
     gold[: int(h * 0.095)] = 0
-    cv2.circle(gold, (px, py), int(span * 0.05), 0, -1)
-    gold_gems = _extract_orbs(gold, 280)
+    cv2.ellipse(gold, (px, py), (orb_clear_rx, orb_clear_ry), 0, 0, 360, 0, -1)
+    gold_gems = _extract_orbs(gold, max(40, int(280 * orb_area_scale)))
 
     # 3. Purple/magenta dots: Mana orb (L) - Large Mana (bright glowing magenta/violet)
     purple = cv2.inRange(hsv, (130, 55, 130), (176, 255, 255))
     purple[: int(h * 0.095)] = 0
-    cv2.circle(purple, (px, py), int(span * 0.05), 0, -1)
-    purple_gems = _extract_orbs(purple, 320)
+    cv2.ellipse(purple, (px, py), (orb_clear_rx, orb_clear_ry), 0, 0, 360, 0, -1)
+    purple_gems = _extract_orbs(purple, max(40, int(320 * orb_area_scale)))
 
     return Vision(
         enemy,
@@ -392,7 +505,137 @@ def inspect_game(frame: np.ndarray, player: tuple[float, float] = (0.5, 0.5)) ->
         modal,
         panel_fraction,
         monolith_pos,
+        hazard_mask,
+        bosses,
     )
+
+
+# Based on the user's Sword build. Other nearest-target attacks can be added in
+# config, without assuming that every spell or every fusion uses this targeting.
+DEFAULT_NEAREST_TARGET_SKILLS = frozenset({"telekinetic_sword"})
+
+# Guaranteed damage / aura / auto-targeting skills that clear non-boss blockers around player
+DEFAULT_GUARANTEED_HIT_SKILLS = frozenset({
+    "telekinetic_sword",
+    "electric_zone",
+    "spirit",
+    "satellite",
+    "cyclone",
+    "frost_nova",
+    "electric_shock",
+    "flash_shock",
+    "blizzard",
+    "lava_zone",
+    "magic_bullet",
+    "energy_bolt",
+})
+
+
+def apply_human_weave(
+    direction: tuple[float, float],
+    elapsed: float,
+    frequency: float = 3.2,
+    amplitude: float = 0.28,
+) -> tuple[float, float]:
+    """Apply high-skill human joystick weaving ('lắc tay') perpendicular to movement vector.
+    This creates fan-shaped projectile coverage and disrupts predictable swarm convergence.
+    """
+    if direction == (0.0, 0.0) or amplitude <= 0.0 or frequency <= 0.0:
+        return direction
+    perp = (-direction[1], direction[0])
+    osc = math.sin(2.0 * math.pi * frequency * elapsed) * amplitude
+    wx = direction[0] + perp[0] * osc
+    wy = direction[1] + perp[1] * osc
+    length = math.hypot(wx, wy)
+    return (round(wx / length, 4), round(wy / length, 4)) if length > 1e-4 else direction
+
+
+def _hazard_path_clear(mask, origin, target):
+    if mask is None or not np.any(mask):
+        return True
+    h, w = mask.shape
+    length = math.dist(origin, target)
+    steps = max(2, int(length / 2) + 1)
+    xs = np.clip(np.rint(np.linspace(origin[0], target[0], steps)).astype(int), 0, w - 1)
+    ys = np.clip(np.rint(np.linspace(origin[1], target[1], steps)).astype(int), 0, h - 1)
+    return not np.any(mask[ys, xs])
+
+
+def _approach_pickup(
+    vision: Vision,
+    target: tuple[int, int],
+    player_px: tuple[int, int],
+    has_nearest_target_attack: bool,
+) -> Optional[tuple[float, float]]:
+    """Commit to a clear pickup path, or advance toward a small auto-aim target.
+
+    Only inspect the path as far as the pickup. A monster beyond it must not
+    repel us before we collect it. Return None to use the normal dodge planner.
+    """
+    h, w = vision.distance.shape
+    span = min(h, w)
+    px, py = player_px
+    dx, dy = target[0] - px, target[1] - py
+    distance = math.hypot(dx, dy)
+    if distance <= max(16.0, span * 0.035):
+        return None
+    direction = (dx / distance, dy / distance)
+    # Boss & Elite avoidance: Never charge towards or near a giant boss!
+    for bcx, bcy, br in getattr(vision, "bosses", []):
+        if math.hypot(target[0] - bcx, target[1] - bcy) < br * 1.30:
+            return None
+        t = max(0.0, min(1.0, ((bcx - px) * dx + (bcy - py) * dy) / (distance * distance)))
+        proj_x, proj_y = px + t * dx, py + t * dy
+        if math.hypot(bcx - proj_x, bcy - proj_y) < br * 1.15:
+            return None
+    clearance = max(3.0, span * 0.012)
+    # Dense path samples avoid stepping over thin enemies/walls between rays.
+    steps = np.linspace(0.0, distance, max(2, int(distance / max(1.0, span * 0.004)) + 1))
+    xs = np.clip(np.rint(px + direction[0] * steps).astype(int), 0, w - 1)
+    ys = np.clip(np.rint(py + direction[1] * steps).astype(int), 0, h - 1)
+    blocked = np.flatnonzero(vision.distance[ys, xs] < clearance)
+    if not len(blocked):
+        return direction
+
+    if not has_nearest_target_attack:
+        return None
+
+    first = int(blocked[0])
+    # Do not mistake inspect_game's player-sprite exclusion for empty space.
+    sprite_radius = max(
+        span * 0.078,
+        span / math.sqrt((direction[0] / 0.070) ** 2 + (direction[1] / 0.105) ** 2),
+    )
+    advance_limit = max(span * 0.085, sprite_radius + clearance)
+    if steps[first] <= advance_limit:
+        return None  # Already in contact range: sidestep instead of charging through.
+
+    # Auto-aim helps only if the blocker is the nearest visible enemy. An enemy
+    # behind us may otherwise take every shot while the one ahead remains alive.
+    points = cv2.findNonZero(vision.enemy_mask)
+    if points is None:
+        return None
+    points = points[:, 0, :]
+    offsets = points.astype(np.float64) - (px, py)
+    nearest = points[int(np.argmin(np.sum(offsets * offsets, axis=1)))]
+    nx, ny = int(nearest[0]), int(nearest[1])
+    _, labels, stats, _ = cv2.connectedComponentsWithStats(vision.enemy_mask, 8)
+    label = int(labels[ny, nx])
+    if not label:
+        return None
+    # A dense swarm or a continuous dark zone cannot be treated as one enemy
+    # which the next auto-aim attack will clear.
+    if (stats[label, cv2.CC_STAT_AREA] > span * span * 0.012
+            or max(stats[label, cv2.CC_STAT_WIDTH], stats[label, cv2.CC_STAT_HEIGHT]) > span * 0.18):
+        return None
+    bx, by = int(xs[first]), int(ys[first])
+    radius = int(math.ceil(clearance)) + 1
+    around_blocker = labels[max(0, by - radius):min(h, by + radius + 1),
+                            max(0, bx - radius):min(w, bx + radius + 1)]
+    if not np.any(around_blocker == label):
+        return None
+    # Re-evaluate on the next frame as the enemy closes in or is killed.
+    return direction
 
 
 def choose_direction(
@@ -400,14 +643,40 @@ def choose_direction(
     elapsed: float,
     previous: Optional[tuple[float, float]] = None,
     player: tuple[float, float] = (0.5, 0.5),
+    active_skills: Optional[set[str]] = None,
+    nearest_target_skills: Optional[set[str]] = None,
+    enable_weave: bool = False,
+    weave_freq: float = 3.2,
+    weave_amp: float = 0.28,
 ) -> tuple[float, float]:
-    """Plan movement repelling visible enemies (#1 safety priority), while prioritizing
-    Artifact Chests (Black Box > Reliquary > Treasure Chest) and actively vacuuming
-    Mana orbs one-by-one (Pac-Man Target-Lock: Purple L -> Gold M -> Blue S).
-    """
+    """Collect nearby loot directly; flank blocked paths and use known auto-aim builds to approach."""
     h, w = vision.distance.shape
     px, py = int(w * player[0]), int(h * player[1])
     span = min(w, h)
+    hazard = vision.hazard_mask
+    if hazard is not None and np.any(hazard):
+        margin = max(2, int(span * 0.06))
+        hazard = cv2.dilate(hazard, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * margin + 1, 2 * margin + 1)))
+        if hazard[py, px]:
+            # Already caught by the shrinking arena: take the shortest exit,
+            # ignoring loot and the previous direction until back on safe ground.
+            safe_mask = cv2.bitwise_not(hazard)
+            safe_mask[:int(h * 0.10)] = 0  # HUD is not playable ground.
+            clearance = cv2.distanceTransform(safe_mask, cv2.DIST_L2, 5)
+            # Aim well inside the lit area, not at the first glowing edge pixel.
+            interior = (clearance >= span * 0.12).astype(np.uint8) * 255
+            safe = cv2.findNonZero(interior)
+            if safe is None:
+                safe = cv2.findNonZero(safe_mask)
+            if safe is None:
+                return (0.0, 0.0)
+            offsets = safe[:, 0, :].astype(float) - (px, py)
+            delta = offsets[np.argmin(np.sum(offsets * offsets, axis=1))]
+            length = float(np.linalg.norm(delta))
+            return (float(delta[0] / length), float(delta[1] / length)) if length else (0.0, 0.0)
+    targeting_skills = DEFAULT_NEAREST_TARGET_SKILLS if nearest_target_skills is None else set(nearest_target_skills)
+    has_nearest_target_attack = bool(set(active_skills or ()) & targeting_skills)
+    has_guaranteed_attack = bool(set(active_skills or ()) & (targeting_skills | DEFAULT_GUARANTEED_HIT_SKILLS))
     patrol = (math.cos(elapsed / 6.0), math.sin(elapsed / 6.0))
     # Collect nearby orbs, prioritizing closest clusters
     nearest_blue = sorted(
@@ -433,15 +702,18 @@ def choose_direction(
 
     best_orb: Optional[tuple[int, int, float, float, float]] = None
     best_orb_val = -1.0
+    min_orb_dist = max(16.0, span * 0.035)
     for gx, gy, bw in all_orbs:
         dx, dy = gx - px, gy - py
         dist = math.hypot(dx, dy)
-        if 4 < dist < span * 0.95:
+        if min_orb_dist < dist < span * 0.95:
             gy_c = min(h - 1, max(0, gy))
             gx_c = min(w - 1, max(0, gx))
             d_px = float(vision.distance[gy_c, gx_c])
             if d_px < 6.0:
                 continue  # Skip orbs inside lethal enemy core
+            if any(math.hypot(gx - bcx, gy - bcy) < br * 1.30 for bcx, bcy, br in getattr(vision, "bosses", [])):
+                continue  # Skip orbs inside/near boss danger zone
             gem_safety = min(1.0, max(0.40, (d_px - 5.0) / 16.0))
             align = ((dx * previous[0] + dy * previous[1]) / dist) if previous else 0.0
             hysteresis = 1.0 + 0.45 * max(0.0, align)
@@ -449,6 +721,23 @@ def choose_direction(
             if val > best_orb_val:
                 best_orb_val = val
                 best_orb = (gx, gy, bw, dist, gem_safety)
+
+    # Commit to one concrete pickup rather than blending several attraction
+    # vectors. Nearby mana remains worth collecting on the way to a distant chest.
+    pickup_target = vision.monolith
+    if pickup_target is None and vision.chest is not None:
+        chest_distance = math.hypot(vision.chest[0] - px, vision.chest[1] - py)
+        if best_orb is not None and chest_distance > span * 0.35 and best_orb[3] < chest_distance * 0.65:
+            pickup_target = (best_orb[0], best_orb[1])
+        else:
+            pickup_target = vision.chest
+    elif pickup_target is None and best_orb is not None:
+        pickup_target = (best_orb[0], best_orb[1])
+    boss_emergency = any(math.hypot(px - bcx, py - bcy) < br * 1.35 for bcx, bcy, br in getattr(vision, "bosses", []))
+    if not boss_emergency and pickup_target is not None and _hazard_path_clear(hazard, (px, py), pickup_target):
+        approach = _approach_pickup(vision, pickup_target, (px, py), has_nearest_target_attack)
+        if approach is not None:
+            return approach
 
     # 1. Pre-scan 12 steps along each of the 16 rays to build 360-degree danger profile and threat vector
     ray_info = []
@@ -459,7 +748,7 @@ def choose_direction(
 
         risks = []
         near_dists = []
-        for s_idx, step in enumerate(np.linspace(0.04, 0.40, 12)):
+        for s_idx, step in enumerate(np.linspace(0.080, 0.42, 12)):
             x = min(w - 1, max(0, int(px + direction[0] * span * step)))
             y = min(h - 1, max(0, int(py + direction[1] * span * step)))
             d_px = float(vision.distance[y, x])
@@ -482,27 +771,23 @@ def choose_direction(
         # Perpendicular tangents: T_cw = (norm_ty, -norm_tx), T_ccw = (-norm_ty, norm_tx)
         t_cw = (norm_ty, -norm_tx)
         t_ccw = (-norm_ty, norm_tx)
-        if previous and math.hypot(previous[0], previous[1]) > 0.2:
+        danger_cw = sum(fd for d, fd, _ in ray_info if (d[0] * t_cw[0] + d[1] * t_cw[1]) > 0.5)
+        danger_ccw = sum(fd for d, fd, _ in ray_info if (d[0] * t_ccw[0] + d[1] * t_ccw[1]) > 0.5)
+        if abs(danger_cw - danger_ccw) > 0.30:
+            chosen_tangent = t_cw if danger_cw < danger_ccw else t_ccw
+        elif previous and math.hypot(previous[0], previous[1]) > 0.2:
             dot_cw = t_cw[0] * previous[0] + t_cw[1] * previous[1]
             dot_ccw = t_ccw[0] * previous[0] + t_ccw[1] * previous[1]
             chosen_tangent = t_cw if dot_cw >= dot_ccw else t_ccw
         else:
-            danger_cw = sum(fd for d, fd, _ in ray_info if (d[0] * t_cw[0] + d[1] * t_cw[1]) > 0.5)
-            danger_ccw = sum(fd for d, fd, _ in ray_info if (d[0] * t_ccw[0] + d[1] * t_ccw[1]) > 0.5)
             chosen_tangent = t_cw if danger_cw <= danger_ccw else t_ccw
 
     best_score = -float("inf")
-    best = patrol
+    best = (0.0, 0.0)
+    has_clear_exit = any(near_dist >= 14.0 for _, _, near_dist in ray_info)
     for direction, forward_danger, near_danger_dist in ray_info:
-        # Compute monolith vector if a post-wave stone milestone obelisk is present
-        monolith_dot = -1.0
-        monolith_dist = 0.0
-        if getattr(vision, "monolith", None):
-            mx, my = vision.monolith
-            mdx, mdy = mx - px, my - py
-            monolith_dist = math.hypot(mdx, mdy)
-            if monolith_dist > 4:
-                monolith_dot = (mdx * direction[0] + mdy * direction[1]) / monolith_dist
+        if not _hazard_path_clear(hazard, (px, py), (px + direction[0] * span * 0.16, py + direction[1] * span * 0.16)):
+            continue
 
         # Compute chest vector if a chest or off-screen chest indicator is present
         chest_dot = -1.0
@@ -514,6 +799,24 @@ def choose_direction(
             if chest_dist > 4:
                 chest_dot = (cdx * direction[0] + cdy * direction[1]) / chest_dist
 
+        chest_heading = bool(vision.chest and chest_dot > 0.25)
+        allow_chest_approach = bool(chest_heading and (has_nearest_target_attack or has_guaranteed_attack) and not boss_emergency)
+
+        if has_clear_exit and near_danger_dist < (4.0 if allow_chest_approach else 10.0):
+            # Loot rewards must never outweigh an immediate collision when an
+            # unobstructed escape exists, including on the way to a monolith.
+            continue
+
+        # Compute monolith vector if a post-wave stone milestone obelisk is present
+        monolith_dot = -1.0
+        monolith_dist = 0.0
+        if getattr(vision, "monolith", None):
+            mx, my = vision.monolith
+            mdx, mdy = mx - px, my - py
+            monolith_dist = math.hypot(mdx, mdy)
+            if monolith_dist > 4:
+                monolith_dot = (mdx * direction[0] + mdy * direction[1]) / monolith_dist
+
         is_charging_monolith = bool(
             getattr(vision, "monolith", None)
             and monolith_dist < span * 0.65
@@ -523,9 +826,9 @@ def choose_direction(
         # Danger repulsion: clear collision avoidance with lethal boundary (< 10px) while staying brave
         score = -10.0 * forward_danger
         if near_danger_dist < 18.0 and not is_charging_monolith:
-            score -= 22.0 * (1.0 - near_danger_dist / 18.0)
+            score -= (6.0 if allow_chest_approach else 22.0) * (1.0 - near_danger_dist / 18.0)
         if near_danger_dist < 10.0 and not is_charging_monolith:
-            score -= 50.0  # Immediate impassable lethal wall / void / swarm barrier
+            score -= (10.0 if allow_chest_approach else 50.0) * (1.0 - near_danger_dist / 10.0)
 
         # Intelligent Swarm Kiting: Flow tangentially in a circular arc around monster swarms
         if threat_mag > 0.20 and not is_charging_monolith:
@@ -535,14 +838,38 @@ def choose_direction(
             if threat_align > 0.25:
                 score -= 8.5 * (threat_align - 0.25)
 
+        # Severe Boss / Elite Monster Avoidance ("Né quái to"):
+        boss_penalty = 0.0
+        boss_bonus = 0.0
+        boss_blocks_mana = False
+        for bcx, bcy, br in getattr(vision, "bosses", []):
+            bdx, bdy = bcx - px, bcy - py
+            bdist = math.hypot(bdx, bdy)
+            if bdist < 1e-3:
+                continue
+            b_dir_x, b_dir_y = bdx / bdist, bdy / bdist
+            boss_dot = direction[0] * b_dir_x + direction[1] * b_dir_y
+            b_clearance = bdist - br
+            danger_reach = span * 0.42
+            if b_clearance < danger_reach:
+                danger_intensity = max(0.0, (danger_reach - b_clearance) / danger_reach)
+                if boss_dot > -0.10:
+                    boss_blocks_mana = True
+                    boss_penalty += 300.0 * danger_intensity * (boss_dot + 0.10)
+                elif boss_dot < -0.30:
+                    boss_bonus += 50.0 * danger_intensity * (-boss_dot)
+        score = score - boss_penalty + boss_bonus
+
         # Path factor for movement
         path_safe_factor = max(0.20, 1.0 - forward_danger * 1.20)
 
         # Active Pac-Man Mana Vacuum: Bold, aggressive pull towards nearby mana orbs!
         mana_score = 0.0
-        safe_path = max(0.35, 1.0 - forward_danger * 0.50)
+        safe_path = max(0.15, 1.0 - forward_danger * 0.55)
         if near_danger_dist < 10.0 and not is_charging_monolith:
-            safe_path = 0.0  # Immediate hazard block (< 10px)
+            safe_path = 0.10
+        if boss_blocks_mana:
+            safe_path = 0.0  # Never let mana orbs pull the player into a boss!
 
         if best_orb is not None and safe_path > 0:
             tx, ty, tbw, tdist, t_safety = best_orb
@@ -581,13 +908,13 @@ def choose_direction(
         # High priority for artifact chest / chest indicator:
         if vision.chest and chest_dist > 4:
             if chest_dot > -0.15:
-                base_weight = max(160.0, getattr(vision, "chest_weight", 24.0) * 6.5)
+                base_weight = max(260.0 if allow_chest_approach else 160.0, getattr(vision, "chest_weight", 24.0) * (8.5 if allow_chest_approach else 6.5))
                 eff_dot = max(0.18, chest_dot) ** 0.50
                 if near_danger_dist < 14.0:
-                    safe_corridor = 0.10
+                    safe_corridor = max(0.65, 1.0 - forward_danger * 0.35) if allow_chest_approach else 0.10
                 else:
                     safe_corridor = max(0.50, 1.0 - forward_danger * 0.50)
-                chest_pull = base_weight * eff_dot * safe_corridor / (0.25 + chest_dist / (span * 1.5))
+                chest_pull = base_weight * eff_dot * safe_corridor / (0.20 + chest_dist / (span * 1.5))
                 score += chest_pull
             if chest_dot < -0.10:
                 score -= 60.0 * (1.0 - chest_dot)
@@ -610,19 +937,30 @@ def choose_direction(
 
         # Suppress patrol when actively locked onto a safe mana orb, chest, or monolith
         patrol_weight = 0.0 if (vision.chest is not None or getattr(vision, "monolith", None) is not None) else (
-            0.05 if best_orb is not None else 0.45
+            0.15 if best_orb is not None else 1.80
         )
         score += patrol_weight * path_safe_factor * (direction[0] * patrol[0] + direction[1] * patrol[1])
         if previous:
             align_prev = direction[0] * previous[0] + direction[1] * previous[1]
-            # Strong forward momentum to keep walking smoothly without stuttering:
-            score += 3.5 * align_prev
-            # Anti-reversal penalty (stops 180-degree jitter/inching):
-            if align_prev < -0.30:
-                score -= 4.5 * (1.0 - align_prev)
+            # Smooth forward momentum:
+            score += 1.4 * align_prev
+            # Anti-reversal penalty (only stops sharp 180-degree hard reversals):
+            if align_prev < -0.75:
+                score -= 1.8 * (-0.75 - align_prev)
         if score > best_score:
             best_score = score
             best = direction
+
+    # Apply human weaving ("Lắc tay") micro-oscillation if enabled
+    if enable_weave and best != (0.0, 0.0) and not boss_emergency and (hazard is None or not np.any(hazard)):
+        weaved = apply_human_weave(best, elapsed, frequency=weave_freq, amplitude=weave_amp)
+        wx = int(px + weaved[0] * span * 0.05)
+        wy = int(py + weaved[1] * span * 0.05)
+        wx_c = min(w - 1, max(0, wx))
+        wy_c = min(h - 1, max(0, wy))
+        if vision.distance[wy_c, wx_c] >= 6.0:
+            best = weaved
+
     return best
 
 
@@ -658,6 +996,82 @@ def find_rule(frame: np.ndarray, rules: list[dict], root_dir: str) -> Optional[d
     return None
 
 
+def prepare_analysis_frame(frame: np.ndarray) -> np.ndarray:
+    """Bound vision cost; normalized click coordinates remain unchanged."""
+    h, w = frame.shape[:2]
+    if w <= 540:
+        return frame
+    return cv2.resize(frame, (540, max(1, round(h * 540 / w))), interpolation=cv2.INTER_AREA)
+
+
+def is_fast_combat_frame(frame: np.ndarray) -> bool:
+    """Check HUD, panels and one small header instead of all expensive menu scans."""
+    if detect_pause_button(frame) is None:
+        return False
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    h, w = gray.shape
+    middle = gray[int(h * 0.15):int(h * 0.85), int(w * 0.08):int(w * 0.92)]
+    clear_field = (float(np.mean(gray)) >= 22.0
+            and measure_modal_panel(gray) < 0.55
+            and float(np.mean((middle >= 42) & (middle <= 200))) >= 0.12)
+    if not clear_field:
+        return False
+    # Level-up cards keep the Pause icon visible and may have bright backgrounds.
+    # Read their header rather than mistaking that HUD alone for active combat.
+    try:
+        import asyncio
+        import winocr
+        from PIL import Image
+        header = frame[int(h * 0.09):int(h * 0.32), int(w * 0.15):int(w * 0.85)]
+
+        async def recognize():
+            return await winocr.recognize_pil(Image.fromarray(cv2.cvtColor(header, cv2.COLOR_BGR2RGB)), lang="en")
+
+        text = " ".join(line.text.lower() for line in asyncio.run(recognize()).lines)
+        if any(term in text for term in ("select", "current level", "pause", "treasure", "merchant", "life or death", "restore gold", "obtain", "artifact")):
+            return False
+        # A wide black card/popup is also sufficient even when header OCR misses.
+        dark = (gray[int(h * 0.20):int(h * 0.90)] <= 20).astype(np.uint8)
+        _, _, stats, _ = cv2.connectedComponentsWithStats(dark, 8)
+        for x, y, width, height, area in stats[1:]:
+            if width > w * 0.6 and height > h * 0.08 and area > width * height * 0.65:
+                return False
+        return True
+    except Exception:
+        return False
+
+
+def detect_restore_gold(frame: np.ndarray) -> Optional[tuple[float, float]]:
+    """Restore Gold after a crash is not a completed run for the learner."""
+    if detect_pause_button(frame) is not None:
+        return None
+    h, w = frame.shape[:2]
+    x0, y0 = int(w * 0.05), int(h * 0.20)
+    roi = frame[y0:int(h * 0.82), x0:int(w * 0.95)]
+    if roi.size == 0:
+        return None
+    try:
+        import asyncio
+        import winocr
+        from PIL import Image
+
+        async def recognize():
+            return await winocr.recognize_pil(Image.fromarray(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)), lang="en")
+
+        result = asyncio.run(recognize())
+        text = " ".join(line.text.lower() for line in result.lines)
+        if "restore gold" not in text:
+            return None
+        for line in result.lines:
+            for word in line.words:
+                if word.text.strip().lower() == "confirm":
+                    r = word.bounding_rect
+                    return ((x0 + r.x + r.width / 2) / w, (y0 + r.y + r.height / 2) / h)
+    except Exception:
+        pass
+    return None
+
+
 def detect_settings_gear(frame: np.ndarray, min_confidence: float = 0.65) -> Optional[tuple[float, float]]:
     """Detect the Settings Gear button located in the top-right area of the Title Screen."""
     h, w = frame.shape[:2]
@@ -665,9 +1079,7 @@ def detect_settings_gear(frame: np.ndarray, min_confidence: float = 0.65) -> Opt
     if roi.size == 0 or roi.shape[0] < 20 or roi.shape[1] < 20:
         return None
     template_path = _BASE_DIR / "assets" / "settings_gear.png"
-    if not template_path.is_file():
-        return None
-    template = cv2.imread(str(template_path), cv2.IMREAD_COLOR)
+    template = get_cached_image(template_path, cv2.IMREAD_COLOR)
     if template is None:
         return None
     th, tw = template.shape[:2]
@@ -726,9 +1138,7 @@ def detect_settings_dialog(frame: np.ndarray) -> bool:
 def detect_pause_button(frame: np.ndarray, threshold: float = 0.70) -> Optional[tuple[float, float]]:
     """Detect the in-game Pause button (||) located in the top-right corner during gameplay."""
     tmpl_path = _BASE_DIR / "assets" / "pause_button.png"
-    if not tmpl_path.is_file():
-        return None
-    tmpl = cv2.imread(str(tmpl_path), cv2.IMREAD_GRAYSCALE)
+    tmpl = get_cached_image(tmpl_path, cv2.IMREAD_GRAYSCALE)
     if tmpl is None:
         return None
     h, w = frame.shape[:2]
@@ -757,8 +1167,73 @@ def detect_pause_button(frame: np.ndarray, threshold: float = 0.70) -> Optional[
     return None
 
 
+def detect_ad_close_text(frame: np.ndarray, gear_pos=None) -> Optional[tuple[float, float]]:
+    """Locate complete dismiss labels, including Vietnamese OCR without accents."""
+    try:
+        import asyncio
+        import winocr
+        from PIL import Image
+        image = frame
+        h, w = image.shape[:2]
+
+        async def recognize():
+            return await winocr.recognize_pil(Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB)), lang="en")
+
+        def normalize(text):
+            text = text.lower().replace("đ", "d")
+            text = "".join(c for c in unicodedata.normalize("NFD", text) if unicodedata.category(c) != "Mn")
+            return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", " ", text)).strip()
+
+        labels = {
+            "close", "close ad", "close video", "dismiss",
+            "dong", "dong lai", "dong quang cao", "dong video", "dong app", "dong cua so",
+            "thoat", "thoat quang cao", "thoat video", "quit", "quit ad", "quit video", "discard", "leave", "roi khoi",
+            "skip", "skip ad", "skip video", "bo qua", "bo qua quang cao", "bo qua video",
+            "no thanks", "not now", "khong cam on", "de sau",
+            "quay lai game", "tro ve game", "continue to game",
+            # Common OCR misreads of small 'Đóng' without accents
+            "06 ng", "o6 ng", "oong", "0ong", "d0ng",
+        }
+
+        def is_valid_label(lbl: str) -> bool:
+            if lbl in labels:
+                return True
+            if re.match(r"^(06|o6|0o|oo|d0|do)[\s]*ng$", lbl):
+                return True
+            return False
+        for line in asyncio.run(recognize()).lines:
+            # Questions and dialog headings with '?' (e.g. "Đóng quảng cáo?", "Close ad?") are prompts, not buttons.
+            if "?" in line.text or any("?" in w.text for w in line.words):
+                continue
+            groups = []
+            for word in sorted(line.words, key=lambda item: item.bounding_rect.x):
+                box = word.bounding_rect
+                if groups:
+                    previous = groups[-1][-1].bounding_rect
+                    if box.x - previous.x - previous.width <= max(20, 2 * max(box.height, previous.height)):
+                        groups[-1].append(word)
+                        continue
+                groups.append([word])
+            for group in groups:
+                label = normalize(" ".join(word.text for word in group))
+                if not is_valid_label(label):
+                    continue
+                if (label.startswith("skip") or label.startswith("bo qua")) and re.search(r"\d", line.text):
+                    continue  # A countdown is not an enabled skip button.
+                boxes = [word.bounding_rect for word in group]
+                left, right = min(b.x for b in boxes), max(b.x + b.width for b in boxes)
+                top, bottom = min(b.y for b in boxes), max(b.y + b.height for b in boxes)
+                point = ((left + right) / (2 * w), (top + bottom) / (2 * h))
+                if gear_pos and math.dist(point, gear_pos) < 0.09:
+                    continue
+                return point
+    except Exception:
+        pass
+    return None
+
+
 def detect_close_button(frame: np.ndarray, threshold: float = 0.62) -> Optional[tuple[float, float]]:
-    """Scan top-right and top-left corners for ad close 'X' buttons, circled X, or Skip '>>' buttons.
+    """Find localized dismiss labels anywhere, then X/skip icons in the corners.
 
     Safeguarded to strictly ignore Title Screen, Game Lobby, Endgame Confirm screen,
     active gameplay Pause Button, Settings Gear, Chest Obtain screen, Shop screen, and Select Attribute screen.
@@ -779,6 +1254,9 @@ def detect_close_button(frame: np.ndarray, threshold: float = 0.62) -> Optional[
 
     # 2. Check if Settings Gear is present to avoid clicking near it
     gear_pos = detect_settings_gear(frame)
+    text_target = detect_ad_close_text(frame, gear_pos)
+    if text_target is not None:
+        return text_target
 
     h, w = frame.shape[:2]
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -797,25 +1275,21 @@ def detect_close_button(frame: np.ndarray, threshold: float = 0.62) -> Optional[
 
     templates = []
     tmpl_x_path = _BASE_DIR / "assets" / "ad_close_x.png"
-    tmpl_x = None
-    if tmpl_x_path.is_file():
-        tmpl_x = cv2.imread(str(tmpl_x_path), cv2.IMREAD_GRAYSCALE)
-        if tmpl_x is not None:
-            templates.append(tmpl_x)
-            for scale in (0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0):
-                sw, sh = int(tmpl_x.shape[1] * scale), int(tmpl_x.shape[0] * scale)
-                templates.append(cv2.resize(tmpl_x, (sw, sh)))
+    tmpl_x = get_cached_image(tmpl_x_path, cv2.IMREAD_GRAYSCALE)
+    if tmpl_x is not None:
+        templates.append(tmpl_x)
+        for scale in (0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0):
+            sw, sh = int(tmpl_x.shape[1] * scale), int(tmpl_x.shape[0] * scale)
+            templates.append(cv2.resize(tmpl_x, (sw, sh)))
 
     # Circled X (white filled circle with black X - standard in Google AdMob, Candy Crush, AppLovin, Unity ads)
     tmpl_circ_path = _BASE_DIR / "assets" / "ad_close_circle_x.png"
-    tmpl_c = None
-    if tmpl_circ_path.is_file():
-        tmpl_c = cv2.imread(str(tmpl_circ_path), cv2.IMREAD_GRAYSCALE)
-        if tmpl_c is not None:
-            templates.append(tmpl_c)
-            for scale in (0.60, 0.75, 1.0, 1.25, 1.5, 1.75, 1.95, 2.0, 2.2):
-                sw, sh = int(tmpl_c.shape[1] * scale), int(tmpl_c.shape[0] * scale)
-                templates.append(cv2.resize(tmpl_c, (sw, sh)))
+    tmpl_c = get_cached_image(tmpl_circ_path, cv2.IMREAD_GRAYSCALE)
+    if tmpl_c is not None:
+        templates.append(tmpl_c)
+        for scale in (0.60, 0.75, 1.0, 1.25, 1.5, 1.75, 1.95, 2.0, 2.2):
+            sw, sh = int(tmpl_c.shape[1] * scale), int(tmpl_c.shape[0] * scale)
+            templates.append(cv2.resize(tmpl_c, (sw, sh)))
 
     # Synthetic X crosses (crisp white cross on black)
     for sz in (20, 26, 32, 40):
@@ -881,54 +1355,6 @@ def detect_close_button(frame: np.ndarray, threshold: float = 0.62) -> Optional[
     if best_score >= threshold and best_coord is not None:
         return best_coord
 
-    # OCR detection for 'close', 'skip', 'x', 'no thanks', 'dismiss' text on ads
-    try:
-        import asyncio
-        import winocr
-        from PIL import Image
-
-        scan_h = int(h * 0.85)
-        scan_roi = frame[0:scan_h, :]
-        pil_img = Image.fromarray(cv2.cvtColor(scan_roi, cv2.COLOR_BGR2RGB))
-
-        async def _ocr_close():
-            return await winocr.recognize_pil(pil_img, lang="en")
-
-        res = asyncio.run(_ocr_close())
-        close_targets = (
-            "close", "skip", "close ad", "skip ad", "skip in",
-            "no thanks", "no, thanks", "not now", "dismiss", "cancel",
-            "bỏ qua", "đóng", "đóng lại", "bỏ qua quảng cáo", ">>", ">|",
-        )
-        for line in res.lines:
-            line_lower = line.text.strip().lower()
-            if any(kw in line_lower for kw in ("no thanks", "no, thanks", "not now", "bỏ qua quảng cáo", "skip ad", "close ad")):
-                if line.words:
-                    w_first = line.words[0].bounding_rect
-                    w_last = line.words[-1].bounding_rect
-                    cx = (w_first.x + w_last.x + w_last.width) / 2 / w
-                    cy = (w_first.y + w_first.height / 2) / h
-                    return (round(cx, 4), round(cy, 4))
-
-            for word in line.words:
-                w_text = word.text.strip().lower()
-                if w_text in close_targets or w_text.startswith("skip") or w_text.startswith("close"):
-                    r = word.bounding_rect
-                    cx = (r.x + r.width / 2) / w
-                    cy = (r.y + r.height / 2) / h
-                    if gear_pos and math.hypot(cx - gear_pos[0], cy - gear_pos[1]) < 0.09:
-                        continue
-                    return (round(cx, 4), round(cy, 4))
-                # Standalone 'x' button in corner
-                if w_text in ("x", "×", "✕", "✖"):
-                    r = word.bounding_rect
-                    cx = (r.x + r.width / 2) / w
-                    cy = (r.y + r.height / 2) / h
-                    if cy <= 0.08 and (cx <= 0.25 or cx >= 0.75):
-                        return (round(cx, 4), round(cy, 4))
-    except Exception:
-        pass
-
     return None
 
 
@@ -952,7 +1378,9 @@ def is_ad_screen(frame: np.ndarray) -> bool:
         ad_kws = (
             "cài đặt", "install", "not in-game", "google play", "play store",
             "reward in", "reward granted", "candy crush", "download now",
-            "free download", "bỏ qua quảng cáo", "skip ad", "close ad",
+            "free download", "bỏ qua quảng cáo", "skip ad", "close ad", "close video",
+            "đóng video", "đóng quảng cáo", "mất phần thưởng", "tiếp tục video",
+            "cửa hàng play", "chơi ngay", "tải ngay", "play now",
         )
         if any(kw in full_text for kw in ad_kws):
             return True
@@ -985,9 +1413,11 @@ def detect_resume_button(frame: np.ndarray) -> Optional[tuple[float, float]]:
             return await winocr.recognize_pil(pil_img, lang="en")
 
         res = asyncio.run(_ocr_res())
+        paused = any(re.sub(r"[^a-z]", "", line.text.lower()) in {"pause", "paused", "gamepaused"}
+                     for line in res.lines)
         for line in res.lines:
-            text_low = line.text.strip().lower()
-            if "resume" in text_low or "continue" in text_low:
+            text_low = re.sub(r"[^a-z]", "", line.text.lower())
+            if text_low in {"resume", "resumegame"} or (paused and text_low in {"continue", "continuegame"}):
                 for word in line.words:
                     if "resume" in word.text.lower() or "continue" in word.text.lower():
                         r = word.bounding_rect
@@ -1004,7 +1434,7 @@ def parse_timer_text(text: str) -> Optional[tuple[int, int, int]]:
     Returns (minutes, seconds, total_seconds) or None.
     """
     cleaned = re.sub(r'[^0-9:]+', ':', text.strip())
-    m = re.search(r'(\d{1,2}):+(\d{2})', cleaned)
+    m = re.search(r'(?<!\d)(\d{1,3}):+(\d{2})(?!\d)', cleaned)
     if m:
         mins, secs = int(m.group(1)), int(m.group(2))
         if secs < 60 and mins < 180:
@@ -1070,6 +1500,44 @@ def detect_game_timer(frame: np.ndarray) -> Optional[tuple[int, int, int]]:
     return None
 
 
+def detect_results_survival_time(frame: np.ndarray) -> Optional[tuple[int, int, int]]:
+    """Detect survival time on the 'Experiment Failed' / Results screen.
+    Returns (minutes, seconds, total_seconds) or None.
+    """
+    if frame is None or frame.size == 0:
+        return None
+    h, w = frame.shape[:2]
+    # In Magic Survival 'Experiment Failed' screen, survival time is in the upper-middle area (y: 10% - 55%)
+    roi = frame[int(h * 0.10):int(h * 0.55), int(w * 0.05):int(w * 0.95)]
+    if roi.size == 0:
+        return None
+    try:
+        import asyncio
+        import winocr
+        from PIL import Image
+
+        async def _ocr(p_img):
+            return await winocr.recognize_pil(p_img, lang="en")
+
+        pil_img = Image.fromarray(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB))
+        res = asyncio.run(_ocr(pil_img))
+        text = " ".join(line.text for line in res.lines)
+        parsed = parse_timer_text(text)
+        if parsed is not None:
+            return parsed
+
+        # Pass 2: normalized contrast for dimmed / dark backgrounds
+        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        norm = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
+        pil_norm = Image.fromarray(norm)
+        res_norm = asyncio.run(_ocr(pil_norm))
+        text_norm = " ".join(line.text for line in res_norm.lines)
+        return parse_timer_text(text_norm)
+    except Exception:
+        pass
+    return None
+
+
 def detect_confirm_button(frame: np.ndarray, min_confidence: float = 0.70) -> Optional[tuple[float, float]]:
     """Detect 'Confirm' button at the bottom of the 'Experiment Failed' / Results screen."""
     # During active gameplay/combat, the Pause button is present -> player is ALIVE, not on results screen
@@ -1084,25 +1552,24 @@ def detect_confirm_button(frame: np.ndarray, min_confidence: float = 0.70) -> Op
     x1 = w if w < 300 else int(w * 0.80)
     roi = frame[y0:y1, x0:x1]
 
-    if template_path.is_file() and roi.size > 0:
-        template = cv2.imread(str(template_path), cv2.IMREAD_GRAYSCALE)
-        if template is not None:
-            gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-            th, tw = template.shape[:2]
-            best_match = None
-            best_score = 0.0
-            for scale in (0.75, 0.90, 1.0, 1.15, 1.30, 1.50, 1.75, 2.00, 2.25):
-                stw, sth = int(tw * scale), int(th * scale)
-                if stw >= roi.shape[1] or sth >= roi.shape[0]:
-                    continue
-                rt = cv2.resize(template, (stw, sth))
-                res = cv2.matchTemplate(gray_roi, rt, cv2.TM_CCOEFF_NORMED)
-                _, max_val, _, max_loc = cv2.minMaxLoc(res)
-                if max_val > best_score:
-                    best_score = max_val
-                    best_match = (x0 + max_loc[0] + stw // 2, y0 + max_loc[1] + sth // 2)
-            if best_score >= min_confidence and best_match:
-                return (round(best_match[0] / w, 4), round(best_match[1] / h, 4))
+    template = get_cached_image(template_path, cv2.IMREAD_GRAYSCALE) if roi.size > 0 else None
+    if template is not None:
+        gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        th, tw = template.shape[:2]
+        best_match = None
+        best_score = 0.0
+        for scale in (0.75, 0.90, 1.0, 1.15, 1.30, 1.50, 1.75, 2.00, 2.25):
+            stw, sth = int(tw * scale), int(th * scale)
+            if stw >= roi.shape[1] or sth >= roi.shape[0]:
+                continue
+            rt = cv2.resize(template, (stw, sth))
+            res = cv2.matchTemplate(gray_roi, rt, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+            if max_val > best_score:
+                best_score = max_val
+                best_match = (x0 + max_loc[0] + stw // 2, y0 + max_loc[1] + sth // 2)
+        if best_score >= min_confidence and best_match:
+            return (round(best_match[0] / w, 4), round(best_match[1] / h, 4))
 
     # Fallback via OCR
     try:
@@ -1163,9 +1630,7 @@ def detect_enter_area(frame: np.ndarray, min_confidence: float = 0.70) -> Option
 
     for tmpl_name in ("assets/enter_area_tight.png", "assets/enter_area.png"):
         template_path = _BASE_DIR / tmpl_name
-        if not template_path.is_file():
-            continue
-        template = cv2.imread(str(template_path), cv2.IMREAD_GRAYSCALE)
+        template = get_cached_image(template_path, cv2.IMREAD_GRAYSCALE)
         if template is None:
             continue
         th, tw = template.shape[:2]
@@ -1198,7 +1663,7 @@ def detect_enter_area(frame: np.ndarray, min_confidence: float = 0.70) -> Option
         res = asyncio.run(_ocr_ea())
         for line in res.lines:
             text_low = line.text.strip().lower()
-            if "enter" in text_low or "area" in text_low:
+            if "enter area" in text_low and line.words:
                 r = line.words[0].bounding_rect
                 cx = (r.x + r.width / 2) / w
                 cy = (y_start + r.y + r.height / 2) / h
@@ -1212,9 +1677,7 @@ def detect_enter_area(frame: np.ndarray, min_confidence: float = 0.70) -> Option
 def detect_selected(frame: np.ndarray, min_confidence: float = 0.70) -> Optional[tuple[float, float]]:
     """Detect 'Selected' confirm button in class/subject selection screen."""
     template_path = _BASE_DIR / "assets" / "selected.png"
-    if not template_path.is_file():
-        return None
-    template = cv2.imread(str(template_path), cv2.IMREAD_GRAYSCALE)
+    template = get_cached_image(template_path, cv2.IMREAD_GRAYSCALE)
     if template is None:
         return None
     h, w = frame.shape[:2]
@@ -1223,7 +1686,7 @@ def detect_selected(frame: np.ndarray, min_confidence: float = 0.70) -> Optional
     th, tw = template.shape[:2]
     best_match = None
     best_score = 0.0
-    for scale in (0.75, 0.90, 1.0, 1.15, 1.30, 1.50, 1.75, 2.00, 2.25):
+    for scale in (0.40, 0.50, 0.60, 0.65, 0.75, 0.90, 1.0, 1.15, 1.30, 1.50, 1.75, 2.00, 2.25):
         stw, sth = int(tw * scale), int(th * scale)
         if stw >= roi.shape[1] or sth >= roi.shape[0]:
             continue
@@ -1238,6 +1701,56 @@ def detect_selected(frame: np.ndarray, min_confidence: float = 0.70) -> Optional
     return None
 
 
+def detect_character_option(frame: np.ndarray, character: str = "summoner") -> Optional[tuple[float, float]]:
+    """Find the character icon inside the roster, using a scale-relative template."""
+    if not isinstance(character, str) or not re.fullmatch(r"[a-z_]+", character):
+        return None
+    path = _BASE_DIR / "assets" / "characters" / f"{character}.png"
+    template = get_cached_image(path, cv2.IMREAD_GRAYSCALE)
+    if template is None:
+        return None
+    h, w = frame.shape[:2]
+    top, bottom = int(h * 0.35), int(h * 0.89)
+    gray = cv2.cvtColor(frame[top:bottom], cv2.COLOR_BGR2GRAY)
+    th, tw = template.shape
+    best_score, best = 0.0, None
+    # Reference is the 558px-wide game canvas, without desktop chrome.
+    for factor in np.linspace(0.78, 1.24, 25):
+        scale = w / 558.0 * factor
+        sw, sh = max(2, round(tw * scale)), max(2, round(th * scale))
+        if sw >= w or sh >= gray.shape[0]:
+            continue
+        result = cv2.matchTemplate(gray, cv2.resize(template, (sw, sh)), cv2.TM_CCOEFF_NORMED)
+        _, score, _, loc = cv2.minMaxLoc(result)
+        if score > best_score:
+            best_score = score
+            best = ((loc[0] + sw / 2) / w, (top + loc[1] + sh / 2) / h)
+    return best if best_score >= 0.78 else None
+
+
+def is_character_selected(frame: np.ndarray, character: str = "summoner") -> bool:
+    """Read only the character-name header, never names in the description/grid."""
+    if not isinstance(character, str) or not re.fullmatch(r"[a-z_]+", character):
+        return False
+    h, w = frame.shape[:2]
+    roi = frame[int(h * 0.075):int(h * 0.17), int(w * 0.20):int(w * 0.80)]
+    if roi.size == 0:
+        return False
+    try:
+        import asyncio
+        import winocr
+        from PIL import Image
+
+        async def recognize():
+            return await winocr.recognize_pil(Image.fromarray(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)), lang="en")
+
+        result = asyncio.run(recognize())
+        wanted = character.replace("_", "")
+        return any(re.sub(r"[^a-z]", "", line.text.lower()) == wanted for line in result.lines)
+    except Exception:
+        return False
+
+
 def detect_start_game(frame: np.ndarray, min_confidence: float = 0.70) -> Optional[tuple[float, float]]:
     """Detect 'Start Game' button in the main title screen of Magic Survival."""
     h, w = frame.shape[:2]
@@ -1249,24 +1762,23 @@ def detect_start_game(frame: np.ndarray, min_confidence: float = 0.70) -> Option
     gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
 
     template_path = _BASE_DIR / "assets" / "start_game.png"
-    if template_path.is_file():
-        template = cv2.imread(str(template_path), cv2.IMREAD_GRAYSCALE)
-        if template is not None:
-            th, tw = template.shape[:2]
-            best_match = None
-            best_score = 0.0
-            for scale in (0.70, 0.85, 1.0, 1.15, 1.35, 1.55, 1.80, 2.05, 2.25):
-                stw, sth = int(tw * scale), int(th * scale)
-                if stw >= roi.shape[1] or sth >= roi.shape[0]:
-                    continue
-                rt = cv2.resize(template, (stw, sth))
-                res = cv2.matchTemplate(gray_roi, rt, cv2.TM_CCOEFF_NORMED)
-                _, max_val, _, max_loc = cv2.minMaxLoc(res)
-                if max_val > best_score:
-                    best_score = max_val
-                    best_match = (max_loc[0] + stw // 2, y_start + max_loc[1] + sth // 2)
-            if best_score >= min_confidence and best_match:
-                return (round(best_match[0] / w, 4), round(best_match[1] / h, 4))
+    template = get_cached_image(template_path, cv2.IMREAD_GRAYSCALE)
+    if template is not None:
+        th, tw = template.shape[:2]
+        best_match = None
+        best_score = 0.0
+        for scale in (0.70, 0.85, 1.0, 1.15, 1.35, 1.55, 1.80, 2.05, 2.25):
+            stw, sth = int(tw * scale), int(th * scale)
+            if stw >= roi.shape[1] or sth >= roi.shape[0]:
+                continue
+            rt = cv2.resize(template, (stw, sth))
+            res = cv2.matchTemplate(gray_roi, rt, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+            if max_val > best_score:
+                best_score = max_val
+                best_match = (max_loc[0] + stw // 2, y_start + max_loc[1] + sth // 2)
+        if best_score >= min_confidence and best_match:
+            return (round(best_match[0] / w, 4), round(best_match[1] / h, 4))
 
     # OCR Fallback
     try:
@@ -1296,6 +1808,60 @@ def detect_start_game(frame: np.ndarray, min_confidence: float = 0.70) -> Option
     return None
 
 
+def detect_main_screen_currencies(frame: np.ndarray) -> dict[str, Optional[int]]:
+    """Detect Gold and Gems counts on the main title screen / lobby of Magic Survival.
+    Returns dict: {'gold': Optional[int], 'gems': Optional[int]}.
+    """
+    if frame is None or frame.size == 0:
+        return {"gold": None, "gems": None}
+
+    h, w = frame.shape[:2]
+    # Gold and Gem counters reside in the top-left area:
+    # Row 1 (Gold): y: ~1.5%..5.0%, x: ~8%..35%
+    # Row 2 (Gems): y: ~5.0%..9.0%, x: ~8%..35%
+    gold_roi = frame[int(h * 0.015):int(h * 0.050), int(w * 0.08):int(w * 0.35)]
+    gem_roi = frame[int(h * 0.050):int(h * 0.090), int(w * 0.08):int(w * 0.35)]
+
+    def _parse_currency_crop(crop: np.ndarray) -> Optional[int]:
+        if crop.size == 0 or crop.shape[0] < 5 or crop.shape[1] < 10:
+            return None
+        scale = max(1.0, 100.0 / crop.shape[0])
+        rw, rh = int(crop.shape[1] * scale), int(crop.shape[0] * scale)
+        scaled = cv2.resize(crop, (rw, rh), interpolation=cv2.INTER_CUBIC)
+        try:
+            import asyncio
+            import winocr
+            from PIL import Image
+
+            async def _ocr(p_img):
+                return await winocr.recognize_pil(p_img, lang="en")
+
+            pil_img = Image.fromarray(cv2.cvtColor(scaled, cv2.COLOR_BGR2RGB))
+            res = asyncio.run(_ocr(pil_img))
+            text = " ".join(line.text for line in res.lines)
+            digits = re.sub(r"[^\d]", "", text)
+            if digits:
+                return int(digits)
+
+            # Pass 2: normalized contrast for dimmed / dark backgrounds
+            gray = cv2.cvtColor(scaled, cv2.COLOR_BGR2GRAY)
+            norm = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
+            pil_norm = Image.fromarray(norm)
+            res_norm = asyncio.run(_ocr(pil_norm))
+            text_norm = " ".join(line.text for line in res_norm.lines)
+            digits_norm = re.sub(r"[^\d]", "", text_norm)
+            if digits_norm:
+                return int(digits_norm)
+        except Exception:
+            pass
+        return None
+
+    return {
+        "gold": _parse_currency_crop(gold_roi),
+        "gems": _parse_currency_crop(gem_roi),
+    }
+
+
 def detect_die_button(frame: np.ndarray, min_confidence: float = 0.68) -> Optional[tuple[float, float]]:
     """Detect 'Die' button (skull icon + 'Die' text) on the 'Life or Death' screen.
 
@@ -1304,9 +1870,7 @@ def detect_die_button(frame: np.ndarray, min_confidence: float = 0.68) -> Option
     of the full template) so the click lands squarely on 'Die' instead of the black gap above it.
     """
     template_path = _BASE_DIR / "assets" / "die_button.png"
-    if not template_path.is_file():
-        return None
-    template = cv2.imread(str(template_path), cv2.IMREAD_GRAYSCALE)
+    template = get_cached_image(template_path, cv2.IMREAD_GRAYSCALE)
     if template is None:
         return None
     h, w = frame.shape[:2]
@@ -1348,7 +1912,7 @@ def detect_die_button(frame: np.ndarray, min_confidence: float = 0.68) -> Option
     if best_score >= min_confidence and best_match:
         return (round(best_match[0] / w, 4), round(best_match[1] / h, 4))
 
-    # 3. Fallback via Windows OCR: Look for 'Die', 'Revive', or 'Life or Death'
+    # 3. OCR must locate the actual Die word, never infer its position from Revive.
     try:
         import asyncio
         import winocr
@@ -1369,21 +1933,54 @@ def detect_die_button(frame: np.ndarray, min_confidence: float = 0.68) -> Option
                         cx = x0 + r.x + r.width / 2
                         cy = y0 + r.y + r.height / 2
                         return (round(cx / w, 4), round(cy / h, 4))
-            if "revive" in t or "life or death" in t or "death" in t:
-                # If Revive or Life or Death is seen, Die button is situated squarely at (0.50, 0.73)
-                return (0.50, 0.73)
     except Exception:
         pass
 
     return None
 
 
+def detect_verified_die_text(frame: np.ndarray) -> Optional[tuple[float, float]]:
+    """Independent text verification before a tap near the rewarded Revive button."""
+    h, w = frame.shape[:2]
+    x0, y0 = int(w * 0.20), int(h * 0.55)
+    roi = frame[y0:int(h * 0.90), x0:int(w * 0.80)]
+    if roi.size == 0:
+        return None
+    try:
+        import asyncio
+        import winocr
+        from PIL import Image
+
+        async def recognize(image):
+            return await winocr.recognize_pil(Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB)), lang="en")
+
+        # The game's large stylized font is sometimes missed at native resolution.
+        # Retry smaller text, mapping the measured word box back to the same frame.
+        for scale in (1.0, min(1.0, 180.0 / roi.shape[1])):
+            image = roi if scale == 1.0 else cv2.resize(roi, (180, max(1, round(roi.shape[0] * scale))))
+            result = asyncio.run(recognize(image))
+            candidates, revive_y = [], []
+            for line in result.lines:
+                for word in line.words:
+                    text = word.text.strip().lower()
+                    r = word.bounding_rect
+                    point = ((x0 + (r.x + r.width / 2) / scale) / w,
+                             (y0 + (r.y + r.height / 2) / scale) / h)
+                    if text == "die":
+                        candidates.append(point)
+                    elif text == "revive":
+                        revive_y.append(point[1])
+            if len(candidates) == 1 and all(candidates[0][1] > y for y in revive_y):
+                return candidates[0]
+    except Exception:
+        pass
+    return None
+
+
 def detect_obtain_button(frame: np.ndarray, min_confidence: float = 0.68) -> Optional[tuple[float, float]]:
     """Detect the 'Obtain' confirm button at the bottom of the Treasure Chest popup."""
     template_path = _BASE_DIR / "assets" / "obtain_button.png"
-    if not template_path.is_file():
-        return None
-    template = cv2.imread(str(template_path), cv2.IMREAD_GRAYSCALE)
+    template = get_cached_image(template_path, cv2.IMREAD_GRAYSCALE)
     if template is None:
         return None
     h, w = frame.shape[:2]
@@ -1589,10 +2186,10 @@ def compute_skill_synergy_bonus(full_text: str, active_skills: Optional[set[str]
         if s_key in COMBINATION_COMPONENTS:
             expanded_skills.update(COMBINATION_COMPONENTS[s_key])
 
-    for s_key in expanded_skills:
+    for s_key in sorted(expanded_skills):
         std_name = s_key.replace("_", " ")
         kw_list = SKILL_SYNERGY_KEYWORDS.get(s_key, [std_name])
-        if any(kw in text_lower for kw in kw_list):
+        if any(_match_keyword(kw, text_lower) for kw in kw_list):
             m_title = std_name.title()
             if m_title not in matched_skills:
                 matched_skills.append(m_title)
@@ -1712,6 +2309,7 @@ def evaluate_selected_chest_artifact(
             tier = 2
 
     artifact_name = ""
+    full_text = ""
     has_s_tier = False
     has_crit = False
     has_cooldown = False
@@ -1828,9 +2426,7 @@ def detect_buy_button(frame: np.ndarray, min_confidence: float = 0.65) -> Option
     gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     for tmpl_name in ("buy_button_tight.png", "buy_button.png"):
         template_path = _BASE_DIR / "assets" / tmpl_name
-        if not template_path.is_file():
-            continue
-        template = cv2.imread(str(template_path), cv2.IMREAD_GRAYSCALE)
+        template = get_cached_image(template_path, cv2.IMREAD_GRAYSCALE)
         if template is None:
             continue
         th, tw = template.shape[:2]
@@ -1875,6 +2471,8 @@ def detect_buy_button(frame: np.ndarray, min_confidence: float = 0.65) -> Option
 
 def detect_shop_x_button(frame: np.ndarray, min_confidence: float = 0.65) -> Optional[tuple[float, float]]:
     """Detect 'X' close button at the top-right of the Merchant Shop screen."""
+    if detect_buy_button(frame) is None:
+        return None
     h, w = frame.shape[:2]
     y0, y1 = int(h * 0.02), int(h * 0.14)
     x0, x1 = int(w * 0.80), int(w * 0.99)
@@ -1885,9 +2483,7 @@ def detect_shop_x_button(frame: np.ndarray, min_confidence: float = 0.65) -> Opt
     gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     for tmpl_name in ("shop_x_tight.png", "shop_x_button.png", "ad_close_x.png"):
         template_path = _BASE_DIR / "assets" / tmpl_name
-        if not template_path.is_file():
-            continue
-        template = cv2.imread(str(template_path), cv2.IMREAD_GRAYSCALE)
+        template = get_cached_image(template_path, cv2.IMREAD_GRAYSCALE)
         if template is None:
             continue
         th, tw = template.shape[:2]
@@ -2000,6 +2596,7 @@ def evaluate_selected_shop_artifact(
             tier = 2
 
     artifact_name = ""
+    full_text = ""
     has_s_tier = False
     has_crit = False
     has_cooldown = False
@@ -2113,25 +2710,24 @@ def detect_learn_button(frame: np.ndarray, min_confidence: float = 0.65) -> Opti
     if roi.size == 0:
         return None
 
-    if template_path.is_file():
-        template = cv2.imread(str(template_path), cv2.IMREAD_GRAYSCALE)
-        if template is not None:
-            gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-            th, tw = template.shape[:2]
-            best_match = None
-            best_score = 0.0
-            for scale in (0.75, 0.90, 1.0, 1.15, 1.30, 1.50, 1.80, 2.00, 2.20):
-                stw, sth = int(tw * scale), int(th * scale)
-                if stw >= roi.shape[1] or sth >= roi.shape[0]:
-                    continue
-                rt = cv2.resize(template, (stw, sth))
-                res = cv2.matchTemplate(gray_roi, rt, cv2.TM_CCOEFF_NORMED)
-                _, max_val, _, max_loc = cv2.minMaxLoc(res)
-                if max_val > best_score:
-                    best_score = max_val
-                    best_match = (x0 + max_loc[0] + stw // 2, y0 + max_loc[1] + sth // 2)
-            if best_score >= min_confidence and best_match:
-                return (round(best_match[0] / w, 4), round(best_match[1] / h, 4))
+    template = get_cached_image(template_path, cv2.IMREAD_GRAYSCALE)
+    if template is not None:
+        gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        th, tw = template.shape[:2]
+        best_match = None
+        best_score = 0.0
+        for scale in (0.75, 0.90, 1.0, 1.15, 1.30, 1.50, 1.80, 2.00, 2.20):
+            stw, sth = int(tw * scale), int(th * scale)
+            if stw >= roi.shape[1] or sth >= roi.shape[0]:
+                continue
+            rt = cv2.resize(template, (stw, sth))
+            res = cv2.matchTemplate(gray_roi, rt, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+            if max_val > best_score:
+                best_score = max_val
+                best_match = (x0 + max_loc[0] + stw // 2, y0 + max_loc[1] + sth // 2)
+        if best_score >= min_confidence and best_match:
+            return (round(best_match[0] / w, 4), round(best_match[1] / h, 4))
 
     # Fast OCR fallback for 'Learn' button
     try:
@@ -2268,7 +2864,7 @@ def is_learn_button_active(frame: np.ndarray) -> bool:
 
 class CardChoice(tuple):
     """2-tuple (card_index, target_coords) with optional .label, .skill_key, .trait_key."""
-    def __new__(cls, idx: int, target: tuple[float, float], label: str = "", skill_key: str = "", trait_key: str = ""):
+    def __new__(cls, idx: int, target: Optional[tuple[float, float]], label: str = "", skill_key: str = "", trait_key: str = ""):
         return super().__new__(cls, (idx, target))
 
     def __init__(self, idx: int, target: tuple[float, float], label: str = "", skill_key: str = "", trait_key: str = ""):
@@ -2277,6 +2873,7 @@ class CardChoice(tuple):
         self.label = label
         self.skill_key = skill_key
         self.trait_key = trait_key
+        self.offered_level: Optional[int] = None
 
 
 DEFAULT_SKILL_PRIORITY = [
@@ -2298,6 +2895,7 @@ DEFAULT_SKILL_PRIORITY = [
     "frost_nova",
     "tsunami",
     # 5. Flash Shock & Meta Support Combinations
+    "electric_zone",
     "flash_shock",
     "perpetual_engine",
     "overmind",
@@ -2433,6 +3031,117 @@ SKILL_ALIASES: dict[str, list[str]] = {
     "mutation": ["mutation", "mutant"],
 }
 
+# Human-readable skill display names
+READABLE_SKILL_NAMES: dict[str, str] = {
+    # Combinations (Fusion Magics)
+    "telekinetic_sword": "Telekinetic Sword [Hợp thể]",
+    "superconductivity": "Superconductivity [Hợp thể]",
+    "current_overload": "Current Overload [Hợp thể]",
+    "black_hole": "Black Hole [Hợp thể]",
+    "vortex": "Vortex [Hợp thể]",
+    "neutron_generation": "Neutron Generation [Hợp thể]",
+    "perpetual_engine": "Perpetual Engine [Hợp thể]",
+    "overmind": "Overmind [Hợp thể]",
+    "demon_equation": "Demon Equation [Hợp thể]",
+    "frenzy": "Frenzy [Hợp thể]",
+    "prism_spree": "Prism Spree [Hợp thể]",
+    "blast_furnace": "Blast Furnace [Hợp thể]",
+    "inferno": "Inferno [Hợp thể]",
+    "avatar": "Avatar [Hợp thể]",
+    "hyperion": "Hyperion [Hợp thể]",
+    "great_rift": "Great Rift [Hợp thể]",
+    "bloody_sacrament": "Bloody Sacrament [Hợp thể]",
+    "deus_ex_machina": "Deus Ex Machina [Hợp thể]",
+    "breath_of_fire": "Breath of Fire [Hợp thể]",
+    "winter_storm": "Winter Storm [Hợp thể]",
+    "flying_swords": "Flying Swords [Hợp thể]",
+    "door_of_creation": "Door of Creation [Hợp thể]",
+    "gate_of_creation": "Gate of Creation [Hợp thể]",
+    "runaway_electricity": "Runaway Electricity [Hợp thể]",
+    "heart_of_lightning": "Heart of Lightning [Hợp thể]",
+    "master_of_storms": "Master of Storms [Hợp thể]",
+    "lightning_breath": "Lightning Breath [Hợp thể]",
+    "brand_of_fire": "Brand of Fire [Hợp thể]",
+    "plasma_beam": "Plasma Beam [Hợp thể]",
+    "pandemonium": "Pandemonium [Hợp thể]",
+    "deluge": "Deluge [Hợp thể]",
+    "war_climate": "War Climate [Hợp thể]",
+    "meissner_effect": "Meissner Effect [Hợp thể]",
+    "genesis": "Genesis [Hợp thể]",
+
+    # Active Magics
+    "spirit": "Spirit",
+    "electric_shock": "Electric Shock",
+    "cyclone": "Cyclone",
+    "satellite": "Satellite",
+    "blizzard": "Blizzard",
+    "frost_nova": "Frost Nova",
+    "tsunami": "Tsunami",
+    "flash_shock": "Flash Shock",
+    "magic_circle": "Magic Circle",
+    "shield": "Shield",
+    "cloaking": "Cloaking",
+    "armageddon": "Armageddon",
+    "electric_zone": "Electric Zone",
+    "arcane_ray": "Arcane Ray",
+    "fireball": "Fireball",
+    "meteor": "Meteor",
+    "thunderstorm": "Thunderstorm",
+    "incineration": "Incineration",
+    "energy_bolt": "Energy Bolt",
+    "lava_zone": "Lava Zone",
+    "magic_bullet": "Magic Bullet",
+    "magic_bolt": "Magic Bolt",
+
+    # Passive Magics
+    "fast_casting": "Fast Casting",
+    "haste": "Haste",
+    "snipe": "Snipe",
+    "vitality": "Vitality",
+    "intelligence": "Intelligence",
+    "arcane_effuse": "Arcane Effuse",
+    "concentration": "Concentration",
+    "explorer": "Explorer",
+    "growth": "Growth",
+    "curse": "Curse",
+    "blood_thirst": "Blood Thirst",
+    "proliferation": "Proliferation",
+}
+
+# Starting inherent skills for characters in Magic Survival
+CHARACTER_STARTING_SKILLS: dict[str, str] = {
+    "summoner": "spirit",
+    "electromancer": "electric_zone",
+    "bishop": "shield",
+    "sorcerer": "cyclone",
+    "elementalist": "fireball",
+    "mage": "electric_shock",
+    "wizard": "magic_bolt",
+    "witch": "fireball",
+    "shaman": "thunderstorm",
+    "astronomer": "satellite",
+    "druid": "cyclone",
+    "warlord": "magic_circle",
+    "dark_mage": "armageddon",
+}
+
+
+def get_readable_skill_name(skill_key: str) -> str:
+    """Return a clean human-readable name for any skill key."""
+    if not skill_key:
+        return "Unknown"
+    norm = skill_key.strip().lower()
+    if norm in READABLE_SKILL_NAMES:
+        return READABLE_SKILL_NAMES[norm]
+    # Check aliases
+    for key, aliases in SKILL_ALIASES.items():
+        if norm == key or norm in aliases:
+            if key in READABLE_SKILL_NAMES:
+                return READABLE_SKILL_NAMES[key]
+            return key.replace("_", " ").title()
+    return norm.replace("_", " ").title()
+
+
 # Maximum level caps for skills in Magic Survival
 SKILL_MAX_LEVELS: dict[str, int] = {
     # Active Magics (Max Level 7)
@@ -2530,12 +3239,13 @@ FREEZE_TRAITS: list[str] = [
     "ice age", "iceage",
 ]
 
-# Combination traits for component magics (Spirit, Electric Shock, Cyclone, Satellite, Flash Shock, Magic Circle)
+# Combination traits for component magics (Spirit, Electric Shock, Cyclone, Satellite, Flash Shock, Magic Circle, Electric Zone)
 COMBINATION_TRAITS: list[str] = [
     "magic blade", "chain lightning", "familiar", "superconductivity",
     "void", "anti-gravity", "antigravity", "nuclear fission", "nuclear fusion", "electric orb",
     "extreme weather", "hurricane", "climate change", "tornado", "deep breath",
     "unleash mana", "great magic circle", "devil's nails", "devils nails", "raving",
+    "emp", "fire aura", "static", "high voltage", "microburst",
 ]
 
 # Meta Survival Support Traits (Shield, Cloaking, Armageddon)
@@ -2629,6 +3339,7 @@ class CardSlotData:
     special_passive_name: str = ""
     has_special_artifact: bool = False
     is_maxed: bool = False
+    offered_level: Optional[int] = None
 
 
 def _detect_cards_ocr(frame: np.ndarray, h: int, w: int) -> dict[int, CardSlotData]:
@@ -2675,7 +3386,7 @@ def _detect_cards_ocr(frame: np.ndarray, h: int, w: int) -> dict[int, CardSlotDa
                 continue
             avg_y = (y_crop_top + sum(wd.bounding_rect.y + wd.bounding_rect.height / 2 for wd in line.words) / len(line.words)) / h
 
-            if "select magic" in line_text or "mana" in line_text:
+            if "select magic" in line_text or ("mana" in line_text and "retrieve" in line_text):
                 continue
 
             card_idx = None
@@ -2756,6 +3467,9 @@ def _detect_cards_ocr(frame: np.ndarray, h: int, w: int) -> dict[int, CardSlotDa
                 continue
 
             full_card_text = " ".join(card.text_lines)
+            level_match = re.search(r"\b(?:lv\.?|level)\s*(\d{1,2})\b", full_card_text)
+            if level_match and 1 <= int(level_match[1]) <= 10:
+                card.offered_level = int(level_match[1])
             if any(m in full_card_text for m in ("(max)", "[max]", "(max", "max)", "lv max", "lv. max", "level max", "max level", "maxed")) or bool(re.search(r'\b(lv\.?\s*max|max\s*level|maxed)\b', full_card_text)):
                 card.is_maxed = True
 
@@ -2794,8 +3508,10 @@ def _detect_cards_ocr(frame: np.ndarray, h: int, w: int) -> dict[int, CardSlotDa
                             if skill_key not in title_skills:
                                 title_skills.append(skill_key)
                             break
+                if title_skills:
+                    break  # The first recognized title outranks skill names in its description.
             if title_skills:
-                card.skills.extend(title_skills)
+                card.skills = list(dict.fromkeys(card.skills + title_skills))
             else:
                 for line in card.text_lines[2:]:
                     for skill_key, aliases in SKILL_ALIASES.items():
@@ -2904,9 +3620,27 @@ class LevelUpDetection(tuple):
 def is_level_up_screen(frame: np.ndarray) -> LevelUpDetection:
     """Detect if the 3 vertical level-up card slots are present on screen.
     Returns LevelUpDetection(True, reason) when skill/trait upgrade choices are visible during a run.
-    Guarantees 0% false positives during active combat and gameplay.
+    Rejects known menus and bright gameplay before inspecting card text.
     """
-    # 1. Negative checks: Ensure no other modal/menu screen is active
+    h, w = frame.shape[:2]
+
+    # 1. Fast visual card darkness verification (< 0.05ms):
+    # A genuine level-up screen dims the background and features 3 dark card panels (mean BGR <= 38.0).
+    # Active combat ground and spell explosions are bright (mean BGR >= 58.0 to 150.0).
+    # Reject bright gameplay frames immediately to prevent running 12 heavy template matches during combat!
+    c1 = frame[int(h * 0.30):int(h * 0.42), int(w * 0.15):int(w * 0.85)]
+    c2 = frame[int(h * 0.46):int(h * 0.56), int(w * 0.15):int(w * 0.85)]
+    c3 = frame[int(h * 0.60):int(h * 0.70), int(w * 0.15):int(w * 0.85)]
+    if c1.size > 0 and c2.size > 0 and c3.size > 0:
+        card_mean = (float(c1.mean()) + float(c2.mean()) + float(c3.mean())) / 3.0
+        if card_mean > 38.0:
+            return LevelUpDetection(False, f"gameplay_ground_bright_{card_mean:.1f}")
+
+    # Fast positive check: Glowing red/pink combination star confirms level up screen immediately!
+    if detect_combination_star(frame) is not None:
+        return LevelUpDetection(True, "combination_star_active")
+
+    # 2. Negative checks: Ensure no other modal/menu screen is active
     if detect_obtain_button(frame) is not None or is_chest_screen(frame):
         return LevelUpDetection(False, "obtain_button")
     if detect_buy_button(frame) is not None:
@@ -2931,24 +3665,6 @@ def is_level_up_screen(frame: np.ndarray) -> LevelUpDetection:
         return LevelUpDetection(False, "settings_dialog")
     if detect_settings_gear(frame) is not None:
         return LevelUpDetection(False, "settings_gear")
-
-    h, w = frame.shape[:2]
-
-    # Fast positive check: Glowing red/pink combination star confirms level up screen immediately!
-    if detect_combination_star(frame) is not None:
-        return LevelUpDetection(True, "combination_star_active")
-
-    # 2. Visual card darkness verification:
-    # A genuine level-up screen dims the background and features 3 dark card panels (mean BGR <= 30.0).
-    # Active combat ground and spell explosions are bright (mean BGR >= 58.0 to 150.0).
-    # Reject bright gameplay frames immediately (< 0.05ms) to prevent combat false positives!
-    c1 = frame[int(h * 0.30):int(h * 0.42), int(w * 0.15):int(w * 0.85)]
-    c2 = frame[int(h * 0.46):int(h * 0.56), int(w * 0.15):int(w * 0.85)]
-    c3 = frame[int(h * 0.60):int(h * 0.70), int(w * 0.15):int(w * 0.85)]
-    if c1.size > 0 and c2.size > 0 and c3.size > 0:
-        card_mean = (float(c1.mean()) + float(c2.mean()) + float(c3.mean())) / 3.0
-        if card_mean > 38.0:
-            return LevelUpDetection(False, f"gameplay_ground_bright_{card_mean:.1f}")
 
     # 3. Check OCR on the 3 card slots (y = 0.28..0.74, x = 0.10..0.90)
     ocr_cards = _detect_cards_ocr(frame, h, w)
@@ -2975,7 +3691,7 @@ def is_level_up_screen(frame: np.ndarray) -> LevelUpDetection:
         async def _h():
             return await winocr.recognize_pil(Image.fromarray(cv2.cvtColor(h_roi, cv2.COLOR_BGR2RGB)), lang="en")
         h_res = asyncio.run(_h())
-        if any("select magic" in l.text.lower() or "current level" in l.text.lower() or "magic combination" in l.text.lower() or "select attribute" in l.text.lower() for l in h_res.lines):
+        if any("select magic" in l.text.lower() for l in h_res.lines):
             return LevelUpDetection(True, "header_level_up")
     except Exception:
         pass
@@ -2997,15 +3713,12 @@ def is_level_up_screen(frame: np.ndarray) -> LevelUpDetection:
     return LevelUpDetection(False, "none")
 
 
-def detect_combination_star(frame: np.ndarray, threshold: float = 0.58) -> Optional[tuple[float, float]]:
+def detect_combination_star(frame: np.ndarray, threshold: float = 0.65) -> Optional[tuple[float, float]]:
     """Detect the glowing red/pink 7-pointed Combination Star in the upper-right corner of the level-up screen.
     Returns relative coords (x, y) if a fusion is unlocked and available to be learned.
     Strictly verifies that the star is ACTIVELY GLOWING RED/PINK.
     When the star is dull/grey/inactive (no fusion available), returns None!
     """
-    if is_attribute_screen(frame) or is_chest_screen(frame) or detect_die_button(frame) is not None:
-        return None
-
     h, w = frame.shape[:2]
     # Combination star is strictly situated in the upper right corner (y: 6%..22%, x: 76%..98%)
     y0, y1 = int(h * 0.06), int(h * 0.22)
@@ -3023,6 +3736,8 @@ def detect_combination_star(frame: np.ndarray, threshold: float = 0.58) -> Optio
     total_red = int(np.sum(red_mask))
     if total_red < 150:
         return None
+    if is_attribute_screen(frame) or is_chest_screen(frame) or detect_die_button(frame) is not None:
+        return None
 
     # Match the star itself before considering its color. Other red game effects can
     # appear in this corner, so a red contour alone is not evidence of a fusion.
@@ -3030,43 +3745,28 @@ def detect_combination_star(frame: np.ndarray, threshold: float = 0.58) -> Optio
     best_score = 0.0
     best_pos = None
 
-    if tmpl_path.is_file():
-        tmpl = cv2.imread(str(tmpl_path))
-        if tmpl is not None:
-            rh, rw = roi.shape[:2]
-            for scale in (0.70, 0.80, 0.85, 0.95, 1.05, 1.20, 1.35, 1.50, 1.70, 1.85, 2.00, 2.15):
-                th, tw = int(tmpl.shape[0] * scale), int(tmpl.shape[1] * scale)
-                if th >= rh or tw >= rw:
-                    continue
-                t = cv2.resize(tmpl, (tw, th))
-                res = cv2.matchTemplate(roi, t, cv2.TM_CCOEFF_NORMED)
-                _, max_val, _, max_loc = cv2.minMaxLoc(res)
-                if max_val > best_score:
-                    m_roi_red = red_mask[max_loc[1] : max_loc[1] + th, max_loc[0] : max_loc[0] + tw]
-                    if np.sum(m_roi_red) >= max(100, int(th * tw * 0.05)):
-                        best_score = max_val
-                        best_pos = (
-                            round(float(max_loc[0] + tw / 2 + x0) / w, 3),
-                            round(float(max_loc[1] + th / 2 + y0) / h, 3),
-                        )
-            if best_score >= threshold and best_pos:
-                return best_pos
+    tmpl = get_cached_image(tmpl_path)
+    if tmpl is not None:
+        rh, rw = roi.shape[:2]
+        for scale in (0.70, 0.80, 0.85, 0.95, 1.0, 1.05, 1.20, 1.35, 1.50, 1.70, 1.85, 2.00, 2.15):
+            th, tw = int(tmpl.shape[0] * scale), int(tmpl.shape[1] * scale)
+            if th >= rh or tw >= rw:
+                continue
+            t = cv2.resize(tmpl, (tw, th))
+            res = cv2.matchTemplate(roi, t, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+            if max_val > best_score:
+                m_roi_red = red_mask[max_loc[1] : max_loc[1] + th, max_loc[0] : max_loc[0] + tw]
+                if np.sum(m_roi_red) >= max(150, int(th * tw * 0.08)):
+                    best_score = max_val
+                    best_pos = (
+                        round(float(max_loc[0] + tw / 2 + x0) / w, 3),
+                        round(float(max_loc[1] + th / 2 + y0) / h, 3),
+                    )
+        if best_score >= threshold and best_pos:
+            return best_pos
 
-    # Connected component fallback: centroid of the red hollow star cluster
-    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(red_mask, 8)
-    for i in range(1, num_labels):
-        area = stats[i, cv2.CC_STAT_AREA]
-        cw = stats[i, cv2.CC_STAT_WIDTH]
-        ch = stats[i, cv2.CC_STAT_HEIGHT]
-        aspect = float(cw) / max(1, ch)
-        extent = float(area) / max(1, cw * ch)
-        if area >= max(160, int(roi.shape[0] * roi.shape[1] * 0.03)) and 0.60 <= aspect <= 1.40 and 0.15 <= extent <= 0.60:
-            cx, cy = centroids[i]
-            return (
-                round(float(x0 + cx) / w, 3),
-                round(float(y0 + cy) / h, 3),
-            )
-
+    # Red rings/projectiles also form hollow clusters; they are not clickable stars.
     return None
 
 
@@ -3090,6 +3790,8 @@ def find_best_combination_option(
 
         res = asyncio.run(_do())
         if not res or not res.lines:
+            return None
+        if not any("magic combination" in line.text.lower() for line in res.lines):
             return None
 
         # Build prioritized combination list
@@ -3120,10 +3822,12 @@ def find_best_combination_option(
             words_x = [wd.bounding_rect.x + wd.bounding_rect.width / 2 for wd in line.words]
             avg_x = sum(words_x) / len(words_x) / w
             avg_y = sum(words_y) / len(words_y) / h
+            if not (0.15 <= avg_y <= 0.85):
+                continue
 
             for std_key, aliases in SKILL_ALIASES.items():
-                if any(a in line_text for a in aliases):
-                    if std_key in known_combos or "sword" in line_text or "hole" in line_text:
+                if any(_match_keyword(a, line_text) for a in aliases):
+                    if std_key in known_combos:
                         rank = len(normalized_priority)
                         if std_key in normalized_priority:
                             rank = normalized_priority.index(std_key)
@@ -3141,6 +3845,30 @@ def find_best_combination_option(
     return None
 
 
+def detect_player_level(frame: np.ndarray) -> Optional[int]:
+    """Read the player's Current Level header, never a skill's Lv on a card."""
+    h, w = frame.shape[:2]
+    roi = frame[int(h * 0.08):int(h * 0.28), int(w * 0.08):int(w * 0.92)]
+    if not roi.size:
+        return None
+    try:
+        import asyncio
+        import winocr
+        from PIL import Image
+
+        async def read():
+            return await winocr.recognize_pil(Image.fromarray(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB)), lang="en")
+
+        result = asyncio.run(read())
+        text = " ".join(line.text for line in result.lines)
+        match = re.search(r"\bcurrent\s+level\s*[:.\-]?\s*(\d{1,3})\b", text, re.I)
+        if match and 1 <= int(match[1]) <= 200:
+            return int(match[1])
+    except Exception:
+        pass
+    return None
+
+
 def choose_best_artifact_or_card(
     frame: np.ndarray,
     default_choice: int = 1,
@@ -3149,6 +3877,10 @@ def choose_best_artifact_or_card(
     prefer_freeze_traits: bool = True,
     active_skills: Optional[set[str]] = None,
     maxed_skills: Optional[set[str]] = None,
+    learner=None,
+    skill_levels: Optional[dict[str, int]] = None,
+    level_count: int = 1,
+    early_priority_skills: Optional[dict[str, dict]] = None,
 ) -> CardChoice:
     """Evaluate 3 vertical card slots using Wiki & Reddit Meta Tier List:
     1. Trait choices: Freeze traits (Sub-Zero, Absolute Zero, Pole) -> Combination traits
@@ -3166,10 +3898,21 @@ def choose_best_artifact_or_card(
     all_indices = tuple(ocr_cards.keys())
     tmpl_matches = _detect_skills_templates(frame, h, w, num_cards=num_cards)
 
-    # Filter out skills that are already MAXED
-    if maxed_skills:
-        for idx in all_indices:
-            ocr_cards[idx].skills = [s for s in ocr_cards[idx].skills if s not in maxed_skills]
+    # Exclude the whole unavailable slot in every branch, including traits,
+    # special passives, artifact scores and the default fallback. Do not mutate OCR.
+    all_indices = tuple(
+        idx for idx in all_indices
+        if not ocr_cards[idx].is_maxed
+        and not (maxed_skills and ocr_cards[idx].skills
+                 and all(sk in maxed_skills for sk in ocr_cards[idx].skills))
+    )
+    if not all_indices:
+        return CardChoice(0, None, "Không có thẻ hợp lệ")
+
+    def make_choice(idx, target, label="", skill_key="", trait_key=""):
+        result = CardChoice(idx, target, label, skill_key, trait_key)
+        result.offered_level = ocr_cards[idx].offered_level
+        return result
 
     # Evaluate candidate skills per slot:
     # If OCR recognized a skill or special passive on this slot, DO NOT let template matching inject false skills!
@@ -3204,6 +3947,8 @@ def choose_best_artifact_or_card(
     tier_names = {5: "Legendary", 4: "Special", 3: "Epic", 2: "Rare", 1: "Normal"}
 
     for idx, (y0, y1) in bands.items():
+        if idx not in all_indices:
+            continue
         roi = hsv[y0:y1, x0:x1]
         if roi.size == 0:
             continue
@@ -3228,7 +3973,7 @@ def choose_best_artifact_or_card(
         card_full_text = " ".join(ocr_cards[idx].text_lines).lower()
         if is_toy_castle_artifact(card_full_text):
             target = get_upgrade_target(idx, num_cards=num_cards)
-            return CardChoice(idx, target, "★ Cổ Vật Tuyệt Đối: Toy Castle (MagicToys)")
+            return make_choice(idx, target, "★ Cổ Vật Tuyệt Đối: Toy Castle (MagicToys)")
 
     # 1. CHECK TRAIT CHOICES (FREEZE TRAITS -> COMBO TRAITS -> META SUPPORT TRAITS)
     if prefer_freeze_traits:
@@ -3237,21 +3982,59 @@ def choose_best_artifact_or_card(
                 f_trait = ocr_cards[idx].freeze_traits[0]
                 trait_name = f_trait.title()
                 target = get_upgrade_target(idx, num_cards=num_cards)
-                return CardChoice(idx, target, f"Nhánh Đóng Băng: {trait_name}", trait_key=f_trait)
+                return make_choice(idx, target, f"Nhánh Đóng Băng: {trait_name}", trait_key=f_trait)
 
     for idx in all_indices:
         if ocr_cards[idx].combo_traits:
             c_trait = ocr_cards[idx].combo_traits[0]
             trait_name = c_trait.title()
             target = get_upgrade_target(idx, num_cards=num_cards)
-            return CardChoice(idx, target, f"Nhánh Hợp Thể: {trait_name}", trait_key=c_trait)
+            return make_choice(idx, target, f"Nhánh Hợp Thể: {trait_name}", trait_key=c_trait)
 
     for idx in all_indices:
         if ocr_cards[idx].support_traits:
             s_trait = ocr_cards[idx].support_traits[0]
             trait_name = s_trait.title()
             target = get_upgrade_target(idx, num_cards=num_cards)
-            return CardChoice(idx, target, f"Nhánh Hỗ Trợ Meta: {trait_name}", trait_key=s_trait)
+            return make_choice(idx, target, f"Nhánh Hỗ Trợ Meta: {trait_name}", trait_key=s_trait)
+
+    # 1.5. CHECK EARLY PRIORITY SKILLS (e.g. Electric Zone up to Lv 3-4 in first 10 levels for early survival)
+    effective_early_skills = (
+        early_priority_skills
+        if early_priority_skills is not None
+        else {"electric_zone": {"target_level": 4, "max_player_level": 10}}
+    )
+    if effective_early_skills:
+        for early_skill, early_cfg in effective_early_skills.items():
+            max_pl = early_cfg.get("max_player_level", 10)
+            target_lvl = early_cfg.get("target_level", 4)
+            if level_count <= max_pl:
+                curr_sk_lvl = (skill_levels or {}).get(
+                    early_skill,
+                    1 if (active_skills and early_skill in active_skills) else 0,
+                )
+                if curr_sk_lvl < target_lvl:
+                    for idx in all_indices:
+                        if ocr_cards[idx].is_maxed or (maxed_skills and early_skill in maxed_skills):
+                            continue
+                        c_skills = slot_skills.get(idx, [])
+                        c_full_text = " ".join(ocr_cards[idx].text_lines).lower()
+                        is_match = (early_skill in c_skills) or any(
+                            _match_keyword(a, c_full_text) for a in SKILL_ALIASES.get(early_skill, [early_skill])
+                        )
+                        if is_match:
+                            offered_lvl = ocr_cards[idx].offered_level
+                            if offered_lvl is not None and offered_lvl > target_lvl:
+                                continue
+                            next_lvl = offered_lvl or (curr_sk_lvl + 1)
+                            target = get_upgrade_target(idx, num_cards=num_cards)
+                            display_name = early_skill.replace("_", " ").title()
+                            return make_choice(
+                                idx,
+                                target,
+                                f"★ Ưu tiên đầu trận (Lv {next_lvl}): {display_name}",
+                                skill_key=early_skill,
+                            )
 
     # 2. CHECK SPECIAL PASSIVES ("KỸ NĂNG CÓ DẤU *" / RED STAR PASSIVES)
     best_sp_card_idx = None
@@ -3272,7 +4055,7 @@ def choose_best_artifact_or_card(
     if best_sp_card_idx is not None and best_sp_score >= 150.0:
         target = get_upgrade_target(best_sp_card_idx, num_cards=num_cards)
         display_name = best_sp_name.replace("_", " ").title()
-        return CardChoice(best_sp_card_idx, target, f"Kỹ năng đặc biệt [★]: {display_name}", skill_key=best_sp_name)
+        return make_choice(best_sp_card_idx, target, f"Kỹ năng đặc biệt [★]: {display_name}", skill_key=best_sp_name)
 
     # 3. CHECK SKILLS & COMBINATIONS (PRIORITIZED SKILLS HAVE ABSOLUTE PRIORITY)
     priority_order = list(skill_priority) if skill_priority is not None else list(DEFAULT_SKILL_PRIORITY)
@@ -3312,7 +4095,7 @@ def choose_best_artifact_or_card(
                     rank += 120.0
                 try:
                     from learning_engine import get_adaptive_learner
-                    learned_bonus = get_adaptive_learner().get_skill_bonus(skill, active_skills)
+                    learned_bonus = (learner or get_adaptive_learner()).get_skill_bonus(skill, active_skills)
                     rank += learned_bonus * 2.5
                 except Exception:
                     pass
@@ -3325,13 +4108,13 @@ def choose_best_artifact_or_card(
     if best_skill_card_idx is not None:
         target = get_upgrade_target(best_skill_card_idx, num_cards=num_cards)
         display_name = best_detected_skill.replace("_", " ").title()
-        return CardChoice(best_skill_card_idx, target, f"Kỹ năng: {display_name}", skill_key=best_detected_skill)
+        return make_choice(best_skill_card_idx, target, f"Kỹ năng: {display_name}", skill_key=best_detected_skill)
 
     # 4. IF NO PRIORITIZED SKILL FOUND: CHECK REMAINING SPECIAL PASSIVES
     if best_sp_card_idx is not None:
         target = get_upgrade_target(best_sp_card_idx, num_cards=num_cards)
         display_name = best_sp_name.replace("_", " ").title()
-        return CardChoice(best_sp_card_idx, target, f"Kỹ năng đặc biệt [★]: {display_name}", skill_key=best_sp_name)
+        return make_choice(best_sp_card_idx, target, f"Kỹ năng đặc biệt [★]: {display_name}", skill_key=best_sp_name)
 
     # 5. CHECK ARTIFACT & PASSIVE SCORES
     artifact_scores: dict[int, int] = {}
@@ -3399,7 +4182,7 @@ def choose_best_artifact_or_card(
         if ocr_cards[best_artifact_idx].has_survival_synergy and not tag:
             tag.append("Sinh tồn/Synergy")
         tag_str = f" [{'+'.join(tag)}]" if tag else ""
-        return CardChoice(best_artifact_idx, target, f"Artifact {tier_names.get(best_tier, 'Hiếm')}{tag_str}")
+        return make_choice(best_artifact_idx, target, f"Artifact {tier_names.get(best_tier, 'Hiếm')}{tag_str}")
 
     # B. If an artifact with Meta/Crit/Cooldown/Synergy is present even at lower tier, pick it
     if is_chest_screen and best_artifact_score > 100:
@@ -3408,8 +4191,10 @@ def choose_best_artifact_or_card(
         if artifact_synergies.get(best_artifact_idx):
             tag.append(f"Build: {'+'.join(artifact_synergies[best_artifact_idx])}")
         tag_str = f" [{'+'.join(tag)}]" if tag else ""
-        return CardChoice(best_artifact_idx, target, f"Artifact {tier_names.get(best_tier, 'Thường')}{tag_str}")
+        return make_choice(best_artifact_idx, target, f"Artifact {tier_names.get(best_tier, 'Thường')}{tag_str}")
 
-    # C. Default choice
+    # C. Default choice must also be available.
+    if default_choice not in all_indices:
+        default_choice = all_indices[0]
     target = get_upgrade_target(default_choice, num_cards=num_cards)
-    return CardChoice(default_choice, target, f"Mặc định (Thẻ {default_choice})")
+    return make_choice(default_choice, target, f"Mặc định (Thẻ {default_choice})")

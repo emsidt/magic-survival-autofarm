@@ -73,6 +73,51 @@ class TestAdaptiveLearner(unittest.TestCase):
         bonus = self.learner.get_skill_bonus("spirit")
         self.assertGreaterEqual(bonus, 0.0)
 
+    def test_duplicate_result_is_not_learned_twice(self):
+        self.learner.evaluate_and_learn_run("one_run", 500, {"spirit"})
+        again = AdaptiveLearner(self.test_dir)
+        result = again.evaluate_and_learn_run("one_run", 500, {"spirit"})
+        self.assertEqual(result["skipped"], "already_analyzed")
+        self.assertEqual(again.policy["total_runs_analyzed"], 1)
+
+    def test_invalid_duration_does_not_poison_policy(self):
+        for seconds in (float("nan"), float("inf"), -1, 0):
+            with self.assertRaises(ValueError):
+                self.learner.evaluate_and_learn_run("bad", seconds, {"spirit"})
+        self.assertEqual(self.learner.policy["total_runs_analyzed"], 0)
+
+    def test_invalid_json_shape_falls_back_to_valid_defaults(self):
+        (self.test_dir / "learned_policy.json").write_text("[]", encoding="utf-8")
+        (self.test_dir / "learning_history.json").write_text("{}", encoding="utf-8")
+        learner = AdaptiveLearner(self.test_dir)
+        learner.evaluate_and_learn_run("fresh", 120, {"spirit"})
+        self.assertEqual(learner.policy["total_runs_analyzed"], 1)
+
+    def test_atomic_save_keeps_previous_file_on_failure(self):
+        from unittest.mock import patch
+        self.learner.evaluate_and_learn_run("first", 120, {"spirit"})
+        previous = self.learner.policy_file.read_bytes()
+        with patch("storage.os.replace", side_effect=OSError("disk unavailable")), self.assertLogs(level="ERROR"):
+            self.learner.save()
+        self.assertEqual(self.learner.policy_file.read_bytes(), previous)
+
+
+    def test_update_movement_policy(self):
+        rep = self.learner.update_movement_policy(weave_freq=3.8, weave_amp=0.35, chest_aggression=2.0, run_id="run_mv_1")
+        self.assertEqual(rep["weave_frequency"], 3.8)
+        self.assertEqual(rep["weave_amplitude"], 0.35)
+        self.assertEqual(rep["chest_aggression"], 2.0)
+        self.assertEqual(rep["total_sessions"], 1)
+
+        mv_p = self.learner.get_movement_policy()
+        self.assertEqual(mv_p["weave_frequency"], 3.8)
+        self.assertEqual(mv_p["total_movement_sessions"], 1)
+
+        # Second update smooths with exponential moving average
+        rep2 = self.learner.update_movement_policy(weave_freq=4.2, weave_amp=0.40, chest_aggression=2.2, run_id="run_mv_2")
+        self.assertEqual(rep2["total_sessions"], 2)
+        self.assertAlmostEqual(rep2["weave_frequency"], (1 - 0.35) * 3.8 + 0.35 * 4.2, delta=0.05)
+
 
 if __name__ == "__main__":
     unittest.main()

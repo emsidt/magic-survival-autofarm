@@ -1,144 +1,6 @@
 [
   {
     "run_id": "run",
-    "survival_sec": 58.4,
-    "prev_avg_sec": 180.0,
-    "diff_sec": -121.6,
-    "kills": 0,
-    "reward": -0.27,
-    "skills": [],
-    "combos": []
-  },
-  {
-    "run_id": "run",
-    "survival_sec": 208.9,
-    "prev_avg_sec": 58.4,
-    "diff_sec": 150.5,
-    "kills": 0,
-    "reward": 1.254,
-    "skills": [],
-    "combos": []
-  },
-  {
-    "run_id": "run",
-    "survival_sec": 180.9,
-    "prev_avg_sec": 133.7,
-    "diff_sec": 47.2,
-    "kills": 0,
-    "reward": 0.393,
-    "skills": [],
-    "combos": []
-  },
-  {
-    "run_id": "run",
-    "survival_sec": 106.2,
-    "prev_avg_sec": 149.4,
-    "diff_sec": -43.2,
-    "kills": 0,
-    "reward": -0.116,
-    "skills": [],
-    "combos": []
-  },
-  {
-    "run_id": "run",
-    "survival_sec": 25.0,
-    "prev_avg_sec": 138.6,
-    "diff_sec": -113.6,
-    "kills": 0,
-    "reward": -0.3,
-    "skills": [],
-    "combos": []
-  },
-  {
-    "run_id": "run",
-    "survival_sec": 368.1,
-    "prev_avg_sec": 115.9,
-    "diff_sec": 252.2,
-    "kills": 0,
-    "reward": 1.5,
-    "skills": [],
-    "combos": []
-  },
-  {
-    "run_id": "run",
-    "survival_sec": 97.8,
-    "prev_avg_sec": 157.9,
-    "diff_sec": -60.1,
-    "kills": 0,
-    "reward": -0.152,
-    "skills": [],
-    "combos": []
-  },
-  {
-    "run_id": "run",
-    "survival_sec": 73.7,
-    "prev_avg_sec": 149.3,
-    "diff_sec": -75.6,
-    "kills": 0,
-    "reward": -0.203,
-    "skills": [],
-    "combos": []
-  },
-  {
-    "run_id": "run",
-    "survival_sec": 53.4,
-    "prev_avg_sec": 139.9,
-    "diff_sec": -86.5,
-    "kills": 0,
-    "reward": -0.24,
-    "skills": [],
-    "combos": []
-  },
-  {
-    "run_id": "run",
-    "survival_sec": 131.7,
-    "prev_avg_sec": 130.3,
-    "diff_sec": 1.4,
-    "kills": 0,
-    "reward": 0.012,
-    "skills": [],
-    "combos": []
-  },
-  {
-    "run_id": "run",
-    "survival_sec": 187.6,
-    "prev_avg_sec": 130.4,
-    "diff_sec": 57.2,
-    "kills": 0,
-    "reward": 0.477,
-    "skills": [],
-    "combos": []
-  },
-  {
-    "run_id": "run",
-    "survival_sec": 75.9,
-    "prev_avg_sec": 135.6,
-    "diff_sec": -59.7,
-    "kills": 0,
-    "reward": -0.166,
-    "skills": [
-      "electric_shock",
-      "frost_nova",
-      "spirit"
-    ],
-    "combos": []
-  },
-  {
-    "run_id": "run",
-    "survival_sec": 221.2,
-    "prev_avg_sec": 130.6,
-    "diff_sec": 90.6,
-    "kills": 0,
-    "reward": 0.755,
-    "skills": [
-      "electric_shock",
-      "frost_nova",
-      "spirit"
-    ],
-    "combos": []
-  },
-  {
-    "run_id": "run",
     "survival_sec": 157.5,
     "prev_avg_sec": 137.6,
     "diff_sec": 19.9,
@@ -859,5 +721,903 @@
       "spirit"
     ],
     "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 32.4,
+    "prev_avg_sec": 491.9,
+    "diff_sec": -459.5,
+    "kills": 0,
+    "reward": -0.3,
+    "skills": [],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 24.6,
+    "prev_avg_sec": 456.6,
+    "diff_sec": -432.0,
+    "kills": 0,
+    "reward": -0.3,
+    "skills": [],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 185.9,
+    "prev_avg_sec": 423.4,
+    "diff_sec": -237.5,
+    "kills": 0,
+    "reward": -0.224,
+    "skills": [
+      "fast_casting",
+      "frost_nova",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run",
+    "survival_sec": 2180.7,
+    "prev_avg_sec": 405.1,
+    "diff_sec": 1775.6,
+    "kills": 0,
+    "reward": 1.5,
+    "skills": [
+      "blizzard",
+      "cyclone",
+      "electric_shock",
+      "satellite",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_120822_248530_69abb649",
+    "survival_sec": 352.0,
+    "prev_avg_sec": 541.7,
+    "diff_sec": -189.7,
+    "kills": 0,
+    "reward": -0.14,
+    "skills": [
+      "cyclone"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_121044_119634_a8c59b6e",
+    "survival_sec": 135.0,
+    "prev_avg_sec": 527.1,
+    "diff_sec": -392.1,
+    "kills": 0,
+    "reward": -0.298,
+    "skills": [
+      "electric_shock",
+      "satellite",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_121352_211538_d479feaf",
+    "survival_sec": 13.0,
+    "prev_avg_sec": 496.9,
+    "diff_sec": -483.9,
+    "kills": 0,
+    "reward": -0.3,
+    "skills": [],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_121419_521934_266e3a44",
+    "survival_sec": 6.0,
+    "prev_avg_sec": 459.7,
+    "diff_sec": -453.7,
+    "kills": 0,
+    "reward": -0.3,
+    "skills": [],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_121515_697822_ed7490aa",
+    "survival_sec": 1.0,
+    "prev_avg_sec": 424.8,
+    "diff_sec": -423.8,
+    "kills": 0,
+    "reward": -0.3,
+    "skills": [],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_121545_512401_b7b109fb",
+    "survival_sec": 20.0,
+    "prev_avg_sec": 392.2,
+    "diff_sec": -372.2,
+    "kills": 0,
+    "reward": -0.3,
+    "skills": [],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_121617_039719_a8d72907",
+    "survival_sec": 13.0,
+    "prev_avg_sec": 363.6,
+    "diff_sec": -350.6,
+    "kills": 0,
+    "reward": -0.3,
+    "skills": [],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_121642_538501_9e54b3cb",
+    "survival_sec": 14.0,
+    "prev_avg_sec": 336.6,
+    "diff_sec": -322.6,
+    "kills": 0,
+    "reward": -0.3,
+    "skills": [],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_121736_054798_8483a4cd",
+    "survival_sec": 7.0,
+    "prev_avg_sec": 311.8,
+    "diff_sec": -304.8,
+    "kills": 0,
+    "reward": -0.3,
+    "skills": [],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_121806_889736_9224102c",
+    "survival_sec": 15.0,
+    "prev_avg_sec": 288.4,
+    "diff_sec": -273.4,
+    "kills": 0,
+    "reward": -0.3,
+    "skills": [],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_121832_947771_43abe030",
+    "survival_sec": 6.0,
+    "prev_avg_sec": 267.4,
+    "diff_sec": -261.4,
+    "kills": 0,
+    "reward": -0.3,
+    "skills": [],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_121903_363746_77ca0d0a",
+    "survival_sec": 18.0,
+    "prev_avg_sec": 247.3,
+    "diff_sec": -229.3,
+    "kills": 0,
+    "reward": -0.3,
+    "skills": [],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_121937_558560_f265a4d1",
+    "survival_sec": 45.0,
+    "prev_avg_sec": 229.7,
+    "diff_sec": -184.7,
+    "kills": 0,
+    "reward": -0.3,
+    "skills": [
+      "satellite",
+      "tsunami"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_122504_072962_4d9e8eea",
+    "survival_sec": 480.0,
+    "prev_avg_sec": 215.5,
+    "diff_sec": 264.5,
+    "kills": 0,
+    "reward": 1.5,
+    "skills": [
+      "cloaking",
+      "concentration",
+      "cyclone",
+      "electric_zone",
+      "explorer",
+      "frost_nova",
+      "intelligence",
+      "satellite",
+      "shield",
+      "spirit",
+      "tsunami"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_123855_632540_dc03267d",
+    "survival_sec": 141.0,
+    "prev_avg_sec": 235.8,
+    "diff_sec": -94.8,
+    "kills": 0,
+    "reward": -0.161,
+    "skills": [
+      "satellite",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_124223_142342_694d958f",
+    "survival_sec": 138.0,
+    "prev_avg_sec": 228.5,
+    "diff_sec": -90.5,
+    "kills": 0,
+    "reward": -0.158,
+    "skills": [
+      "electric_shock",
+      "satellite",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_124534_760105_5b2b45b4",
+    "survival_sec": 343.0,
+    "prev_avg_sec": 221.5,
+    "diff_sec": 121.5,
+    "kills": 0,
+    "reward": 0.784,
+    "skills": [
+      "arcane_ray",
+      "armageddon",
+      "concentration",
+      "cyclone",
+      "electric_shock",
+      "electric_zone",
+      "frost_nova",
+      "satellite",
+      "shield",
+      "special_passive",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_125905_393026_9e421e80",
+    "survival_sec": 125.0,
+    "prev_avg_sec": 230.8,
+    "diff_sec": -105.8,
+    "kills": 0,
+    "reward": -0.183,
+    "skills": [
+      "blizzard",
+      "satellite",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_162629_456660_62fe3cf2",
+    "survival_sec": 150.0,
+    "prev_avg_sec": 222.7,
+    "diff_sec": -72.7,
+    "kills": 0,
+    "reward": -0.131,
+    "skills": [
+      "blizzard",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_163155_530363_d94a93a8",
+    "survival_sec": 242.0,
+    "prev_avg_sec": 217.1,
+    "diff_sec": 24.9,
+    "kills": 0,
+    "reward": 0.164,
+    "skills": [
+      "electric_shock",
+      "electric_zone",
+      "satellite",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_163630_047141_edff5a4d",
+    "survival_sec": 84.0,
+    "prev_avg_sec": 219.0,
+    "diff_sec": -135.0,
+    "kills": 0,
+    "reward": -0.247,
+    "skills": [
+      "satellite"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_164214_481517_34af2f4d",
+    "survival_sec": 150.0,
+    "prev_avg_sec": 208.6,
+    "diff_sec": -58.6,
+    "kills": 0,
+    "reward": -0.112,
+    "skills": [
+      "blizzard",
+      "electric_zone",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_175339_251993_4d0bff5e",
+    "survival_sec": 109.0,
+    "prev_avg_sec": 204.1,
+    "diff_sec": -95.1,
+    "kills": 0,
+    "reward": -0.186,
+    "skills": [
+      "arcane_ray",
+      "frost_nova",
+      "satellite"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_175550_071628_fe8aaf62",
+    "survival_sec": 599.0,
+    "prev_avg_sec": 196.8,
+    "diff_sec": 402.2,
+    "kills": 0,
+    "reward": 1.5,
+    "skills": [
+      "cyclone",
+      "electric_shock",
+      "electric_zone",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_175929_018181_c03711bc",
+    "survival_sec": 5694.0,
+    "prev_avg_sec": 227.7,
+    "diff_sec": 5466.3,
+    "kills": 0,
+    "reward": 1.5,
+    "skills": [
+      "armageddon",
+      "blizzard",
+      "cloaking",
+      "cyclone",
+      "electric_shock",
+      "intelligence",
+      "magic_circle",
+      "spirit",
+      "telekinetic_sword",
+      "tsunami"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_180851_771659_2fb0c36a",
+    "survival_sec": 2513.0,
+    "prev_avg_sec": 648.2,
+    "diff_sec": 1864.8,
+    "kills": 0,
+    "reward": 1.5,
+    "skills": [
+      "arcane_ray",
+      "cloaking",
+      "cyclone",
+      "electric_shock",
+      "electric_zone",
+      "fast_casting",
+      "spirit",
+      "tsunami"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_181630_797684_9f495f44",
+    "survival_sec": 150.0,
+    "prev_avg_sec": 791.6,
+    "diff_sec": -641.6,
+    "kills": 0,
+    "reward": -0.3,
+    "skills": [
+      "electric_shock",
+      "magic_circle",
+      "satellite",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_181957_948623_788c84ce",
+    "survival_sec": 150.0,
+    "prev_avg_sec": 742.2,
+    "diff_sec": -592.2,
+    "kills": 0,
+    "reward": -0.3,
+    "skills": [
+      "electric_zone",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_182438_319134_bbc98b02",
+    "survival_sec": 5040.0,
+    "prev_avg_sec": 696.6,
+    "diff_sec": 4343.4,
+    "kills": 0,
+    "reward": 1.5,
+    "skills": [
+      "blizzard",
+      "cyclone",
+      "electric_shock",
+      "electric_zone",
+      "fast_casting",
+      "satellite",
+      "spirit",
+      "tsunami"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_183254_002123_77fd0c04",
+    "survival_sec": 150.0,
+    "prev_avg_sec": 1030.7,
+    "diff_sec": -880.7,
+    "kills": 0,
+    "reward": -0.3,
+    "skills": [
+      "electric_shock",
+      "frost_nova",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_183948_832112_3b73e367",
+    "survival_sec": 150.0,
+    "prev_avg_sec": 963.0,
+    "diff_sec": -813.0,
+    "kills": 0,
+    "reward": -0.3,
+    "skills": [
+      "electric_zone",
+      "flash_shock",
+      "tsunami"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_184302_554132_3f2709df",
+    "survival_sec": 142.0,
+    "prev_avg_sec": 900.5,
+    "diff_sec": -758.5,
+    "kills": 0,
+    "reward": -0.3,
+    "skills": [
+      "cyclone",
+      "electric_shock",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261111_184536_391623_c466e735",
+    "survival_sec": 150.0,
+    "prev_avg_sec": 842.2,
+    "diff_sec": -692.2,
+    "kills": 0,
+    "reward": -0.3,
+    "skills": [],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261112_000443_312323_8649d896",
+    "survival_sec": 300.0,
+    "prev_avg_sec": 789.0,
+    "diff_sec": -489.0,
+    "kills": 0,
+    "reward": -0.248,
+    "skills": [
+      "blizzard",
+      "cloaking",
+      "concentration",
+      "cyclone",
+      "electric_zone",
+      "flash_shock",
+      "haste",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261112_001212_275086_fa8d66a6",
+    "survival_sec": 136.0,
+    "prev_avg_sec": 751.4,
+    "diff_sec": -615.4,
+    "kills": 0,
+    "reward": -0.3,
+    "skills": [
+      "cloaking",
+      "electric_shock",
+      "electric_zone",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261112_001548_513515_9ff90bc8",
+    "survival_sec": 150.0,
+    "prev_avg_sec": 704.1,
+    "diff_sec": -554.1,
+    "kills": 0,
+    "reward": -0.3,
+    "skills": [
+      "arcane_ray",
+      "electric_zone",
+      "frost_nova"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261112_001950_968082_e8afad78",
+    "survival_sec": 353.0,
+    "prev_avg_sec": 661.5,
+    "diff_sec": -308.5,
+    "kills": 0,
+    "reward": -0.187,
+    "skills": [
+      "cyclone",
+      "electric_shock",
+      "fast_casting",
+      "flash_shock",
+      "frost_nova",
+      "intelligence",
+      "magic_circle",
+      "satellite",
+      "snipe",
+      "special_passive",
+      "spirit",
+      "vitality"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261112_002829_489060_ad03e9f1",
+    "survival_sec": 2886.0,
+    "prev_avg_sec": 637.8,
+    "diff_sec": 2248.2,
+    "kills": 0,
+    "reward": 1.5,
+    "skills": [
+      "arcane_ray",
+      "blizzard",
+      "cyclone",
+      "flash_shock",
+      "frost_nova",
+      "magic_bullet",
+      "magic_circle",
+      "satellite",
+      "snipe",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261112_003756_135402_bbe0499b",
+    "survival_sec": 83.0,
+    "prev_avg_sec": 810.7,
+    "diff_sec": -727.7,
+    "kills": 0,
+    "reward": -0.3,
+    "skills": [
+      "blizzard",
+      "spirit"
+    ],
+    "combos": []
+  },
+  {
+    "run_id": "run_20261112_114928_170362_f40dcb79",
+    "survival_sec": 3008.0,
+    "prev_avg_sec": 754.7,
+    "diff_sec": 2253.3,
+    "kills": 0,
+    "reward": 1.5,
+    "skills": [
+      "blizzard",
+      "cloaking",
+      "cyclone",
+      "electric_shock",
+      "electric_zone",
+      "explorer",
+      "flash_shock",
+      "frost_nova",
+      "magic_circle",
+      "snipe",
+      "special_passive",
+      "spirit"
+    ],
+    "skill_deltas": {
+      "blizzard": 0.6,
+      "cloaking": 0.6,
+      "cyclone": 0.0,
+      "electric_shock": 0.13,
+      "electric_zone": 0.6,
+      "explorer": 0.6,
+      "flash_shock": 0.6,
+      "frost_nova": 0.318,
+      "magic_circle": 0.6,
+      "snipe": 0.6,
+      "special_passive": 0.6,
+      "spirit": 0.036
+    },
+    "combos": [],
+    "skill_levels": {
+      "magic_circle": 1,
+      "spirit": 1,
+      "electric_shock": 4,
+      "electric_zone": 1,
+      "special_passive": 1,
+      "snipe": 1,
+      "blizzard": 1,
+      "cloaking": 1,
+      "explorer": 1,
+      "flash_shock": 1,
+      "cyclone": 1,
+      "frost_nova": 1
+    }
+  },
+  {
+    "run_id": "run_20261112_120011_805445_41b56805",
+    "survival_sec": 150.0,
+    "prev_avg_sec": 928.0,
+    "diff_sec": -778.0,
+    "kills": 0,
+    "reward": -0.3,
+    "skills": [
+      "cyclone",
+      "electric_shock",
+      "spirit"
+    ],
+    "skill_deltas": {
+      "cyclone": -0.036,
+      "electric_shock": -0.036,
+      "spirit": -0.036
+    },
+    "combos": [],
+    "skill_levels": {
+      "spirit": 1,
+      "electric_shock": 1,
+      "cyclone": 1
+    }
+  },
+  {
+    "run_id": "unrecorded_6a6c540dc512492496058e640713b38b",
+    "survival_sec": 346.0,
+    "prev_avg_sec": 868.2,
+    "diff_sec": -522.2,
+    "kills": 0,
+    "reward": -0.241,
+    "skills": [
+      "cyclone",
+      "spirit"
+    ],
+    "skill_deltas": {
+      "cyclone": -0.029,
+      "spirit": -0.029
+    },
+    "combos": [],
+    "skill_levels": {
+      "spirit": 3,
+      "cyclone": 1
+    }
+  },
+  {
+    "run_id": "unrecorded_22d2fe48e88f4b2b9019f3a0fcebbb5b",
+    "survival_sec": 346.0,
+    "prev_avg_sec": 828.0,
+    "diff_sec": -482.0,
+    "kills": 0,
+    "reward": -0.233,
+    "skills": [
+      "cyclone",
+      "spirit"
+    ],
+    "skill_deltas": {
+      "cyclone": -0.028,
+      "spirit": -0.028
+    },
+    "combos": [],
+    "skill_levels": {
+      "spirit": 3,
+      "cyclone": 1
+    }
+  },
+  {
+    "run_id": "unrecorded_8133696fda5d410cb028613ee6f5870a",
+    "survival_sec": 346.0,
+    "prev_avg_sec": 790.9,
+    "diff_sec": -444.9,
+    "kills": 0,
+    "reward": -0.225,
+    "skills": [
+      "cyclone",
+      "spirit"
+    ],
+    "skill_deltas": {
+      "cyclone": -0.027,
+      "spirit": -0.027
+    },
+    "combos": [],
+    "skill_levels": {
+      "spirit": 3,
+      "cyclone": 1
+    }
+  },
+  {
+    "run_id": "run_20261112_131537_437787_68781295",
+    "survival_sec": 340.0,
+    "prev_avg_sec": 756.7,
+    "diff_sec": -416.7,
+    "kills": 0,
+    "reward": -0.22,
+    "skills": [
+      "arcane_effuse",
+      "armageddon",
+      "cloaking",
+      "concentration",
+      "electric_shock",
+      "electric_zone",
+      "flash_shock",
+      "frost_nova",
+      "intelligence",
+      "satellite",
+      "shield",
+      "snipe",
+      "spirit",
+      "tsunami"
+    ],
+    "skill_deltas": {
+      "arcane_effuse": -0.026,
+      "armageddon": -0.026,
+      "cloaking": -0.026,
+      "concentration": -0.026,
+      "electric_shock": -0.026,
+      "electric_zone": -0.026,
+      "flash_shock": -0.026,
+      "frost_nova": -0.026,
+      "intelligence": -0.026,
+      "satellite": -0.026,
+      "shield": -0.026,
+      "snipe": -0.026,
+      "spirit": -0.026,
+      "tsunami": -0.026
+    },
+    "combos": [],
+    "skill_levels": {
+      "intelligence": 1,
+      "concentration": 1,
+      "frost_nova": 1,
+      "flash_shock": 1,
+      "spirit": 1,
+      "cloaking": 1,
+      "satellite": 1,
+      "snipe": 1,
+      "shield": 1,
+      "electric_shock": 1,
+      "tsunami": 1,
+      "armageddon": 1,
+      "electric_zone": 1,
+      "arcane_effuse": 1
+    }
+  },
+  {
+    "run_id": "run_20261112_132438_862413_300023f3",
+    "survival_sec": 3334.0,
+    "prev_avg_sec": 724.6,
+    "diff_sec": 2609.4,
+    "kills": 0,
+    "reward": 1.5,
+    "skills": [
+      "arcane_ray",
+      "blizzard",
+      "concentration",
+      "cyclone",
+      "electric_zone",
+      "explorer",
+      "frost_nova",
+      "spirit"
+    ],
+    "skill_deltas": {
+      "arcane_ray": 0.6,
+      "blizzard": 0.6,
+      "concentration": 0.6,
+      "cyclone": 0.12,
+      "electric_zone": 0.6,
+      "explorer": 0.6,
+      "frost_nova": 0.026,
+      "spirit": 0.146
+    },
+    "combos": [],
+    "skill_levels": {
+      "electric_zone": 1,
+      "spirit": 1,
+      "explorer": 1,
+      "cyclone": 4,
+      "arcane_ray": 1,
+      "concentration": 1,
+      "blizzard": 1,
+      "frost_nova": 1
+    }
+  },
+  {
+    "run_id": "unrecorded_dd4dcbb40ac841b398df8213ef6dbe0b",
+    "survival_sec": 346.0,
+    "prev_avg_sec": 925.3,
+    "diff_sec": -579.3,
+    "kills": 0,
+    "reward": -0.25,
+    "skills": [
+      "cyclone",
+      "spirit"
+    ],
+    "skill_deltas": {
+      "cyclone": -0.03,
+      "spirit": -0.03
+    },
+    "combos": [],
+    "skill_levels": {
+      "spirit": 3,
+      "cyclone": 1
+    }
+  },
+  {
+    "run_id": "unrecorded_bfcaec840a4e4791ab47337419f180d8",
+    "survival_sec": 346.0,
+    "prev_avg_sec": 880.7,
+    "diff_sec": -534.7,
+    "kills": 0,
+    "reward": -0.243,
+    "skills": [
+      "cyclone",
+      "spirit"
+    ],
+    "skill_deltas": {
+      "cyclone": -0.029,
+      "spirit": -0.029
+    },
+    "combos": [],
+    "skill_levels": {
+      "spirit": 3,
+      "cyclone": 1
+    }
+  },
+  {
+    "run_id": "unrecorded_e5a087b2664c4541a1aea84b3bf75e14",
+    "survival_sec": 346.0,
+    "prev_avg_sec": 839.6,
+    "diff_sec": -493.6,
+    "kills": 0,
+    "reward": -0.235,
+    "skills": [
+      "cyclone",
+      "spirit"
+    ],
+    "skill_deltas": {
+      "cyclone": -0.028,
+      "spirit": -0.028
+    },
+    "combos": [],
+    "skill_levels": {
+      "spirit": 3,
+      "cyclone": 1
+    }
   }
 ]

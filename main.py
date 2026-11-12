@@ -18,8 +18,8 @@ except Exception:
 
 import json
 import math
-import os
 from pathlib import Path
+from typing import Optional
 import queue
 import re
 import threading
@@ -36,11 +36,15 @@ from pynput import keyboard
 import win32api, win32gui, win32process, win32con
 pydirectinput.FAILSAFE = False
 
+import botcore
+from game_actions import (ActionCancelled, GuardedController, capture_frame,
+                          select_attribute, select_combination, select_card, remember_card, finish_match,
+                          select_character, dismiss_death, close_ad, back_from_ad, move_from_frame, select_chest_artifact)
+
 from botcore import (
     choose_best_artifact_or_card,
     choose_direction,
     detect_buy_button,
-    detect_chest,
     detect_close_button,
     detect_combination_star,
     detect_confirm_button,
@@ -48,33 +52,25 @@ from botcore import (
     detect_enter_area,
     detect_learn_button,
     detect_mana_orb_currency,
-    detect_monolith,
     detect_obtain_button,
     detect_selected,
     detect_settings_dialog,
-    detect_settings_gear,
     detect_start_game,
     detect_shop_x_button,
-    evaluate_selected_attribute,
     evaluate_selected_chest_artifact,
     evaluate_selected_shop_artifact,
-    find_best_combination_option,
     find_rule,
-    get_attribute_circle_targets,
     get_chest_card_target,
     get_shop_item_targets,
-    get_upgrade_target,
     inspect_game,
     is_attribute_screen,
     is_level_up_screen,
     is_shop_buy_enabled,
     is_three_card_chest,
-    COMBINATION_COMPONENTS,
-    SKILL_MAX_LEVELS,
-    SPECIAL_STAR_PASSIVES,
 )
 from data_recorder import DataRecorder
-from learning_engine import AdaptiveLearner
+from learning_engine import get_adaptive_learner
+from storage import write_json_atomic
 
 
 BASE = Path(__file__).resolve().parent
@@ -99,7 +95,9 @@ DEFAULTS = {
     "card_choice": 1,
     "auto_close_ads": True,
     "auto_restart": True,
+    "character": "summoner",
     "auto_chest": True,
+    "nearest_target_skills": ["telekinetic_sword"],
     "skill_priority": [
         "telekinetic_sword",
         "superconductivity",
@@ -148,10 +146,10 @@ def read_json(path: Path, default):
 
 
 def save_json(path: Path, value):
-    path.write_text(json.dumps(value, indent=2, ensure_ascii=False), encoding="utf-8")
+    write_json_atomic(path, value)
 
 
-def locate_game(title: str):
+def locate_game(title: str = "Magic Survival"):
     try:
         user32 = ctypes.windll.user32
         hwinsta0 = user32.OpenWindowStationW("WinSta0", False, 0x0000037F)
@@ -163,55 +161,133 @@ def locate_game(title: str):
     except Exception:
         pass
 
-    candidates = []
+    candidates_exact = []
+    candidates_ldplayer = []
+    candidates_emulator = []
+
+    # Windows to exclude: code editors, terminals, browsers, dev tools
+    EXCLUDE_KEYWORDS = (
+        "autofarm", "visual studio", "antigravity", "cursor", "sublime", "pycharm",
+        "google chrome", "microsoft edge", "firefox", "brave", "github", "powershell", "cmd.exe"
+    )
+    EXCLUDE_CLASSES = (
+        "chrome_widgetwin", "hwndwrapper", "mozillawindowclass", "consolewindowclass"
+    )
 
     def visit(hwnd, _):
-        window_text = win32gui.GetWindowText(hwnd).lower()
-        if (win32gui.IsWindowVisible(hwnd) and title.lower() in window_text
-                and "autofarm" not in window_text):
-            if win32gui.IsIconic(hwnd):
-                try:
-                    win32gui.ShowWindow(hwnd, 9)  # SW_RESTORE
-                except Exception:
-                    pass
-            try:
-                left, top, right, bottom = win32gui.GetClientRect(hwnd)
-                # Must be a real gameplay window, not a tiny splash/launcher dialog
-                if (right - left) >= 300 and (bottom - top) >= 400:
-                    candidates.append(hwnd)
-            except Exception:
-                pass
+        if not win32gui.IsWindowVisible(hwnd):
+            return
+        w_text = win32gui.GetWindowText(hwnd).strip()
+        c_text = win32gui.GetClassName(hwnd).strip()
+        w_low = w_text.lower()
+        c_low = c_text.lower()
+
+        # Exclude dev tools / browsers / editors
+        if any(k in w_low for k in EXCLUDE_KEYWORDS) or any(c_low.startswith(k) for k in EXCLUDE_CLASSES):
+            return
+
+        try:
+            left, top, right, bottom = win32gui.GetClientRect(hwnd)
+            if (right - left) < 200 or (bottom - top) < 300:
+                return
+        except Exception:
+            return
+
+        # 1. LDPlayer detection (class LDPlayerMainFrame or title containing ldplayer/dnplayer)
+        if c_low == "ldplayermainframe" or "ldplayer" in w_low or "dnplayer" in w_low:
+            candidates_ldplayer.append(hwnd)
+            return
+
+        # 2. Window title contains the specified title (e.g. Magic Survival)
+        if title.lower() in w_low:
+            candidates_exact.append(hwnd)
+            return
+
+        # 3. Other known Android emulators (Nox, BlueStacks, MuMu)
+        if any(emu in w_low or emu in c_low for emu in ("bluestacks", "nox", "mumu", "nemu")):
+            candidates_emulator.append(hwnd)
+            return
 
     win32gui.EnumWindows(visit, None)
-    return candidates[0] if candidates else None
+
+    # Priority selection:
+    # If the user specifically set title to something custom, exact match takes precedence.
+    if title.lower() not in ("magic survival", "magic-survival") and candidates_exact:
+        selected = candidates_exact[0]
+    elif candidates_ldplayer:
+        selected = candidates_ldplayer[0]
+    elif candidates_exact:
+        selected = candidates_exact[0]
+    elif candidates_emulator:
+        selected = candidates_emulator[0]
+    else:
+        selected = None
+
+    if selected and win32gui.IsIconic(selected):
+        try:
+            win32gui.ShowWindow(selected, 9)  # SW_RESTORE
+        except Exception:
+            pass
+
+    return selected
 
 
-def game_rectangle(hwnd: int, config: dict) -> dict:
-    # Auto-detect Google Play Games PC renderer child window if available
-    crosvm_child: list[int] = []
+def find_game_child_window(hwnd: int) -> Optional[int]:
+    """Auto-detect emulator renderer child window (LDPlayer RenderWindow, GPG crosvm, MuMu, BlueStacks)."""
+    children: list[int] = []
 
-    def _find_crosvm(child_hwnd, _):
+    def _find(child_hwnd, _):
         try:
             w_text = win32gui.GetWindowText(child_hwnd).lower()
             c_text = win32gui.GetClassName(child_hwnd).lower()
-            if "crosvm" in w_text or "crosvm" in c_text:
-                crosvm_child.append(child_hwnd)
+            if any(k in c_text or k in w_text for k in ("renderwindow", "crosvm", "subwin", "nemu")):
+                children.append(child_hwnd)
         except Exception:
             pass
 
     try:
-        win32gui.EnumChildWindows(hwnd, _find_crosvm, None)
+        win32gui.EnumChildWindows(hwnd, _find, None)
     except Exception:
         pass
 
-    if crosvm_child:
-        cl, ct, cr, cb = win32gui.GetClientRect(crosvm_child[0])
-        ox, oy = win32gui.ClientToScreen(crosvm_child[0], (cl, ct))
+    if children:
+        best = None
+        max_area = 0
+        for ch in children:
+            try:
+                cl, ct, cr, cb = win32gui.GetClientRect(ch)
+                area = (cr - cl) * (cb - ct)
+                if area > max_area and (cr - cl) >= 200 and (cb - ct) >= 300:
+                    max_area = area
+                    best = ch
+            except Exception:
+                pass
+        return best or children[0]
+    return None
+
+
+def game_rectangle(hwnd: int, config: dict) -> dict:
+    # 1. Auto-detect emulator renderer child window (LDPlayer RenderWindow, GPG crosvm, etc.)
+    child = find_game_child_window(hwnd)
+    target = child if child is not None else hwnd
+
+    is_render_child = (child is not None)
+    try:
+        c_name = win32gui.GetClassName(target).lower()
+        if "renderwindow" in c_name or "crosvm" in c_name:
+            is_render_child = True
+    except Exception:
+        pass
+
+    if is_render_child:
+        cl, ct, cr, cb = win32gui.GetClientRect(target)
+        ox, oy = win32gui.ClientToScreen(target, (cl, ct))
         width = cr - cl
         height = cb - ct
-        if width >= 250 and height >= 350:
+        if width >= 200 and height >= 300:
             return {"left": ox, "top": oy, "width": width, "height": height}
 
+    # 2. Fallback to standard window with config crops
     left, top, right, bottom = win32gui.GetClientRect(hwnd)
     origin_x, origin_y = win32gui.ClientToScreen(hwnd, (left, top))
     x = origin_x + int(config.get("crop_left_px", 0))
@@ -234,6 +310,8 @@ def is_game_or_popup_active(hwnd: int, post_death_phase: bool = False) -> tuple[
         return True, hwnd
     if win32gui.IsChild(hwnd, fg):
         return True, hwnd
+    if win32gui.IsChild(fg, hwnd):
+        return True, hwnd
     try:
         root = win32gui.GetAncestor(fg, win32con.GA_ROOT)
         if root == hwnd:
@@ -252,50 +330,28 @@ def is_game_or_popup_active(hwnd: int, post_death_phase: bool = False) -> tuple[
     except Exception:
         pass
 
-    # During post-death phase (waiting/closing ads), an ad popup may be created
-    # by Google Play Games overlay or an in-game browser window
-    if post_death_phase:
-        try:
-            gl, gt, gr, gb = win32gui.GetWindowRect(hwnd)
-            fl, ft, fr, fb = win32gui.GetWindowRect(fg)
-            # Check overlap between game window and foreground window
-            if not (fr <= gl or fl >= gr or fb <= gt or ft >= gb):
-                fw = fr - fl
-                fh = fb - ft
-                if fw >= 150 and fh >= 150:
-                    return True, fg
-        except Exception:
-            pass
-
     return False, hwnd
 
 
-_GRABBER: Optional[mss.mss] = None
+_GRABBERS = threading.local()
 
 
 def get_grabber() -> mss.mss:
-    global _GRABBER
-    if _GRABBER is None:
-        _GRABBER = mss.mss()
-    return _GRABBER
+    if not hasattr(_GRABBERS, "instance"):
+        _GRABBERS.instance = mss.mss()
+    return _GRABBERS.instance
 
 
 def screenshot(rect: dict) -> np.ndarray:
-    global _GRABBER
     try:
-        grabber = get_grabber()
-        shot = np.asarray(grabber.grab(rect))
-        return np.ascontiguousarray(shot[:, :, :3])
+        shot = np.asarray(get_grabber().grab(rect))
     except Exception:
-        # Recreate GDI context cleanly if Windows desktop surface changes
-        try:
-            if _GRABBER:
-                _GRABBER.close()
-        except Exception:
-            pass
-        _GRABBER = mss.mss()
-        shot = np.asarray(_GRABBER.grab(rect))
-        return np.ascontiguousarray(shot[:, :, :3])
+        old = getattr(_GRABBERS, "instance", None)
+        if old is not None:
+            old.close()
+        _GRABBERS.instance = mss.mss()
+        shot = np.asarray(_GRABBERS.instance.grab(rect))
+    return np.ascontiguousarray(shot[:, :, :3])
 
 
 class Controller:
@@ -325,6 +381,11 @@ class Controller:
     def move(self, direction: tuple[float, float], rect: dict, config: dict):
         with self.lock:
             dx, dy = direction
+            if not all(math.isfinite(v) for v in (dx, dy)):
+                raise ValueError("Movement must be finite")
+            if config["input_mode"] != "keyboard" and abs(dx) < 0.12 and abs(dy) < 0.12:
+                self.release()
+                return
             if config["input_mode"] == "keyboard":
                 if self.mouse_held:
                     pydirectinput.mouseUp()
@@ -392,8 +453,10 @@ class Controller:
     def tap(self, target: list[float], rect: dict):
         with self.lock:
             self.release()
-            x = int(round(rect["left"] + target[0] * rect["width"]))
-            y = int(round(rect["top"] + target[1] * rect["height"]))
+            if not all(math.isfinite(v) and 0 <= v <= 1 for v in target[:2]):
+                raise ValueError("Tap coordinates must be normalized")
+            x = rect["left"] + min(rect["width"] - 1, int(round(target[0] * rect["width"])))
+            y = rect["top"] + min(rect["height"] - 1, int(round(target[1] * rect["height"])))
             clicked = False
             try:
                 win32api.SetCursorPos((x, y))
@@ -419,6 +482,7 @@ class Controller:
             self.release()
             try:
                 pydirectinput.press("esc")
+                return
             except Exception:
                 pass
             try:
@@ -452,16 +516,18 @@ class FarmApp:
         self.config = {**DEFAULTS, **read_json(CONFIG_PATH, {})}
         self.rules = read_json(RULES_PATH, [])
         self.events = queue.Queue(maxsize=30)
+        self.hotkey_events = queue.SimpleQueue()
         if self.config.get("control_mode") == "adb":
             try:
                 from adb_controller import ADBController
                 self.controller = ADBController(adb_path=self.config.get("adb_path", r"D:\LDPlayer\LDPlayer9\adb.exe"))
-            except Exception:
-                self.controller = Controller()
+            except Exception as error:
+                raise RuntimeError(f"Không khởi tạo được ADB: {error}") from error
         else:
             self.controller = Controller()
         self.running = threading.Event()
         self.ending = threading.Event()
+        self.input_generation = 0
         self.input_mode = tk.StringVar(value=self.config["input_mode"])
         self.crop_left = tk.StringVar(value=str(self.config["crop_left_px"]))
         self.limit_mins = tk.StringVar(value=str(self.config["max_session_minutes"]))
@@ -474,7 +540,7 @@ class FarmApp:
             enabled=bool(self.config.get("record_gameplay_data", True)),
             max_runs=int(self.config.get("max_data_runs", 50)),
         )
-        self.learner = AdaptiveLearner()
+        self.learner = get_adaptive_learner()
         self.status = tk.StringVar(value="Sẵn sàng. F8 bắt đầu / tạm dừng; F9 dừng.")
         self.metrics = tk.StringVar(value="Chưa chạy")
         self.frame_snapshot = None
@@ -533,7 +599,7 @@ class FarmApp:
 
         ttk.Separator(tools).pack(fill="x", pady=8)
         ttk.Label(tools, text="Tự động thông minh (Auto-Pilot)", font=("Segoe UI", 10, "bold")).pack(anchor="w")
-        ttk.Checkbutton(tools, text="Tự tắt quảng cáo khi chết (Nút X)", variable=self.auto_close_ads).pack(anchor="w", pady=1)
+        ttk.Checkbutton(tools, text="Tự đóng quảng cáo (Đóng / Close / X)", variable=self.auto_close_ads).pack(anchor="w", pady=1)
         ttk.Checkbutton(tools, text="Tự chạy đến rương item (Chest)", variable=self.auto_chest).pack(anchor="w", pady=1)
         ttk.Checkbutton(tools, text="Tự chọn nâng cấp (Level Up)", variable=self.auto_levelup).pack(anchor="w", pady=1)
 
@@ -604,6 +670,7 @@ class FarmApp:
 
     def stop(self):
         self.running.clear()
+        self.input_generation += 1
         self.controller.release()
         self.previous_direction = None
         self.status.set("Đã dừng input. Nhấn F8 để chạy lại.")
@@ -611,10 +678,11 @@ class FarmApp:
     def _key_down(self, key):
         if key in (keyboard.Key.f8, keyboard.Key.f9, keyboard.Key.f10) and key not in self.pressed_hotkeys:
             self.pressed_hotkeys.add(key)
-            try:
-                self.events.put_nowait(("hotkey", key))
-            except queue.Full:
-                pass
+            if key == keyboard.Key.f9:
+                self.running.clear()
+                self.input_generation += 1
+                self.controller.release()
+            self.hotkey_events.put(key)
 
     def _key_up(self, key):
         self.pressed_hotkeys.discard(key)
@@ -633,7 +701,16 @@ class FarmApp:
                     pass
 
     def _bot_loop(self):
-        controller = self.controller
+        hwnd = None
+        input_generation = self.input_generation
+        controller = GuardedController(
+            self.controller,
+            lambda: self.running.is_set() and not self.ending.is_set()
+            and input_generation == self.input_generation
+            and (hasattr(self.controller, "screen_width")
+                 or (hwnd is not None and is_game_or_popup_active(hwnd)[0])),
+        )
+        capture = lambda: capture_frame(controller, rect, screenshot)
         streak_name = ""
         streak = 0
         last_click: dict[str, float] = {}
@@ -641,6 +718,7 @@ class FarmApp:
         last_gameplay_time = 0.0
         last_ad_close_time = 0.0
         last_auto_action_time = 0.0
+        last_combination_attempt = 0.0
         last_die_click_time = 0.0
         last_chest_obtain_time = 0.0
         last_chest_scan_time = 0.0
@@ -675,6 +753,7 @@ class FarmApp:
                         continue
 
                     start_tick = time.monotonic()
+                    input_generation = self.input_generation
                     if self.session_start and start_tick - self.session_start > 60 * self.config["max_session_minutes"]:
                         self.running.clear()
                         controller.release()
@@ -684,6 +763,27 @@ class FarmApp:
                     is_adb = hasattr(controller, "screen_width")
                     if is_adb:
                         rect = {"left": 0, "top": 0, "width": controller.screen_width, "height": controller.screen_height}
+                        if hasattr(controller, "is_game_foreground") and not controller.is_game_foreground():
+                            controller.release()
+                            self.previous_direction = None
+                            match_running = False
+                            if self.config.get("auto_close_ads", True):
+                                close = close_ad(controller, rect, capture)
+                                if close is not None:
+                                    self.rule_counts["tat_quang_cao"] = self.rule_counts.get("tat_quang_cao", 0) + 1
+                                    self._push("status", f"[Quảng cáo] Đã bấm nút đóng ({close[0]:.2f}, {close[1]:.2f}) trên màn hình Cửa hàng / Quảng cáo!")
+                                    time.sleep(0.6)
+                                    continue
+                            if controller.is_game_foreground():
+                                continue
+                            if self.config.get("auto_close_ads", True):
+                                controller.press_esc()
+                                time.sleep(0.5)
+                            if self.config.get("auto_restart", True) and not controller.is_game_foreground():
+                                self._push("status", "🔄 [Tự phục hồi] Game bị chuyển sang ứng dụng khác -> Đang mở lại Magic Survival...")
+                                controller.launch_game()
+                                time.sleep(1.5)
+                            continue
                     else:
                         hwnd = locate_game(self.config["window_title"])
                         if not hwnd:
@@ -693,14 +793,6 @@ class FarmApp:
                             continue
 
                         is_active, active_wnd = is_game_or_popup_active(hwnd, post_death_phase)
-                        if not is_active:
-                            if hwnd and not post_death_phase:
-                                try:
-                                    win32gui.SetForegroundWindow(hwnd)
-                                    time.sleep(0.25)
-                                    is_active, active_wnd = is_game_or_popup_active(hwnd, post_death_phase)
-                                except Exception:
-                                    pass
                         if not is_active:
                             controller.release()
                             self._push("status", "Đang chờ: hãy nhấp cửa sổ game để điều khiển an toàn.")
@@ -723,11 +815,8 @@ class FarmApp:
                             except Exception:
                                 pass
 
-                    if is_adb:
-                        f_adb = controller.screenshot()
-                        frame = f_adb if f_adb is not None else screenshot(rect)
-                    else:
-                        frame = screenshot(rect)
+                    frame = botcore.prepare_analysis_frame(capture())
+                    captured_at = time.perf_counter()
                     found = find_rule(frame, self.rules, str(BASE))
                     direction = None
                     current_vision = None
@@ -748,543 +837,460 @@ class FarmApp:
                         streak_name, streak = "", 0
                         auto_action_done = False
 
-                        # 0. MÀN HÌNH CHẾT "Life or Death" -> BẤM "DIE" NGAY LẬP TỨC (bỏ qua xem quảng cáo Revive)
-                        die_pos = detect_die_button(frame)
-                        if die_pos:
+                        fast_combat = botcore.is_fast_combat_frame(frame)
+                        if not fast_combat:
                             controller.release()
-                            self.previous_direction = None
-                            match_running = False
-                            post_death_phase = True
-                            if start_tick - last_die_click_time >= 1.2:
-                                controller.tap(list(die_pos), rect)
-                                last_die_click_time = start_tick
-                                last_auto_action_time = start_tick
-                                self.rule_counts["bam_die"] = self.rule_counts.get("bam_die", 0) + 1
-                                self._push("status", f"Nhân vật đã chết: Tự động bấm 'Die' tại ({die_pos[0]:.2f}, {die_pos[1]:.2f})!")
-                                auto_action_done = True
-                                time.sleep(0.8)
-                            continue
-
-                        # 0.1 MÀN HÌNH KẾT QUẢ "Experiment Failed" -> BẤM "CONFIRM"
-                        confirm_pos = detect_confirm_button(frame)
-                        if confirm_pos:
-                            controller.release()
-                            self.previous_direction = None
-                            last_monolith_pos = None
-                            match_running = False
-                            post_death_phase = True
-                            if start_tick - last_confirm_click_time >= 2.0:
-                                self.recorder.record_decision(frame, "endgame", "confirm")
-                                self.recorder.finish_run()
-                                if match_start_time > 0.0 or last_known_game_timer_sec > 0.0:
-                                    t_fin = botcore.detect_game_timer(frame)
-                                    if t_fin and t_fin[2] >= last_known_game_timer_sec:
-                                        last_known_game_timer_sec = float(t_fin[2])
-                                    survival_seconds = last_known_game_timer_sec if last_known_game_timer_sec > 0.0 else max(1.0, time.monotonic() - match_start_time)
-                                    match_start_time = 0.0
-                                    try:
-                                        learn_rep = self.learner.evaluate_and_learn_run(
-                                            run_id=self.recorder.current_run_id or "run",
-                                            survival_seconds=survival_seconds,
-                                            active_skills=set(active_skills),
-                                            core_skills=set(self.config.get("skill_priority", [])),
-                                        )
-                                        m, s = int(survival_seconds // 60), int(survival_seconds % 60)
-                                        avg_m, avg_s = int(learn_rep["new_avg_survival"] // 60), int(learn_rep["new_avg_survival"] % 60)
-                                        diff_sec = learn_rep.get("diff_sec", 0.0)
-                                        diff_m, diff_s = int(abs(diff_sec) // 60), int(abs(diff_sec) % 60)
-                                        r_sign = "+" if learn_rep["reward"] >= 0 else ""
-                                        comp_str = f"vượt TB +{diff_m:02d}:{diff_s:02d}" if diff_sec >= 0 else f"kém TB -{diff_m:02d}:{diff_s:02d}"
-                                        self._push(
-                                            "status",
-                                            f"[AI Learning] Ván {m:02d}:{s:02d} ({comp_str}, TB: {avg_m:02d}:{avg_s:02d}) -> {r_sign}{learn_rep['reward']:.2f}đ, cập nhật {len(learn_rep['skills_updated'])} kỹ năng!",
-                                        )
-                                    except Exception:
-                                        pass
-                                active_skills.clear()
-                                skill_levels.clear()
-                                maxed_skills.clear()
-                                controller.tap(list(confirm_pos), rect)
-                                now_tick = time.monotonic()
-                                last_confirm_click_time = now_tick
-                                ad_wait_start_time = now_tick
-                                last_auto_action_time = now_tick
-                                self.rule_counts["confirm_ket_qua"] = self.rule_counts.get("confirm_ket_qua", 0) + 1
-                                self._push("status", f"[Endgame] Bấm 'Confirm' tại ({confirm_pos[0]:.2f}, {confirm_pos[1]:.2f}) -> Bắt đầu chờ quảng cáo (~10s)...")
-                                auto_action_done = True
-                                time.sleep(1.2)
-                            continue
-
-                        # A0. KIỂM TRA MENU CÀI ĐẶT (SETTINGS POPUP):
-                        # Nếu lỡ bị mở menu Cài đặt, tự động nhấn phím ESC để thoát ngay lập tức!
-                        if detect_settings_dialog(frame):
-                            controller.press_esc()
-                            self._push("status", "[Cài đặt] Phát hiện menu Cài đặt (Settings) đang mở -> Tự động bấm ESC để đóng và quay lại Start Game!")
-                            time.sleep(0.5)
-                            continue
-
-                        # A1. ƯU TIÊN MÀN HÌNH CHÍNH (TITLE SCREEN): Bấm "Start Game"
-                        # Luôn kiểm tra Start Game trước post_death_phase để TUYỆT ĐỐI KHÔNG BẤM VÀO CÀI ĐẶT
-                        sg_pos = detect_start_game(frame)
-                        if sg_pos:
-                            match_running = False
-                            post_death_phase = False
-                            active_skills.clear()
-                            skill_levels.clear()
-                            maxed_skills.clear()
-                            ad_wait_start_time = 0.0
-                            match_start_time = 0.0
-                            if self.config.get("auto_restart", True) and (start_tick - last_auto_action_time >= 1.5):
-                                controller.tap(list(sg_pos), rect)
-                                last_auto_action_time = start_tick
-                                self.rule_counts["start_game"] = self.rule_counts.get("start_game", 0) + 1
-                                self._push("status", f"Phát hiện màn hình chính: Tự động bấm 'Start Game' tại ({sg_pos[0]:.2f}, {sg_pos[1]:.2f}) - Tuyệt đối không bấm Cài đặt!")
-                                auto_action_done = True
-                                time.sleep(1.2)
-                            continue
-
-                        # A2. MÀN HÌNH CHỌN NHÂN VẬT (CLASS SCREEN): Bấm "Selected"
-                        sel_pos = detect_selected(frame)
-                        if sel_pos:
-                            match_running = False
-                            post_death_phase = False
-                            active_skills.clear()
-                            skill_levels.clear()
-                            maxed_skills.clear()
-                            ad_wait_start_time = 0.0
-                            match_start_time = 0.0
-                            if self.config.get("auto_restart", True) and (start_tick - last_auto_action_time >= 1.5):
-                                controller.tap(list(sel_pos), rect)
-                                last_auto_action_time = start_tick
-                                self.rule_counts["selected"] = self.rule_counts.get("selected", 0) + 1
-                                self._push("status", f"Phát hiện màn hình chọn nhân vật: Tự động bấm 'Selected' tại ({sel_pos[0]:.2f}, {sel_pos[1]:.2f})!")
-                                auto_action_done = True
-                                time.sleep(1.2)
-                            continue
-
-                        # A3. MÀN HÌNH SẢNH / CHỌN MAP (ENTER AREA SCREEN): Bấm "Enter Area"
-                        ea_pos = detect_enter_area(frame)
-                        if ea_pos:
-                            match_running = False
-                            post_death_phase = False
-                            active_skills.clear()
-                            skill_levels.clear()
-                            maxed_skills.clear()
-                            ad_wait_start_time = 0.0
-                            if self.config.get("auto_restart", True) and (start_tick - last_auto_action_time >= 1.5):
-                                self.recorder.start_new_run()
-                                match_start_time = time.monotonic()
-                                last_known_game_timer_sec = 0.0
-                                last_timer_scan_time = 0.0
-                                controller.tap(list(ea_pos), rect)
-                                last_auto_action_time = start_tick
-                                self.rule_counts["enter_area"] = self.rule_counts.get("enter_area", 0) + 1
-                                self._push("status", "Phát hiện màn hình chọn map: Tự động bấm 'Enter Area' vào trận mới!")
-                                auto_action_done = True
-                                time.sleep(1.2)
-                            continue
-
-                        # A4. POPUP QUẢNG CÁO HẬU TRẬN ĐẤU (TUYỆT ĐỐI KHÔNG CHẠY TRONG LÚC ĐANG GAMEPLAY):
-                        if (post_death_phase or not match_running) and self.config.get("auto_close_ads", True):
-                            close_pos = detect_close_button(frame)
-                            if close_pos and (start_tick - last_ad_close_time >= 1.2):
-                                controller.tap(list(close_pos), rect)
-                                time.sleep(0.25)
-                                controller.press_esc()
-                                now_tick = time.monotonic()
-                                last_ad_close_time = now_tick
-                                last_auto_action_time = now_tick
-                                ad_wait_start_time = 0.0
-                                self.rule_counts["tat_quang_cao"] = self.rule_counts.get("tat_quang_cao", 0) + 1
-                                self._push("status", f"[Quảng cáo] Phát hiện nút đóng: Đã bấm tại ({close_pos[0]:.2f}, {close_pos[1]:.2f}) & gửi ESC!")
-                                auto_action_done = True
-                                time.sleep(1.0)
+                            restore_pos = botcore.detect_restore_gold(frame)
+                            if restore_pos:
+                                controller.release()
+                                if start_tick - last_confirm_click_time >= 2.0:
+                                    controller.tap(list(restore_pos), rect)
+                                    last_confirm_click_time = start_tick
+                                    if self.recorder.current_run_id:
+                                        self.recorder.finish_run()
+                                    match_running = post_death_phase = False
+                                    match_start_time = last_known_game_timer_sec = 0.0
+                                    active_skills.clear()
+                                    skill_levels.clear()
+                                    maxed_skills.clear()
+                                    self.previous_direction = last_chest_pos = last_monolith_pos = None
+                                    self._push("status", "[Restore Gold] Đã bấm Confirm nhận lại vàng sau crash.")
                                 continue
 
-                        # C. KẾT THÚC VÁN (HẬU CHẾT): Xử lý quảng cáo và quay lại sảnh
-                        if post_death_phase:
-                            now_tick = time.monotonic()
-                            elapsed_ad = now_tick - ad_wait_start_time if ad_wait_start_time > 0 else 999.0
-
-                            # 1. Tìm & bấm nút X / Close / Skip quảng cáo nếu đã phát hiện vị trí
-                            close_pos = detect_close_button(frame) if self.config.get("auto_close_ads", True) else None
-                            if close_pos and (now_tick - last_ad_close_time >= 1.2):
-                                controller.tap(list(close_pos), rect)
-                                time.sleep(0.25)
-                                controller.press_esc()
-                                last_ad_close_time = now_tick
-                                last_auto_action_time = now_tick
-                                ad_wait_start_time = 0.0
-                                self.rule_counts["tat_quang_cao"] = self.rule_counts.get("tat_quang_cao", 0) + 1
-                                self._push("status", f"[Quảng cáo] Đã bấm nút X / Close tại ({close_pos[0]:.2f}, {close_pos[1]:.2f}) & gửi ESC!")
-                                auto_action_done = True
-                                time.sleep(1.0)
-                                continue
-
-                            # 2. Đang trong 4 giây đầu xem video quảng cáo (chờ video tải/chạy):
-                            if ad_wait_start_time > 0 and elapsed_ad < 4.0:
-                                self._push("status", f"[Quảng cáo] Đang chờ video quảng cáo ({elapsed_ad:.0f}s)...")
-                                auto_action_done = True
-                                time.sleep(1.0)
-                                continue
-
-                            # 3. Chuỗi hành động đóng quảng cáo toàn năng (Universal Ad Closer):
-                            # Thực hiện định kỳ mỗi 1.8s khi đang kẹt ở màn hình quảng cáo:
-                            # - Bấm nút X góc trên-phải chuẩn (Google AdMob / Unity Ads): (x=0.94, y=0.05)
-                            # - Gửi ESC (Android Back) để bỏ qua/đóng quảng cáo
-                            # - Bấm nút X góc trên-trái chuẩn: (x=0.06, y=0.05)
-                            # - Gửi ESC lần 2
-                            if self.config.get("auto_close_ads", True) and (now_tick - last_ad_close_time >= 1.6):
-                                self._push("status", "[Quảng cáo] Đang tự động tắt quảng cáo: Bấm nút X & gửi ESC...")
-                                # Bấm góc trên-phải chuẩn (thử cả tọa độ sát góc và góc chuẩn)
-                                controller.tap([0.96, 0.035], rect)
-                                time.sleep(0.15)
-                                controller.tap([0.92, 0.045], rect)
-                                time.sleep(0.18)
-                                controller.press_esc()
-                                time.sleep(0.20)
-                                # Bấm góc trên-trái (vị trí X của một số quảng cáo Google Play / Unity)
-                                controller.tap([0.04, 0.035], rect)
-                                time.sleep(0.15)
-                                controller.tap([0.08, 0.045], rect)
-                                time.sleep(0.18)
-                                controller.press_esc()
-                                last_ad_close_time = now_tick
-                                last_auto_action_time = now_tick
-                                if elapsed_ad >= 10.0:
-                                    ad_wait_start_time = 0.0
-                                self.rule_counts["tat_quang_cao"] = self.rule_counts.get("tat_quang_cao", 0) + 1
-                                auto_action_done = True
-                                time.sleep(0.8)
-                                continue
-
-                            # 4. Bấm Tiếp tục tại vị trí nút Confirm chuẩn (CHỈ khi không xem quảng cáo và detect_confirm_button phát hiện)
-                            if not auto_action_done and self.config.get("auto_restart", True) and ad_wait_start_time == 0.0:
-                                cf_pos = detect_confirm_button(frame)
-                                if cf_pos and (start_tick - last_auto_action_time >= 3.0):
-                                    controller.tap(list(cf_pos), rect)
+                            # 0. MÀN HÌNH CHẾT "Life or Death" -> BẤM "DIE" NGAY LẬP TỨC (bỏ qua xem quảng cáo Revive)
+                            die_pos = detect_die_button(frame)
+                            if die_pos:
+                                controller.release()
+                                self.previous_direction = None
+                                match_running = False
+                                post_death_phase = True
+                                final_timer = botcore.detect_game_timer(frame)
+                                if final_timer:
+                                    last_known_game_timer_sec = max(last_known_game_timer_sec, float(final_timer[2]))
+                                if start_tick - last_die_click_time >= 1.2:
+                                    last_die_click_time = start_tick
                                     last_auto_action_time = start_tick
-                                    self.rule_counts["ket_qua"] = self.rule_counts.get("ket_qua", 0) + 1
-                                    self._push("status", f"[Endgame] Bấm xác nhận kết quả (Confirm) tại ({cf_pos[0]:.2f}, {cf_pos[1]:.2f})...")
+                                    if dismiss_death(controller, rect, capture):
+                                        self.rule_counts["bam_die"] = self.rule_counts.get("bam_die", 0) + 1
+                                        self._push("status", "Đã xác nhận Die, chuyển sang nhận thưởng.")
+                                    else:
+                                        self._push("status", "Chưa xác nhận được Die; không đoán vị trí gần Revive.")
+                                    auto_action_done = True
+                                    time.sleep(0.8)
+                                continue
+
+                            # 0.1 MÀN HÌNH KẾT QUẢ "Experiment Failed" -> BẤM "CONFIRM"
+                            confirm_pos = detect_confirm_button(frame)
+                            if confirm_pos:
+                                controller.release()
+                                self.previous_direction = None
+                                last_monolith_pos = None
+                                match_running = False
+                                post_death_phase = True
+                                if start_tick - last_confirm_click_time >= 2.0:
+                                    if match_start_time > 0.0 or last_known_game_timer_sec > 0.0 or self.recorder.current_run_id:
+                                        t_fin = botcore.detect_game_timer(frame) or botcore.detect_results_survival_time(frame)
+                                        if t_fin:
+                                            last_known_game_timer_sec = max(last_known_game_timer_sec, float(t_fin[2]))
+                                        if last_known_game_timer_sec <= 0.0 and match_start_time > 0.0:
+                                            last_known_game_timer_sec = max(0.0, start_tick - match_start_time)
+                                        report = finish_match(
+                                            self.recorder, self.learner, frame, last_known_game_timer_sec,
+                                            active_skills, self.config.get("skill_priority", []),
+                                            skill_levels=skill_levels,
+                                            character=self.config.get("character", "summoner"),
+                                        )
+                                        if report and isinstance(report, dict) and "summary_text" in report:
+                                            print(report["summary_text"])
+                                            self._push("status", report.get("status_line", "[AI] Đã ghi kết quả ván."))
+                                        else:
+                                            self._push("status", "[AI] Đã ghi kết quả ván." if report else "[AI] Chưa đọc được đồng hồ game; bỏ qua cập nhật trọng số.")
+                                    match_start_time = 0.0
+                                    last_known_game_timer_sec = 0.0
+                                    last_timer_scan_time = 0.0
+                                    active_skills.clear()
+                                    skill_levels.clear()
+                                    maxed_skills.clear()
+                                    controller.tap(list(confirm_pos), rect)
+                                    now_tick = time.monotonic()
+                                    last_confirm_click_time = now_tick
+                                    ad_wait_start_time = now_tick
+                                    last_auto_action_time = now_tick
+                                    self.rule_counts["confirm_ket_qua"] = self.rule_counts.get("confirm_ket_qua", 0) + 1
+                                    self._push("status", f"[Endgame] Bấm 'Confirm' tại ({confirm_pos[0]:.2f}, {confirm_pos[1]:.2f}) -> Bắt đầu chờ quảng cáo (~10s)...")
+                                    auto_action_done = True
+                                    time.sleep(1.2)
+                                continue
+
+                            # A0. KIỂM TRA MENU CÀI ĐẶT (SETTINGS POPUP):
+                            # Nếu lỡ bị mở menu Cài đặt, tự động nhấn phím ESC để thoát ngay lập tức!
+                            if detect_settings_dialog(frame):
+                                controller.press_esc()
+                                self._push("status", "[Cài đặt] Phát hiện menu Cài đặt (Settings) đang mở -> Tự động bấm ESC để đóng và quay lại Start Game!")
+                                time.sleep(0.5)
+                                continue
+
+                            # A1-A3: Màn hình sảnh & bắt đầu trận (chỉ kiểm tra khi không trong trận)
+                            if not match_running:
+                                # A1. ƯU TIÊN MÀN HÌNH CHÍNH (TITLE SCREEN): Bấm "Start Game"
+                                sg_pos = detect_start_game(frame)
+                                if sg_pos:
+                                    match_running = False
+                                    post_death_phase = False
+                                    active_skills.clear()
+                                    skill_levels.clear()
+                                    maxed_skills.clear()
+                                    ad_wait_start_time = 0.0
+                                    match_start_time = 0.0
+                                    currencies = botcore.detect_main_screen_currencies(frame)
+                                    gold = currencies.get("gold")
+                                    gems = currencies.get("gems")
+                                    cur_txt = ""
+                                    if gold is not None or gems is not None:
+                                        g_s = f"{gold:,} Vàng" if gold is not None else "---"
+                                        gem_s = f"{gems:,} Gem" if gems is not None else "---"
+                                        cur_txt = f" [Tài nguyên: 💰 {g_s} | 💎 {gem_s}]"
+                                    if self.config.get("auto_restart", True) and (start_tick - last_auto_action_time >= 1.5):
+                                        controller.tap(list(sg_pos), rect)
+                                        last_auto_action_time = start_tick
+                                        self.rule_counts["start_game"] = self.rule_counts.get("start_game", 0) + 1
+                                        self._push("status", f"Phát hiện màn hình chính{cur_txt}: Tự động bấm 'Start Game' tại ({sg_pos[0]:.2f}, {sg_pos[1]:.2f}) - Tuyệt đối không bấm Cài đặt!")
+                                        auto_action_done = True
+                                        time.sleep(1.2)
+                                    continue
+
+                                # A2. MÀN HÌNH CHỌN NHÂN VẬT (CLASS SCREEN): Bấm "Selected"
+                                sel_pos = detect_selected(frame)
+                                if sel_pos:
+                                    match_running = False
+                                    post_death_phase = False
+                                    active_skills.clear()
+                                    skill_levels.clear()
+                                    maxed_skills.clear()
+                                    ad_wait_start_time = 0.0
+                                    match_start_time = 0.0
+                                    if self.config.get("auto_restart", True) and (start_tick - last_auto_action_time >= 1.5):
+                                        last_auto_action_time = start_tick
+                                        character = self.config.get("character", "summoner")
+                                        if select_character(controller, rect, frame, capture, character):
+                                            self.rule_counts["selected"] = self.rule_counts.get("selected", 0) + 1
+                                            self._push("status", f"Đã chọn {character.title()} và xác nhận Selected.")
+                                        else:
+                                            self._push("status", f"Chưa xác nhận được {character}; sẽ đọc lại màn chọn nhân vật.")
+                                        auto_action_done = True
+                                        time.sleep(1.2)
+                                    continue
+
+                                # A3. MÀN HÌNH SẢNH / CHỌN MAP (ENTER AREA SCREEN): Bấm "Enter Area"
+                                ea_pos = detect_enter_area(frame)
+                                if ea_pos:
+                                    match_running = False
+                                    post_death_phase = False
+                                    active_skills.clear()
+                                    skill_levels.clear()
+                                    maxed_skills.clear()
+                                    ad_wait_start_time = 0.0
+                                    currencies = botcore.detect_main_screen_currencies(frame)
+                                    gold = currencies.get("gold")
+                                    gems = currencies.get("gems")
+                                    cur_txt = ""
+                                    if gold is not None or gems is not None:
+                                        g_s = f"{gold:,} Vàng" if gold is not None else "---"
+                                        gem_s = f"{gems:,} Gem" if gems is not None else "---"
+                                        cur_txt = f" [Tài nguyên: 💰 {g_s} | 💎 {gem_s}]"
+                                    if self.config.get("auto_restart", True) and (start_tick - last_auto_action_time >= 1.5):
+                                        if match_start_time == 0.0:
+                                            self.recorder.start_new_run()
+                                            match_start_time = time.monotonic()
+                                        last_chest_pos = None
+                                        last_monolith_pos = None
+                                        self.previous_direction = None
+                                        last_known_game_timer_sec = 0.0
+                                        last_timer_scan_time = 0.0
+                                        level_up_clicks = 0
+                                        controller.tap(list(ea_pos), rect)
+                                        last_auto_action_time = start_tick
+                                        self.rule_counts["enter_area"] = self.rule_counts.get("enter_area", 0) + 1
+                                        self._push("status", f"Chuẩn bị vào trận mới{cur_txt}: Tự động bấm 'Enter Area'!")
+                                        auto_action_done = True
+                                        time.sleep(1.2)
+                                    continue
+
+                            # A4. POPUP QUẢNG CÁO (AdMob, Play Store overlay, Unity Ads):
+                            if post_death_phase and botcore.detect_pause_button(frame):
+                                post_death_phase = False
+                                match_running = True
+                                ad_wait_start_time = 0.0
+                            if self.config.get("auto_close_ads", True):
+                                close_pos = detect_close_button(frame)
+                                if close_pos and (start_tick - last_ad_close_time >= 1.0):
+                                    controller.release()
+                                    self.previous_direction = None
+                                    match_running = False
+                                    if close_ad(controller, rect, capture) is None:
+                                        continue
+                                    now_tick = time.monotonic()
+                                    last_ad_close_time = now_tick
+                                    last_auto_action_time = now_tick
+                                    ad_wait_start_time = 0.0
+                                    self.rule_counts["tat_quang_cao"] = self.rule_counts.get("tat_quang_cao", 0) + 1
+                                    self._push("status", "[Quảng cáo] Đã bấm nút đóng; đọc lại màn hình.")
+                                    auto_action_done = True
+                                    time.sleep(0.8)
+                                    continue
+                                elif botcore.is_ad_screen(frame) and (start_tick - last_ad_close_time >= 3.0):
+                                    controller.release()
+                                    self.previous_direction = None
+                                    match_running = False
+                                    last_ad_close_time = start_tick
+                                    last_auto_action_time = start_tick
+                                    auto_action_done = back_from_ad(controller, rect, capture)
+                                    if auto_action_done:
+                                        self._push("status", "[Quảng cáo] Đã xác nhận còn quảng cáo trên ảnh mới rồi bấm Back.")
+                                    time.sleep(0.8)
+                                    continue
+
+                            # C. KẾT THÚC VÁN (HẬU CHẾT): Xử lý quảng cáo và quay lại sảnh
+                            if post_death_phase:
+                                now_tick = time.monotonic()
+                                elapsed_ad = now_tick - ad_wait_start_time if ad_wait_start_time > 0 else 999.0
+
+                                # 1. Tìm & bấm nút X / Close / Skip quảng cáo nếu đã phát hiện vị trí
+                                close_pos = detect_close_button(frame) if self.config.get("auto_close_ads", True) else None
+                                if close_pos and (now_tick - last_ad_close_time >= 1.2):
+                                    if close_ad(controller, rect, capture) is None:
+                                        continue
+                                    last_ad_close_time = now_tick
+                                    last_auto_action_time = now_tick
+                                    ad_wait_start_time = 0.0
+                                    self.rule_counts["tat_quang_cao"] = self.rule_counts.get("tat_quang_cao", 0) + 1
+                                    self._push("status", "[Quảng cáo] Đã bấm nút đóng; đọc lại màn hình.")
                                     auto_action_done = True
                                     time.sleep(1.0)
                                     continue
 
-                        # B0. MÀN HÌNH MỞ RƯƠNG (Treasure Chest / Reliquary có nút "Obtain" ở dưới)
-                        obtain_pos = detect_obtain_button(frame)
-                        if obtain_pos:
-                            controller.release()
-                            self.previous_direction = None
-                            last_monolith_pos = None
-                            uncertain_since = 0.0
-                            match_running = True
-                            post_death_phase = False
-                            if self.config.get("auto_levelup", True) and (start_tick - last_chest_obtain_time >= 1.1):
-                                obtain_x, obtain_y = obtain_pos
-                                prefer_cc = self.config.get("prefer_crit_and_cooldown", True)
-                                build_skills = set(active_skills)
-                                for p_sk in self.config.get("skill_priority", []):
-                                    clean_sk = str(p_sk).lower().strip().replace("-", "_").replace(" ", "_")
-                                    build_skills.add(clean_sk)
-
-                                if is_three_card_chest(frame, obtain_x):
-                                    # Đọc thẻ 1 (mặc định đang chọn), sau đó bấm xem thẻ 2 và thẻ 3 để so sánh điểm Meta + Build Synergy
-                                    s1, lbl1 = evaluate_selected_chest_artifact(frame, prefer_cc, active_skills=build_skills)
-                                    slot2 = get_chest_card_target(2, obtain_x)
-                                    controller.tap(list(slot2), rect)
-                                    time.sleep(0.30)
-                                    frame2 = screenshot(rect)
-                                    s2, lbl2 = evaluate_selected_chest_artifact(frame2, prefer_cc, active_skills=build_skills)
-                                    slot3 = get_chest_card_target(3, obtain_x)
-                                    controller.tap(list(slot3), rect)
-                                    time.sleep(0.30)
-                                    frame3 = screenshot(rect)
-                                    s3, lbl3 = evaluate_selected_chest_artifact(frame3, prefer_cc, active_skills=build_skills)
-
-                                    candidates = {1: (s1, lbl1), 2: (s2, lbl2), 3: (s3, lbl3)}
-                                    best_idx = max(candidates, key=lambda k: candidates[k][0])
-                                    _, best_label = candidates[best_idx]
-                                    if best_idx != 3:
-                                        best_slot = get_chest_card_target(best_idx, obtain_x)
-                                        controller.tap(list(best_slot), rect)
-                                        time.sleep(0.25)
-                                    self.recorder.record_decision(
-                                        frame,
-                                        "chest",
-                                        f"slot_{best_idx}",
-                                        confidence=0.90,
-                                        metadata={
-                                            "chosen_artifact": best_label,
-                                            "best_idx": best_idx,
-                                            "active_skills": list(active_skills),
-                                        },
-                                    )
-                                    controller.tap([obtain_x, obtain_y], rect)
-                                    now_tick = time.monotonic()
-                                    last_chest_scan_time = now_tick
-                                    last_chest_obtain_time = now_tick
-                                    last_auto_action_time = now_tick
-                                    self.rule_counts["nang_cap"] = self.rule_counts.get("nang_cap", 0) + 1
-                                    self._push("status", f"Mở Rương: Chọn {best_label} (Ô {best_idx}/3) & bấm Obtain!")
+                                # 2. Đang trong 4 giây đầu xem video quảng cáo (chờ video tải/chạy):
+                                if ad_wait_start_time > 0 and elapsed_ad < 4.0:
+                                    self._push("status", f"[Quảng cáo] Đang chờ video quảng cáo ({elapsed_ad:.0f}s)...")
                                     auto_action_done = True
-                                    time.sleep(0.55)
-                                else:
-                                    # Rương 1 vật phẩm (Reliquary) hoặc bấm bồi Obtain nếu lần bấm trước chưa đóng rương
-                                    _, lbl = evaluate_selected_chest_artifact(frame, prefer_cc, active_skills=build_skills)
-                                    self.recorder.record_decision(
-                                        frame,
-                                        "chest",
-                                        "obtain",
-                                        confidence=0.90,
-                                        metadata={
-                                            "chosen_artifact": lbl,
-                                            "active_skills": list(active_skills),
-                                        },
+                                    time.sleep(1.0)
+                                    continue
+
+                                controller.release()
+                                self._push("status", "Đang chờ nút đóng quảng cáo hoặc màn hình sảnh...")
+                                time.sleep(0.5)
+                                continue
+
+                            # B0. MÀN HÌNH MỞ RƯƠNG (Treasure Chest / Reliquary có nút "Obtain" ở dưới)
+                            obtain_pos = detect_obtain_button(frame)
+                            if obtain_pos:
+                                controller.release()
+                                self.previous_direction = None
+                                last_monolith_pos = None
+                                last_chest_pos = None
+                                uncertain_since = 0.0
+                                match_running = True
+                                post_death_phase = False
+                                if self.config.get("auto_levelup", True) and (start_tick - last_chest_obtain_time >= 1.1):
+                                    last_chest_obtain_time = time.monotonic()
+                                    chosen = select_chest_artifact(
+                                        controller, rect, capture, active_skills=set(active_skills),
+                                        prefer_cc=self.config.get("prefer_crit_and_cooldown", True),
                                     )
-                                    controller.tap([obtain_x, obtain_y], rect)
-                                    now_tick = time.monotonic()
-                                    last_chest_obtain_time = now_tick
-                                    last_auto_action_time = now_tick
-                                    self.rule_counts["nang_cap"] = self.rule_counts.get("nang_cap", 0) + 1
-                                    self._push("status", f"Mở Rương: Nhận {lbl} -> Bấm Obtain!")
-                                    auto_action_done = True
-                                    time.sleep(0.55)
-                            continue
+                                    last_auto_action_time = time.monotonic()
+                                    if chosen:
+                                        self.recorder.record_decision(
+                                            frame, "chest", f"slot_{chosen.index}",
+                                            metadata={"chosen_artifact": chosen.label,
+                                                      "active_skills": sorted(active_skills)},
+                                        )
+                                        last_chest_scan_time = last_auto_action_time
+                                        self.rule_counts["nang_cap"] = self.rule_counts.get("nang_cap", 0) + 1
+                                        self._push("status", f"Đã xác nhận nhận cổ vật: {chosen.label} (ô {chosen.index})")
+                                        auto_action_done = True
+                                    else:
+                                        self._push("status", "Chưa xác nhận nhận cổ vật; đọc lại màn hình.")
+                                continue
 
-                        # B0.1 MÀN HÌNH CỬA HÀNG (Merchant Shop có nút "Buy" ở dưới và "X" ở góc trên-phải)
-                        shop_buy_pos = detect_buy_button(frame)
-                        if shop_buy_pos:
-                            controller.release()
-                            self.previous_direction = None
-                            uncertain_since = 0.0
-                            match_running = True
-                            post_death_phase = False
-                            if start_tick - last_shop_action_time >= 1.2:
-                                prefer_cc = self.config.get("prefer_crit_and_cooldown", True)
-                                shop_items = get_shop_item_targets()
-                                best_buy_slot = None
-                                best_buy_score = -1
-                                best_buy_label = ""
-                                current_mana = detect_mana_orb_currency(frame)
-                                mana_info = f" ({current_mana} Mana)" if current_mana is not None else ""
-                                self._push("status", f"[Cửa hàng] Mở Thương nhân{mana_info}! Đang duyệt full 8 món...")
+                            # B0.1 MÀN HÌNH CỬA HÀNG (Merchant Shop có nút "Buy" ở dưới và "X" ở góc trên-phải)
+                            shop_buy_pos = detect_buy_button(frame)
+                            if shop_buy_pos:
+                                controller.release()
+                                self.previous_direction = None
+                                uncertain_since = 0.0
+                                match_running = True
+                                post_death_phase = False
+                                if not self.config.get("auto_levelup", True):
+                                    continue
+                                if start_tick - last_shop_action_time >= 1.2:
+                                    prefer_cc = self.config.get("prefer_crit_and_cooldown", True)
+                                    shop_items = get_shop_item_targets()
+                                    best_buy_slot = None
+                                    best_buy_score = -1
+                                    best_buy_label = ""
+                                    current_mana = detect_mana_orb_currency(frame)
+                                    mana_info = f" ({current_mana} Mana)" if current_mana is not None else ""
+                                    self._push("status", f"[Cửa hàng] Mở Thương nhân{mana_info}! Đang duyệt full 8 món...")
 
-                                build_skills = set(active_skills)
-                                for p_sk in self.config.get("skill_priority", []):
-                                    clean_sk = str(p_sk).lower().strip().replace("-", "_").replace(" ", "_")
-                                    build_skills.add(clean_sk)
+                                    build_skills = set(active_skills)
 
-                                # Duyệt qua toàn bộ 8 ô vật phẩm trong cửa hàng
-                                for idx, s_target in enumerate(shop_items, 1):
-                                    controller.tap(list(s_target), rect)
-                                    time.sleep(0.24)
-                                    f_item = screenshot(rect)
-                                    if f_item is None or f_item.size == 0:
+                                    # Duyệt qua toàn bộ 8 ô vật phẩm trong cửa hàng
+                                    shop_lost = False
+                                    for idx, s_target in enumerate(shop_items, 1):
+                                        controller.tap(list(s_target), rect)
+                                        time.sleep(0.24)
+                                        f_item = capture()
+                                        shop_buy_pos = detect_buy_button(f_item)
+                                        if shop_buy_pos is None:
+                                            shop_lost = True
+                                            break
+
+                                        is_affordable = is_shop_buy_enabled(f_item, buy_pos=shop_buy_pos)
+                                        s_item, l_item = evaluate_selected_shop_artifact(f_item, prefer_cc, active_skills=build_skills)
+                                        has_synergy = ("Build:" in l_item) or ("★" in l_item) or ("S-Tier" in l_item) or ("Special" in l_item) or ("Legendary" in l_item)
+
+                                        if is_affordable:
+                                            effective_score = s_item + (1000 if has_synergy else 0)
+                                            if effective_score > best_buy_score:
+                                                best_buy_score = effective_score
+                                                best_buy_slot = s_target
+                                                best_buy_label = l_item
+
+                                    if shop_lost:
+                                        last_shop_action_time = time.monotonic()
                                         continue
 
-                                    is_affordable = is_shop_buy_enabled(f_item, buy_pos=shop_buy_pos)
-                                    s_item, l_item = evaluate_selected_shop_artifact(f_item, prefer_cc, active_skills=build_skills)
-                                    has_synergy = ("Build:" in l_item) or ("★" in l_item) or ("S-Tier" in l_item) or ("Special" in l_item) or ("Legendary" in l_item)
-
-                                    if is_affordable:
-                                        effective_score = s_item + (1000 if has_synergy else 0)
-                                        if effective_score > best_buy_score:
-                                            best_buy_score = effective_score
-                                            best_buy_slot = s_target
-                                            best_buy_label = l_item
-
-                                # Nếu có món đủ tiền mua -> chọn và bấm BUY!
-                                if best_buy_slot and best_buy_score > 0:
-                                    controller.tap(list(best_buy_slot), rect)
-                                    time.sleep(0.25)
-                                    controller.tap(list(shop_buy_pos), rect)
-                                    now_tick = time.monotonic()
-                                    last_shop_action_time = now_tick
-                                    last_auto_action_time = now_tick
-                                    self.rule_counts["mua_do"] = self.rule_counts.get("mua_do", 0) + 1
-                                    self._push("status", f"[Cửa hàng] 🎉 Đã mua món tốt nhất hợp build: [{best_buy_label}]!")
-                                    auto_action_done = True
-                                    time.sleep(0.65)
-                                    f_after = screenshot(rect)
-                                    shop_x_pos = detect_shop_x_button(f_after) or (0.943, 0.079)
-                                    controller.tap(list(shop_x_pos), rect)
-                                    time.sleep(0.4)
-                                else:
-                                    # Không đủ mana mua món nào hoặc không có món hợp build -> Bấm nút 'X' đóng cửa hàng
-                                    shop_x_pos = detect_shop_x_button(frame) or (0.943, 0.079)
-                                    controller.tap(list(shop_x_pos), rect)
-                                    now_tick = time.monotonic()
-                                    last_shop_action_time = now_tick
-                                    last_auto_action_time = now_tick
-                                    self.rule_counts["dong_cua_hang"] = self.rule_counts.get("dong_cua_hang", 0) + 1
-                                    self._push("status", f"[Cửa hàng] Đã duyệt 8 món: Chưa đủ Mana hoặc không có món hợp build -> Đóng shop!")
-                                    auto_action_done = True
-                                    time.sleep(0.8)
-                            continue
-
-                        # B0.2 MÀN HÌNH CHỌN THUỘC TÍNH LEVEL 7 (Select Attribute có nút "Learn" ở dưới)
-                        if is_attribute_screen(frame) or detect_learn_button(frame) is not None:
-                            learn_pos = detect_learn_button(frame) or (0.50, 0.8786)
-                            controller.release()
-                            self.previous_direction = None
-                            uncertain_since = 0.0
-                            match_running = True
-                            post_death_phase = False
-                            if self.config.get("auto_levelup", True) and (start_tick - last_learn_click_time >= 1.2):
-                                circles = get_attribute_circle_targets()
-                                best_circle_idx = 2
-                                best_circle_score, best_circle_label, parent_sk = evaluate_selected_attribute(frame)
-                                if parent_sk:
-                                    active_skills.add(parent_sk)
-                                    skill_levels[parent_sk] = 7
-                                    maxed_skills.add(parent_sk)
-
-                                # Nếu thuộc tính hiện tại chưa phải là nhánh Hợp thể (score < 500), thử bấm xem các vòng tròn khác
-                                if best_circle_score < 500 and (start_tick - last_attribute_scan_time >= 4.0):
-                                    for c_idx in (1, 2, 3):
-                                        controller.tap(list(circles[c_idx]), rect)
+                                    # Nếu có món đủ tiền mua -> chọn và bấm BUY!
+                                    if best_buy_slot and best_buy_score > 0:
+                                        controller.tap(list(best_buy_slot), rect)
                                         time.sleep(0.25)
-                                        f_c = screenshot(rect)
-                                        s_c, l_c, p_c = evaluate_selected_attribute(f_c)
-                                        if p_c:
-                                            active_skills.add(p_c)
-                                        if s_c > best_circle_score:
-                                            best_circle_score = s_c
-                                            best_circle_idx = c_idx
-                                            best_circle_label = l_c
-                                            if p_c:
-                                                parent_sk = p_c
-                                    last_attribute_scan_time = time.monotonic()
-                                    controller.tap(list(circles[best_circle_idx]), rect)
-                                    time.sleep(0.25)
+                                        selected_item = capture()
+                                        fresh_buy = detect_buy_button(selected_item)
+                                        if not fresh_buy or not is_shop_buy_enabled(selected_item, fresh_buy):
+                                            last_shop_action_time = time.monotonic()
+                                            continue
+                                        controller.tap(list(fresh_buy), rect)
+                                        now_tick = time.monotonic()
+                                        last_shop_action_time = now_tick
+                                        last_auto_action_time = now_tick
+                                        self.rule_counts["mua_do"] = self.rule_counts.get("mua_do", 0) + 1
+                                        self._push("status", f"[Cửa hàng] Đã bấm Buy cho món: [{best_buy_label}]!")
+                                        auto_action_done = True
+                                        time.sleep(0.65)
+                                        f_after = capture()
+                                        shop_x_pos = detect_shop_x_button(f_after)
+                                        if shop_x_pos:
+                                            controller.tap(list(shop_x_pos), rect)
+                                        time.sleep(0.4)
+                                    else:
+                                        # Không đủ mana mua món nào hoặc không có món hợp build -> Bấm nút 'X' đóng cửa hàng
+                                        shop_x_pos = detect_shop_x_button(capture())
+                                        if shop_x_pos:
+                                            controller.tap(list(shop_x_pos), rect)
+                                        now_tick = time.monotonic()
+                                        last_shop_action_time = now_tick
+                                        last_auto_action_time = now_tick
+                                        self.rule_counts["dong_cua_hang"] = self.rule_counts.get("dong_cua_hang", 0) + 1
+                                        self._push("status", f"[Cửa hàng] Đã duyệt 8 món: Chưa đủ Mana hoặc không có món hợp build -> Đóng shop!")
+                                        auto_action_done = True
+                                        time.sleep(0.8)
+                                continue
 
-                                self.recorder.record_decision(
-                                    frame,
-                                    "attribute",
-                                    f"circle_{best_circle_idx}",
-                                    confidence=0.90,
-                                    metadata={
-                                        "chosen_attribute": best_circle_label,
-                                        "parent_skill": parent_sk,
-                                        "active_skills": list(active_skills),
-                                    },
-                                )
-                                # Bấm nút 'Learn' ở dưới đáy để học thuộc tính
-                                controller.tap(list(learn_pos), rect)
-                                now_tick = time.monotonic()
-                                last_learn_click_time = now_tick
-                                last_auto_action_time = now_tick
-                                self.rule_counts["chon_thuoc_tinh"] = self.rule_counts.get("chon_thuoc_tinh", 0) + 1
-                                self._push("status", f"Level 7 Attribute: Đã chọn [{best_circle_label}] & bấm Learn!")
-                                auto_action_done = True
-                                time.sleep(0.7)
-                            continue
+                            # B0.2 MÀN HÌNH CHỌN THUỘC TÍNH LEVEL 7 (Select Attribute có nút "Learn" ở dưới)
+                            if is_attribute_screen(frame) or detect_learn_button(frame) is not None:
+                                learn_pos = detect_learn_button(frame) or (0.50, 0.8786)
+                                controller.release()
+                                self.previous_direction = None
+                                uncertain_since = 0.0
+                                match_running = True
+                                post_death_phase = False
+                                if self.config.get("auto_levelup", True) and (start_tick - last_learn_click_time >= 1.2):
+                                    last_learn_click_time = time.monotonic()
+                                    learned = select_attribute(controller, rect, capture)
+                                    if learned:
+                                        if learned.key:
+                                            active_skills.add(learned.key)
+                                        self.recorder.record_decision(
+                                            frame, "attribute", f"circle_{learned.index}",
+                                            metadata={"chosen_attribute": learned.label, "parent_skill": learned.key},
+                                        )
+                                        self.rule_counts["chon_thuoc_tinh"] = self.rule_counts.get("chon_thuoc_tinh", 0) + 1
+                                        self._push("status", f"Đã xác nhận học thuộc tính: {learned.label}")
+                                    else:
+                                        self._push("status", "Chưa xác nhận được Learn; sẽ đọc lại màn hình.")
+                                    last_auto_action_time = time.monotonic()
+                                continue
 
-                        # B. MÀN HÌNH NÂNG CẤP KỸ NĂNG TRONG TRẬN (3 THẺ DỌC KHI LÊN CẤP)
-                        lvl_res = is_level_up_screen(frame)
-                        if lvl_res:
-                            controller.release()
-                            self.previous_direction = None
-                            uncertain_since = 0.0
-                            match_running = True
-                            post_death_phase = False
+                            # B. MÀN HÌNH NÂNG CẤP KỸ NĂNG TRONG TRẬN (3 THẺ DỌC KHI LÊN CẤP)
+                            lvl_res = is_level_up_screen(frame)
+                            if lvl_res:
+                                controller.release()
+                                self.previous_direction = None
+                                uncertain_since = 0.0
+                                match_running = True
+                                post_death_phase = False
 
-                            # 1. KIỂM TRA NGÔI SAO HỢP THỂ (MÀU ĐỎ Ở GÓC TRÊN BÊN PHẢI)
-                            combo_star_pos = detect_combination_star(frame)
-                            if combo_star_pos and self.config.get("auto_levelup", True) and (start_tick - last_auto_action_time >= 0.8):
-                                controller.tap(list(combo_star_pos), rect)
-                                time.sleep(0.45)
-                                f_combo = screenshot(rect)
-                                combo_choice = find_best_combination_option(f_combo, self.config.get("skill_priority"))
-                                if combo_choice:
-                                    combo_target, combo_label, combo_key = combo_choice
-                                    controller.tap(list(combo_target), rect)
-                                    time.sleep(0.35)
-                                    f_conf = screenshot(rect)
-                                    btn_learn = detect_learn_button(f_conf)
-                                    if btn_learn:
-                                        controller.tap(list(btn_learn), rect)
-                                        time.sleep(0.35)
-                                    self.recorder.record_decision(
-                                        f_combo,
-                                        "combination_magic",
-                                        combo_key,
-                                        confidence=1.0,
-                                        metadata={
-                                            "combo_label": combo_label,
-                                            "combo_key": combo_key,
-                                            "active_skills": list(active_skills),
-                                        },
+                                # 1. KIỂM TRA NGÔI SAO HỢP THỂ (MÀU ĐỎ Ở GÓC TRÊN BÊN PHẢI)
+                                combo_star_pos = detect_combination_star(frame)
+                                if (combo_star_pos and self.config.get("auto_levelup", True)
+                                        and start_tick - last_auto_action_time >= 0.8
+                                        and start_tick - last_combination_attempt >= 10.0):
+                                    last_combination_attempt = time.monotonic()
+                                    learned = select_combination(controller, rect, frame, capture, self.config.get("skill_priority"))
+                                    last_auto_action_time = time.monotonic()
+                                    if learned:
+                                        active_skills.add(learned.key)
+                                        maxed_skills.add(learned.key)
+                                        self.recorder.record_decision(frame, "combination_magic", learned.key,
+                                                                      metadata={"combo_label": learned.label})
+                                        self.rule_counts["magic_combination"] = self.rule_counts.get("magic_combination", 0) + 1
+                                        self._push("status", f"Đã xác nhận học combination: {learned.label}")
+                                    continue
+
+                                # 2. CHỌN THẺ KỸ NĂNG / THUỘC TÍNH BÌNH THƯỜNG
+                                if self.config.get("auto_levelup", True) and (start_tick - last_auto_action_time >= 0.8):
+                                    choice = self.config.get("card_choice", 1)
+                                    choice_res = choose_best_artifact_or_card(
+                                        frame,
+                                        default_choice=choice,
+                                        skill_priority=self.config.get("skill_priority"),
+                                        prefer_crit_and_cooldown=self.config.get("prefer_crit_and_cooldown", True),
+                                        prefer_freeze_traits=self.config.get("prefer_freeze_traits", True),
+                                        active_skills=active_skills,
+                                        maxed_skills=maxed_skills,
+                                        learner=self.learner,
+                                        skill_levels=skill_levels,
+                                        level_count=botcore.detect_player_level(frame) or level_up_clicks + 2,
+                                        early_priority_skills=self.config.get("early_priority_skills"),
                                     )
-                                    active_skills.add(combo_key)
-                                    maxed_skills.add(combo_key)
-                                    if combo_key in COMBINATION_COMPONENTS:
-                                        for comp in COMBINATION_COMPONENTS[combo_key]:
-                                            active_skills.add(comp)
-                                            skill_levels[comp] = 7
-                                            maxed_skills.add(comp)
+                                    card_idx, target = choice_res
+                                    choice_label = getattr(choice_res, "label", f"Thẻ {card_idx}")
+                                    if select_card(controller, rect, frame, choice_res, capture):
+                                        remember_card(choice_res, active_skills, skill_levels, maxed_skills)
+                                        self.recorder.record_decision(
+                                            frame, "level_up", f"card_{card_idx}",
+                                            metadata={"chosen_card": card_idx, "chosen_label": choice_label,
+                                                      "skill_key": choice_res.skill_key,
+                                                      "offered_level": choice_res.offered_level,
+                                                      "active_skills": sorted(active_skills)},
+                                        )
+                                    else:
+                                        last_auto_action_time = time.monotonic()
+                                        self._push("status", "Chưa xác nhận được chọn thẻ; đọc lại màn hình.")
+                                        continue
                                     now_tick = time.monotonic()
                                     last_auto_action_time = now_tick
                                     level_up_clicks += 1
-                                    self.rule_counts["magic_combination"] = self.rule_counts.get("magic_combination", 0) + 1
-                                    self._push("status", f"[Combination Magic] Đã bấm sao đỏ & chọn Hợp thể: [{combo_label}]!")
+                                    self.rule_counts["nang_cap"] = self.rule_counts.get("nang_cap", 0) + 1
+                                    self._push("status", f"Tự động chọn: {choice_label} (Vị trí ô {card_idx})")
                                     auto_action_done = True
-                                    time.sleep(0.6)
-                                    continue
-                                else:
-                                    # Nếu menu mở ra nhưng chưa có combo mong muốn, bấm nút X ở góc trên-phải để quay về chọn thẻ
-                                    close_btn = detect_shop_x_button(f_combo) or combo_star_pos
-                                    controller.tap(list(close_btn), rect)
-                                    time.sleep(0.35)
-
-                            # 2. CHỌN THẺ KỸ NĂNG / THUỘC TÍNH BÌNH THƯỜNG
-                            if self.config.get("auto_levelup", True) and (start_tick - last_auto_action_time >= 0.8):
-                                choice = self.config.get("card_choice", 1)
-                                choice_res = choose_best_artifact_or_card(
-                                    frame,
-                                    default_choice=choice,
-                                    skill_priority=self.config.get("skill_priority"),
-                                    prefer_crit_and_cooldown=self.config.get("prefer_crit_and_cooldown", True),
-                                    prefer_freeze_traits=self.config.get("prefer_freeze_traits", True),
-                                    active_skills=active_skills,
-                                    maxed_skills=maxed_skills,
-                                )
-                                card_idx, target = choice_res
-                                choice_label = getattr(choice_res, "label", f"Thẻ {card_idx}")
-                                sk_key = getattr(choice_res, "skill_key", "")
-                                if sk_key:
-                                    active_skills.add(sk_key)
-                                    skill_levels[sk_key] = skill_levels.get(sk_key, 0) + 1
-                                    max_l = SKILL_MAX_LEVELS.get(sk_key, 1 if sk_key in SPECIAL_STAR_PASSIVES else 7)
-                                    if skill_levels[sk_key] >= max_l:
-                                        maxed_skills.add(sk_key)
-                                self.recorder.record_decision(
-                                    frame,
-                                    "level_up",
-                                    f"card_{card_idx}",
-                                    confidence=0.95,
-                                    metadata={
-                                        "chosen_card": card_idx,
-                                        "chosen_label": choice_label,
-                                        "skill_key": sk_key,
-                                        "active_skills": list(active_skills),
-                                        "has_combo_star": bool(combo_star_pos),
-                                    },
-                                )
-                                controller.tap(list(target), rect)
-                                now_tick = time.monotonic()
-                                last_auto_action_time = now_tick
-                                level_up_clicks += 1
-                                self.rule_counts["nang_cap"] = self.rule_counts.get("nang_cap", 0) + 1
-                                self._push("status", f"Tự động chọn: {choice_label} (Vị trí ô {card_idx})")
-                                auto_action_done = True
-                                time.sleep(0.4)
-                            continue
+                                    time.sleep(0.4)
+                                continue
 
                         # CHIẾN ĐẤU / GAMEPLAY TRONG TRẬN
                         vision = inspect_game(frame, tuple(self.config["player_position"]))
                         current_vision = vision
-                        if vision.gameplay:
+                        if vision.gameplay and fast_combat:
                             match_running = True
                             if match_start_time == 0.0:
                                 match_start_time = time.monotonic()
@@ -1348,7 +1354,6 @@ class FarmApp:
                                     last_chest_pos = None
                             last_gameplay_time = start_tick
                             uncertain_since = 0.0
-                            level_up_clicks = 0
                             match_running = True
                             post_death_phase = False
                             direction = choose_direction(
@@ -1356,9 +1361,13 @@ class FarmApp:
                                 last_known_game_timer_sec if last_known_game_timer_sec > 0.0 else (start_tick - match_start_time),
                                 self.previous_direction,
                                 tuple(self.config["player_position"]),
+                                active_skills=active_skills,
+                                nearest_target_skills=self.config.get("nearest_target_skills"),
                             )
-                            controller.move(direction, rect, self.config)
-                            self.previous_direction = direction
+                            if move_from_frame(controller, rect, self.config, direction, captured_at):
+                                self.previous_direction = direction
+                            else:
+                                self.previous_direction = None
                             if getattr(vision, "monolith", None):
                                 self._push("status", f"[Tháp qua màn] ƯU TIÊN TUYỆT ĐỐI: Đang lao thẳng vào Tháp tại ({vision.monolith[0]}, {vision.monolith[1]}) để nhận Legendary Artifact!")
                             elif vision.chest:
@@ -1367,16 +1376,17 @@ class FarmApp:
                         else:
                             # Khung hình tối / quái dày đặc giữa trận -> vẫn tiếp tục né & di chuyển
                             moved_uncertain = False
-                            if match_running and not post_death_phase and not vision.modal:
+                            if fast_combat and match_running and not post_death_phase and not vision.modal and start_tick - last_gameplay_time <= 1.5:
                                 if uncertain_since == 0.0:
                                     uncertain_since = start_tick
                                 direction = choose_direction(
                                     vision, start_tick, self.previous_direction,
                                     tuple(self.config["player_position"]),
+                                    active_skills=active_skills,
+                                    nearest_target_skills=self.config.get("nearest_target_skills"),
                                 )
-                                controller.move(direction, rect, self.config)
-                                self.previous_direction = direction
-                                moved_uncertain = True
+                                moved_uncertain = move_from_frame(controller, rect, self.config, direction, captured_at)
+                                self.previous_direction = direction if moved_uncertain else None
                                 auto_action_done = True
                                 self._push(
                                     "status",
@@ -1423,6 +1433,9 @@ class FarmApp:
                         self._push("metrics", f"Tự động: {counts}")
                         next_preview = start_tick + 0.05
                     time.sleep(max(0.005, 1.0 / max(2, min(60, self.config["fps"])) - (time.monotonic() - start_tick)))
+            except ActionCancelled:
+                controller.release()
+                self.previous_direction = None
             except Exception as error:
                 # Never let one transient error (window resize, OCR hiccup, screenshot failure)
                 # kill the bot thread and leave the character standing still.
@@ -1433,6 +1446,14 @@ class FarmApp:
         controller.release()
 
     def _poll_events(self):
+        while not self.hotkey_events.empty():
+            key = self.hotkey_events.get_nowait()
+            if key == keyboard.Key.f8:
+                self.toggle()
+            elif key == keyboard.Key.f9:
+                self.stop()
+            elif key == keyboard.Key.f10:
+                self.take_snapshot()
         try:
             for _ in range(15):
                 kind, data = self.events.get_nowait()
@@ -1472,12 +1493,15 @@ class FarmApp:
         self.stop()
         if not self._save_config():
             return
-        hwnd = locate_game(self.config["window_title"])
-        if not hwnd:
-            messagebox.showwarning("Không thấy game", "Hãy mở Magic Survival trước.")
-            return
         try:
-            self.frame_snapshot = screenshot(game_rectangle(hwnd, self.config))
+            rect = None
+            if not hasattr(self.controller, "screen_width"):
+                hwnd = locate_game(self.config["window_title"])
+                if not hwnd:
+                    messagebox.showwarning("Không thấy game", "Hãy mở Magic Survival trước.")
+                    return
+                rect = game_rectangle(hwnd, self.config)
+            self.frame_snapshot = capture_frame(self.controller, rect, screenshot)
             self.calibration_mode = None
             self._display(self.frame_snapshot)
             self.status.set("Đã chụp. Bây giờ có thể thêm quy tắc.")
@@ -1598,6 +1622,9 @@ class FarmApp:
         self.running.clear()
         self.ending.set()
         self.controller.release()
+        shutdown = getattr(self.controller, "close", None)
+        if shutdown is not None:
+            shutdown()
         self.hotkeys.stop()
         self.root.destroy()
 
