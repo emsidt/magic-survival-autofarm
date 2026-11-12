@@ -217,6 +217,17 @@ class PickupMovementTests(unittest.TestCase):
         self.assertAlmostEqual(direction[0], 0.0, delta=0.05)
         self.assertGreater(direction[1], 0.95)
 
+    def test_upper_hud_chest_indicator_is_detected_and_pursued(self):
+        """Chest indicators appearing in upper quarter (e.g. y ~ 105px) must be pursued."""
+        mask = np.zeros((1000, 600), np.uint8)
+        distance = cv2.distanceTransform(255 - mask, cv2.DIST_L2, 5)
+        # Player at center (300, 500), chest indicator at (500, 105)
+        vision = Vision(mask, distance, [], True, 1.0, chest=(500, 105))
+        direction = choose_direction(vision, 0)
+        # Must head up-right towards the indicator
+        self.assertGreater(direction[0], 0.35)
+        self.assertLess(direction[1], -0.60)
+
 
 if __name__ == "__main__":
     unittest.main()

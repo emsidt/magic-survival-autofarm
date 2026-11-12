@@ -1,111 +1,5 @@
 [
   {
-    "run_id": "human_expert_589189",
-    "survival_sec": 447.4,
-    "prev_avg_sec": 152.8,
-    "diff_sec": 294.6,
-    "kills": 0,
-    "reward": 1.5,
-    "skills": [
-      "cloaking",
-      "concentration",
-      "cyclone",
-      "electric_shock",
-      "electric_zone",
-      "energy_bolt",
-      "explorer",
-      "fast_casting",
-      "fireball",
-      "flash_shock",
-      "frost_nova",
-      "incineration",
-      "intelligence",
-      "lava_zone",
-      "magic_circle",
-      "satellite",
-      "spirit",
-      "thunderstorm",
-      "tsunami"
-    ],
-    "combos": []
-  },
-  {
-    "run_id": "human_expert_589683",
-    "survival_sec": 494.0,
-    "prev_avg_sec": 175.5,
-    "diff_sec": 318.5,
-    "kills": 0,
-    "reward": 1.5,
-    "skills": [
-      "blizzard",
-      "cloaking",
-      "concentration",
-      "electric_shock",
-      "electric_zone",
-      "energy_bolt",
-      "fireball",
-      "flash_shock",
-      "frost_nova",
-      "haste",
-      "intelligence",
-      "satellite",
-      "snipe",
-      "thunderstorm",
-      "tsunami"
-    ],
-    "combos": []
-  },
-  {
-    "run_id": "human_expert_592093",
-    "survival_sec": 460.4,
-    "prev_avg_sec": 200.0,
-    "diff_sec": 260.4,
-    "kills": 0,
-    "reward": 1.5,
-    "skills": [
-      "arcane_effuse",
-      "arcane_ray",
-      "blizzard",
-      "cloaking",
-      "concentration",
-      "cyclone",
-      "electric_shock",
-      "electric_zone",
-      "energy_bolt",
-      "explorer",
-      "fast_casting",
-      "flash_shock",
-      "florist",
-      "frost_nova",
-      "incineration",
-      "intelligence",
-      "lava_zone",
-      "magic_bullet",
-      "magic_circle",
-      "meteor",
-      "satellite",
-      "shield",
-      "snipe",
-      "spirit",
-      "thunderstorm",
-      "tsunami"
-    ],
-    "combos": []
-  },
-  {
-    "run_id": "run",
-    "survival_sec": 185.1,
-    "prev_avg_sec": 220.0,
-    "diff_sec": -34.9,
-    "kills": 0,
-    "reward": -0.063,
-    "skills": [
-      "frost_nova",
-      "spirit"
-    ],
-    "combos": []
-  },
-  {
     "run_id": "run",
     "survival_sec": 217.3,
     "prev_avg_sec": 217.3,
@@ -1993,6 +1887,154 @@
     "diff_sec": -1015.4,
     "kills": 0,
     "reward": -0.298,
+    "skills": [
+      "cyclone",
+      "spirit"
+    ],
+    "skill_deltas": {
+      "cyclone": -0.036,
+      "spirit": -0.036
+    },
+    "combos": [],
+    "skill_levels": {
+      "spirit": 3,
+      "cyclone": 1
+    }
+  },
+  {
+    "run_id": "run_20261112_195350_628838_28a98ca5",
+    "survival_sec": 6609.0,
+    "prev_avg_sec": 1283.3,
+    "diff_sec": 5325.7,
+    "kills": 0,
+    "reward": 1.5,
+    "skills": [
+      "arcane_effuse",
+      "blizzard",
+      "cloaking",
+      "concentration",
+      "cyclone",
+      "electric_shock",
+      "flash_shock",
+      "frost_nova",
+      "shield",
+      "spirit",
+      "telekinetic_sword",
+      "tsunami",
+      "vitality"
+    ],
+    "skill_deltas": {
+      "arcane_effuse": 0.6,
+      "blizzard": 0.029,
+      "cloaking": 0.6,
+      "concentration": 0.6,
+      "cyclone": 0.194,
+      "electric_shock": 0.086,
+      "flash_shock": 0.6,
+      "frost_nova": 0.056,
+      "shield": 0.6,
+      "spirit": 0.221,
+      "telekinetic_sword": 0.6,
+      "tsunami": 0.6,
+      "vitality": 0.6
+    },
+    "combos": [],
+    "skill_levels": {
+      "spirit": 4,
+      "cloaking": 1,
+      "blizzard": 1,
+      "tsunami": 1,
+      "vitality": 1,
+      "frost_nova": 4,
+      "electric_shock": 4,
+      "shield": 1,
+      "cyclone": 1,
+      "arcane_effuse": 1,
+      "concentration": 1,
+      "flash_shock": 1
+    }
+  },
+  {
+    "run_id": "run_20261112_201423_937437_e147fe7b",
+    "survival_sec": 5309.0,
+    "prev_avg_sec": 1693.0,
+    "diff_sec": 3616.0,
+    "kills": 38090,
+    "reward": 1.5,
+    "skills": [
+      "arcane_ray",
+      "cloaking",
+      "cyclone",
+      "electric_shock",
+      "electric_zone",
+      "explorer",
+      "fast_casting",
+      "magic_circle",
+      "satellite",
+      "snipe",
+      "spirit",
+      "telekinetic_sword",
+      "tsunami"
+    ],
+    "skill_deltas": {
+      "arcane_ray": 0.6,
+      "cloaking": 0.6,
+      "cyclone": 0.0,
+      "electric_shock": 0.0,
+      "electric_zone": 0.06,
+      "explorer": 0.6,
+      "fast_casting": 0.6,
+      "magic_circle": 0.6,
+      "satellite": 0.082,
+      "snipe": 0.6,
+      "spirit": 0.0,
+      "telekinetic_sword": 0.6,
+      "tsunami": 0.6
+    },
+    "combos": [],
+    "skill_levels": {
+      "satellite": 4,
+      "spirit": 1,
+      "electric_shock": 1,
+      "explorer": 1,
+      "tsunami": 1,
+      "cyclone": 1,
+      "cloaking": 1,
+      "magic_circle": 1,
+      "fast_casting": 1,
+      "arcane_ray": 1,
+      "electric_zone": 1,
+      "snipe": 1
+    }
+  },
+  {
+    "run_id": "unrecorded_938cbe4e10c040dab2abe1ccf9c3f224",
+    "survival_sec": 346.0,
+    "prev_avg_sec": 1971.2,
+    "diff_sec": -1625.2,
+    "kills": 0,
+    "reward": -0.3,
+    "skills": [
+      "cyclone",
+      "spirit"
+    ],
+    "skill_deltas": {
+      "cyclone": -0.036,
+      "spirit": -0.036
+    },
+    "combos": [],
+    "skill_levels": {
+      "spirit": 3,
+      "cyclone": 1
+    }
+  },
+  {
+    "run_id": "unrecorded_67ab1f25977d474dbb409192eb189fa6",
+    "survival_sec": 346.0,
+    "prev_avg_sec": 1846.2,
+    "diff_sec": -1500.2,
+    "kills": 0,
+    "reward": -0.3,
     "skills": [
       "cyclone",
       "spirit"

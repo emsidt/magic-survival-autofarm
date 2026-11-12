@@ -139,7 +139,7 @@ def _verify_chest_color(roi_bgr: np.ndarray, chest_type: str = "treasure_chest")
 
 def detect_chest(
     frame: np.ndarray,
-    min_confidence: float = 0.60,
+    min_confidence: float = 0.55,
     player: tuple[float, float] = (0.5, 0.5),
 ) -> Optional[ChestTarget]:
     """Fast, multi-scale artifact chest & off-screen HUD chest indicator detector
@@ -151,7 +151,7 @@ def detect_chest(
     templates = _get_fast_chest_templates()
     if isinstance(min_confidence, (tuple, list)):
         player = tuple(min_confidence)
-        min_confidence = 0.60
+        min_confidence = 0.55
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     fh, fw = gray.shape[:2]
     span = min(fw, fh)
@@ -159,7 +159,7 @@ def detect_chest(
 
     px, py = int(fw * player[0]), int(fh * player[1])
     min_player_dist = max(14, int(span * 0.025))
-    top_hud_y = int(fh * 0.11)
+    top_hud_y = int(fh * 0.045)
 
     candidates = []
     all_positions: list[tuple[int, int]] = []
@@ -175,12 +175,12 @@ def detect_chest(
                 val = float(res[pt_y, pt_x])
                 cx = int(pt_x * 2 + tw)
                 cy = int(pt_y * 2 + th)
-                # Static HUD elements: top status/level bar, top-left avatar portrait, top-right pause button
+                # Static HUD elements: top status/mana bar, top-left avatar icon, top-right pause button
                 if cy < top_hud_y:
                     continue
-                if cx < int(fw * 0.18) and cy < int(fh * 0.16):
+                if cx < int(fw * 0.12) and cy < int(fh * 0.095):
                     continue
-                if cx > int(fw * 0.80) and cy < int(fh * 0.15):
+                if cx > int(fw * 0.88) and cy < int(fh * 0.095):
                     continue
                 dist_to_player = math.hypot(cx - px, cy - py)
                 # Protect immediate player sprite center pixel core
@@ -611,8 +611,9 @@ def _approach_pickup(
             if math.hypot(bcx - proj_x, bcy - proj_y) < br * 1.9:
                 return None
     # For large monolith tower (180x166px), touching the base perimeter (<= 55px) triggers collision
+    # For artifact chests on the ground, touching triggers modal collection
     is_monolith = bool(getattr(vision, "monolith", None) == target)
-    contact_dist = max(55.0, span * 0.09) if is_monolith else max(16.0, span * 0.035)
+    contact_dist = max(55.0, span * 0.09) if is_monolith else max(32.0, span * 0.055)
     if distance <= contact_dist:
         # Already within contact range of pickup: drive straight into it to guarantee collection!
         return direction
@@ -627,6 +628,9 @@ def _approach_pickup(
 
     # For monolith, ignore minor non-boss blockers when approaching the tower
     if is_monolith and distance < span * 0.45:
+        return direction
+    # For chest, when within close contact range, drive straight through minor blockers
+    if not is_monolith and distance < max(42.0, span * 0.075):
         return direction
 
     if not has_nearest_target_attack:
@@ -841,9 +845,15 @@ def choose_direction(
             if chest_dist > 4:
                 chest_dot = (cdx * direction[0] + cdy * direction[1]) / chest_dist
 
-        chest_heading = bool(vision.chest and chest_dot > 0.25)
-        is_close_chest = bool(vision.chest and chest_dist < span * 0.25)
-        allow_chest_approach = bool(chest_heading and (is_close_chest or has_nearest_target_attack or has_guaranteed_attack) and not boss_emergency)
+        chest_heading = bool(vision.chest and chest_dot > 0.15)
+        is_close_chest = bool(vision.chest and chest_dist < span * 0.35)
+        is_charging_chest = bool(
+            vision.chest
+            and chest_dist < span * 0.45
+            and chest_dot > 0.05
+            and not boss_emergency
+        )
+        allow_chest_approach = bool(chest_heading and (is_close_chest or is_charging_chest or has_nearest_target_attack or has_guaranteed_attack) and not boss_emergency)
 
         # Compute monolith vector if a post-wave stone milestone obelisk is present
         monolith_dot = -1.0
@@ -862,16 +872,16 @@ def choose_direction(
             and not boss_emergency
         )
 
-        if has_clear_exit and near_danger_dist < (4.0 if (allow_chest_approach or is_charging_monolith) else 10.0):
+        if has_clear_exit and near_danger_dist < (4.0 if (allow_chest_approach or is_charging_monolith or is_charging_chest) else 10.0):
             # Loot rewards must never outweigh an immediate collision when an
             # unobstructed escape exists.
             continue
 
         # Danger repulsion: clear collision avoidance with lethal boundary (< 10px) while staying brave
         score = -10.0 * forward_danger
-        if near_danger_dist < 18.0 and not is_charging_monolith:
+        if near_danger_dist < 18.0 and not (is_charging_monolith or is_charging_chest):
             score -= (6.0 if allow_chest_approach else 22.0) * (1.0 - near_danger_dist / 18.0)
-        if near_danger_dist < 10.0 and not is_charging_monolith:
+        if near_danger_dist < 10.0 and not (is_charging_monolith or is_charging_chest):
             score -= (10.0 if allow_chest_approach else 50.0) * (1.0 - near_danger_dist / 10.0)
 
         # Intelligent Swarm Kiting: Flow tangentially in a circular arc around monster swarms
@@ -964,16 +974,18 @@ def choose_direction(
         # High priority for artifact chest / chest indicator:
         if vision.chest and chest_dist > 4 and not boss_blocks_chest:
             if chest_dot > -0.15:
-                base_weight = max(260.0 if allow_chest_approach else 160.0, getattr(vision, "chest_weight", 24.0) * (8.5 if allow_chest_approach else 6.5))
+                base_weight = max(360.0 if is_charging_chest else (260.0 if allow_chest_approach else 180.0), getattr(vision, "chest_weight", 24.0) * (11.0 if is_charging_chest else (8.5 if allow_chest_approach else 6.5)))
                 eff_dot = max(0.18, chest_dot) ** 0.50
-                if near_danger_dist < 14.0:
-                    safe_corridor = max(0.65, 1.0 - forward_danger * 0.35) if allow_chest_approach else 0.10
+                if is_charging_chest:
+                    safe_corridor = 1.0
+                elif near_danger_dist < 14.0:
+                    safe_corridor = max(0.65, 1.0 - forward_danger * 0.35) if allow_chest_approach else 0.15
                 else:
-                    safe_corridor = max(0.50, 1.0 - forward_danger * 0.50)
-                chest_pull = base_weight * eff_dot * safe_corridor / (0.20 + chest_dist / (span * 1.5))
+                    safe_corridor = max(0.55, 1.0 - forward_danger * 0.45)
+                chest_pull = base_weight * eff_dot * safe_corridor / (0.16 + chest_dist / (span * 1.5))
                 score += chest_pull
             if chest_dot < -0.10:
-                score -= 60.0 * (1.0 - chest_dot)
+                score -= 75.0 * (1.0 - chest_dot)
 
         # High priority for wave-milestone monolith:
         if getattr(vision, "monolith", None) and monolith_dist > 4 and not boss_emergency:
