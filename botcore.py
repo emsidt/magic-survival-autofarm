@@ -213,12 +213,13 @@ def detect_chest(
     return None
 
 
-def detect_monolith(frame: np.ndarray, min_confidence: float = 0.45) -> Optional[tuple[int, int]]:
+def detect_monolith(frame: np.ndarray, min_confidence: float = 0.38) -> Optional[tuple[int, int]]:
     """Detect the post-wave milestone stone monolith / obelisk with vertical crimson rune glyphs.
 
     In Magic Survival, when a boss wave is cleared, a monolith tower spawns on the map.
     Touching it triggers the Legendary Artifact selection modal. Until touched, no monsters spawn.
     Uses multi-scale template matching against assets/monolith.png and verifies the crimson core rune.
+    Downsampled 2x for fast, reliable sub-50ms execution on all window scales (LDPlayer, Google Play Games PC).
     """
     template_path = _BASE_DIR / "assets" / "monolith.png"
     tmpl = get_cached_image(template_path)
@@ -233,29 +234,30 @@ def detect_monolith(frame: np.ndarray, min_confidence: float = 0.45) -> Optional
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     H, S, V = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
 
+    small = cv2.resize(gray, (w // 2, h // 2))
     best_val = 0.0
     best_pos = None
 
-    # Multi-scale coverage from 540p up to 1440p (LDPlayer is typically 1080p, scale ~1.75)
-    for scale in (0.75, 0.90, 1.0, 1.15, 1.30, 1.45, 1.60, 1.75, 1.90, 2.10):
-        sw, sh = int(tw * scale), int(th * scale)
-        if sw >= w or sh >= h:
+    # Dense scale range from 0.65 to 2.25 with step 0.06 (covers 540p up to 1440p)
+    scales = np.arange(0.65, 2.25, 0.06)
+    for scale in scales:
+        sw, sh = max(14, int(tw * scale / 2)), max(16, int(th * scale / 2))
+        if sw >= small.shape[1] or sh >= small.shape[0]:
             continue
-        resized = cv2.resize(tmpl_gray, (sw, sh), interpolation=cv2.INTER_AREA)
-        res = cv2.matchTemplate(gray, resized, cv2.TM_CCOEFF_NORMED)
+        st = cv2.resize(tmpl_gray, (sw, sh))
+        res = cv2.matchTemplate(small, st, cv2.TM_CCOEFF_NORMED)
         _, max_val, _, max_loc = cv2.minMaxLoc(res)
-        if max_val > best_val:
-            mcx = max_loc[0] + sw // 2
-            mcy = max_loc[1] + sh // 2
-            # Scaled rune verification box proportional to tower size
-            box_w = max(25, int(sw * 0.28))
-            box_h = max(30, int(sh * 0.28))
+        if max_val > best_val and max_val >= min_confidence:
+            mcx = int((max_loc[0] + sw / 2) * 2)
+            mcy = int((max_loc[1] + sh / 2) * 2)
+            box_w = max(20, int(sw * 0.55))
+            box_h = max(25, int(sh * 0.55))
             roi_H = H[max(0, mcy - box_h): min(h, mcy + box_h), max(0, mcx - box_w): min(w, mcx + box_w)]
             roi_S = S[max(0, mcy - box_h): min(h, mcy + box_h), max(0, mcx - box_w): min(w, mcx + box_w)]
             roi_V = V[max(0, mcy - box_h): min(h, mcy + box_h), max(0, mcx - box_w): min(w, mcx + box_w)]
             red_count = np.sum(((roi_H <= 14) | (roi_H >= 166)) & (roi_S >= 50) & (roi_V >= 50))
-            min_red = max(8, int(12 * scale))
-            if red_count >= min_red and max_val >= min_confidence:
+            min_red = max(6, int(8 * scale))
+            if red_count >= min_red:
                 best_val = max_val
                 best_pos = (mcx, mcy)
 
@@ -378,7 +380,12 @@ def detect_boss_monsters(frame: np.ndarray) -> list[tuple[int, int, int]]:
     return bosses
 
 
-def inspect_game(frame: np.ndarray, player: tuple[float, float] = (0.5, 0.5)) -> Vision:
+def inspect_game(
+    frame: np.ndarray,
+    player: tuple[float, float] = (0.5, 0.5),
+    known_monolith: Optional[tuple[int, int]] = None,
+    known_chest: Optional[tuple[int, int]] = None,
+) -> Vision:
     """Detect enemy shadows, chests, and Mana orbs (Purple L -> Gold M -> Blue S) in a BGR game crop."""
     h, w = frame.shape[:2]
     span = min(w, h)
@@ -410,9 +417,13 @@ def inspect_game(frame: np.ndarray, player: tuple[float, float] = (0.5, 0.5)) ->
             )
     chest_target = detect_chest(frame, player=player) if gameplay else None
     chest_pos = (chest_target[0], chest_target[1]) if chest_target else None
+    if chest_pos is None and gameplay and known_chest is not None:
+        chest_pos = known_chest
     chest_type = getattr(chest_target, "chest_type", "treasure_chest")
     chest_weight = getattr(chest_target, "weight", 24.0)
     monolith_pos = detect_monolith(frame) if gameplay else None
+    if monolith_pos is None and gameplay and known_monolith is not None:
+        monolith_pos = known_monolith
 
     # Shadow enemies (pitch-black silhouettes <= 24 & crimson cores) + dark HP-drain void zones:
     # 1. Pitch-black enemy bodies (<= 24) and crimson core eyes:
@@ -599,7 +610,10 @@ def _approach_pickup(
             proj_x, proj_y = px + t * dx, py + t * dy
             if math.hypot(bcx - proj_x, bcy - proj_y) < br * 1.9:
                 return None
-    if distance <= max(16.0, span * 0.035):
+    # For large monolith tower (180x166px), touching the base perimeter (<= 55px) triggers collision
+    is_monolith = bool(getattr(vision, "monolith", None) == target)
+    contact_dist = max(55.0, span * 0.09) if is_monolith else max(16.0, span * 0.035)
+    if distance <= contact_dist:
         # Already within contact range of pickup: drive straight into it to guarantee collection!
         return direction
     clearance = max(3.0, span * 0.012)
@@ -609,6 +623,10 @@ def _approach_pickup(
     ys = np.clip(np.rint(py + direction[1] * steps).astype(int), 0, h - 1)
     blocked = np.flatnonzero(vision.distance[ys, xs] < clearance)
     if not len(blocked):
+        return direction
+
+    # For monolith, ignore minor non-boss blockers when approaching the tower
+    if is_monolith and distance < span * 0.45:
         return direction
 
     if not has_nearest_target_attack:
@@ -827,11 +845,6 @@ def choose_direction(
         is_close_chest = bool(vision.chest and chest_dist < span * 0.25)
         allow_chest_approach = bool(chest_heading and (is_close_chest or has_nearest_target_attack or has_guaranteed_attack) and not boss_emergency)
 
-        if has_clear_exit and near_danger_dist < (4.0 if allow_chest_approach else 10.0):
-            # Loot rewards must never outweigh an immediate collision when an
-            # unobstructed escape exists, including on the way to a monolith.
-            continue
-
         # Compute monolith vector if a post-wave stone milestone obelisk is present
         monolith_dot = -1.0
         monolith_dist = 0.0
@@ -844,10 +857,15 @@ def choose_direction(
 
         is_charging_monolith = bool(
             getattr(vision, "monolith", None)
-            and monolith_dist < span * 0.65
-            and monolith_dot > 0.15
+            and monolith_dist < span * 0.75
+            and monolith_dot > -0.10
             and not boss_emergency
         )
+
+        if has_clear_exit and near_danger_dist < (4.0 if (allow_chest_approach or is_charging_monolith) else 10.0):
+            # Loot rewards must never outweigh an immediate collision when an
+            # unobstructed escape exists.
+            continue
 
         # Danger repulsion: clear collision avoidance with lethal boundary (< 10px) while staying brave
         score = -10.0 * forward_danger
@@ -968,10 +986,10 @@ def choose_direction(
                         safe_m_corridor = 0.35
                     else:
                         safe_m_corridor = max(0.60, 1.0 - forward_danger * 0.40)
-                monolith_pull = 350.0 * eff_m_dot * safe_m_corridor / (0.15 + monolith_dist / (span * 1.5))
+                monolith_pull = 500.0 * eff_m_dot * safe_m_corridor / (0.15 + monolith_dist / (span * 1.5))
                 score += monolith_pull
             if monolith_dot < 0.0:
-                score -= 80.0 * (1.0 - monolith_dot)
+                score -= 100.0 * (1.0 - monolith_dot)
 
         # Suppress patrol when actively locked onto a safe mana orb, chest, or monolith
         patrol_weight = 0.0 if (vision.chest is not None or getattr(vision, "monolith", None) is not None) else (

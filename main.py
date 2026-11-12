@@ -433,9 +433,9 @@ class Controller:
                 for key in desired - self.keys:
                     pydirectinput.keyDown(key)
 
-                # Re-assert held keys only occasionally (2.5s) instead of 0.35s to prevent emulator stutter
+                # Re-assert held keys every 0.35s to prevent emulator from dropping held keys
                 now = time.monotonic()
-                if now - self.last_key_refresh >= 2.5:
+                if now - self.last_key_refresh >= 0.35:
                     for key in desired & self.keys:
                         pydirectinput.keyDown(key)
                     self.last_key_refresh = now
@@ -1310,7 +1310,12 @@ class FarmApp:
                                 continue
 
                         # CHIẾN ĐẤU / GAMEPLAY TRONG TRẬN
-                        vision = inspect_game(frame, tuple(self.config["player_position"]))
+                        vision = inspect_game(
+                            frame,
+                            tuple(self.config["player_position"]),
+                            known_monolith=last_monolith_pos,
+                            known_chest=last_chest_pos,
+                        )
                         current_vision = vision
                         if vision.gameplay and fast_combat:
                             match_running = True

@@ -606,7 +606,12 @@ def run_cli_bot():
                     py = int(h * player_coords[1])
 
                     # Phân tích thực địa: Quái vật, Đá/Tháp qua màn, Rương cổ vật, Mana Orbs
-                    vision = botcore.inspect_game(frame, player=player_coords)
+                    vision = botcore.inspect_game(
+                        frame,
+                        player=player_coords,
+                        known_monolith=last_monolith_pos,
+                        known_chest=last_chest_pos,
+                    )
 
                     # Theo dõi Tháp qua màn (Monolith) liên tục kèm bù trừ vector di chuyển
                     if getattr(vision, "monolith", None) is not None:

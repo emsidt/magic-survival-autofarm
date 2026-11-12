@@ -206,6 +206,17 @@ class PickupMovementTests(unittest.TestCase):
         result = detect_chest(frame)
         self.assertIsNone(result)
 
+    def test_close_monolith_drives_directly_into_it(self):
+        """When player approaches a monolith tower within contact perimeter (<= 55px), commit directly into it."""
+        mask = np.zeros((800, 500), np.uint8)
+        distance = cv2.distanceTransform(255 - mask, cv2.DIST_L2, 5)
+        # Player at center (250, 400), monolith at (250, 440) (distance = 40px)
+        vision = Vision(mask, distance, [], True, 1.0, monolith=(250, 440))
+        direction = choose_direction(vision, 0)
+        # Must head straight down into the monolith base
+        self.assertAlmostEqual(direction[0], 0.0, delta=0.05)
+        self.assertGreater(direction[1], 0.95)
+
 
 if __name__ == "__main__":
     unittest.main()
