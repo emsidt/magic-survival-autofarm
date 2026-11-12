@@ -44,13 +44,22 @@ class CrashProtectionTests(unittest.TestCase):
                 # The lower Die row, never the upper Revive row.
                 self.assertGreater(target[1] * h, y + image.shape[0] * 0.6)
 
-    def test_unverified_death_sends_no_input(self):
+    def test_unverified_death_or_revive_coordinates_send_no_input(self):
         controller = Mock()
         capture = Mock(return_value=np.zeros((800, 450, 3), np.uint8))
-        with patch("botcore.detect_die_button", return_value=(0.5, 0.73)), \
+        # Any coordinate in the Revive button zone (y < 0.69) must be rejected with no tap sent
+        with patch("botcore.detect_die_button", return_value=(0.5, 0.64)), \
                 patch("botcore.detect_verified_die_text", return_value=None):
             self.assertFalse(dismiss_death(controller, {}, capture, sleep=Mock()))
         controller.tap.assert_not_called()
+
+    def test_die_button_template_fallback_taps_safely_below_revive(self):
+        controller, capture = Mock(), Mock()
+        with patch("botcore.detect_die_button", return_value=(0.46, 0.73)), \
+                patch("botcore.detect_verified_die_text", return_value=None), \
+                patch("botcore.detect_confirm_button", return_value=(0.5, 0.85)):
+            self.assertTrue(dismiss_death(controller, {}, capture, sleep=Mock()))
+        controller.tap.assert_called_once_with([0.46, 0.73], {})
 
     def test_fresh_verified_word_is_used_instead_of_old_template_position(self):
         controller, capture = Mock(), Mock()

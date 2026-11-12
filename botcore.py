@@ -1196,6 +1196,9 @@ def detect_ad_close_text(frame: np.ndarray, gear_pos=None) -> Optional[tuple[flo
 
         def normalize(text):
             text = text.lower().replace("đ", "d")
+            # Replace common English OCR misreads of Vietnamese 'đóng' (diacritics read as 6, 0, o, etc.)
+            text = re.sub(r"\b(d|0|o)(6|0|o)[\s]*(ng)\b", "dong", text)
+            text = re.sub(r"\bv(i|1|l)de(o|0)\b", "video", text)
             text = "".join(c for c in unicodedata.normalize("NFD", text) if unicodedata.category(c) != "Mn")
             return re.sub(r"\s+", " ", re.sub(r"[^a-z0-9 ]", " ", text)).strip()
 
@@ -1207,13 +1210,16 @@ def detect_ad_close_text(frame: np.ndarray, gear_pos=None) -> Optional[tuple[flo
             "no thanks", "not now", "khong cam on", "de sau",
             "quay lai game", "tro ve game", "continue to game",
             # Common OCR misreads of small 'Đóng' without accents
-            "06 ng", "o6 ng", "oong", "0ong", "d0ng",
+            "06 ng", "o6 ng", "oong", "0ong", "d0ng", "d6ng", "06ng", "o6ng", "d6 ng",
+            "d6ng video", "d0ng video", "06ng video", "06 ng video",
         }
 
         def is_valid_label(lbl: str) -> bool:
             if lbl in labels:
                 return True
-            if re.match(r"^(06|o6|0o|oo|d0|do)[\s]*ng$", lbl):
+            if re.match(r"^(06|o6|0o|oo|d0|do|d6)[\s]*ng$", lbl):
+                return True
+            if re.match(r"^(06|o6|0o|oo|d0|do|d6)[\s]*ng[\s]+(video|quang cao|app)$", lbl):
                 return True
             return False
         for line in asyncio.run(recognize()).lines:
@@ -1389,13 +1395,17 @@ def is_ad_screen(frame: np.ndarray) -> bool:
             return await winocr.recognize_pil(pil_img, lang="en")
 
         res = asyncio.run(_ocr_ad())
-        full_text = " ".join(l.text.lower() for l in res.lines)
+        def _norm_kws(text):
+            text = text.lower().replace("đ", "d")
+            text = "".join(c for c in unicodedata.normalize("NFD", text) if unicodedata.category(c) != "Mn")
+            return text
+        full_text = _norm_kws(" ".join(l.text for l in res.lines))
         ad_kws = (
-            "cài đặt", "install", "not in-game", "google play", "play store",
+            "cai dat", "install", "not in-game", "google play", "play store",
             "reward in", "reward granted", "candy crush", "download now",
-            "free download", "bỏ qua quảng cáo", "skip ad", "close ad", "close video",
-            "đóng video", "đóng quảng cáo", "mất phần thưởng", "tiếp tục video",
-            "cửa hàng play", "chơi ngay", "tải ngay", "play now",
+            "free download", "bo qua quang cao", "skip ad", "close ad", "close video",
+            "dong video", "dong quang cao", "mat phan thuong", "tiep tuc video",
+            "cua hang play", "choi ngay", "tai ngay", "play now", "war inc",
         )
         if any(kw in full_text for kw in ad_kws):
             return True

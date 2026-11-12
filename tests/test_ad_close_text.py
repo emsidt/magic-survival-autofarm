@@ -81,6 +81,12 @@ class AdCloseTextTests(unittest.TestCase):
         self.assertAlmostEqual(btn[0], 0.11, delta=0.04)
         self.assertAlmostEqual(btn[1], 0.07, delta=0.04)
 
+        # Must also detect correctly at native 1080x1920 emulator resolution where OCR reads 'D6ng'
+        up_btn = botcore.detect_close_button(cv2.resize(frame, (1080, 1920)))
+        self.assertIsNotNone(up_btn)
+        self.assertAlmostEqual(up_btn[0], 0.11, delta=0.04)
+        self.assertAlmostEqual(up_btn[1], 0.07, delta=0.04)
+
         vis = botcore.inspect_game(frame)
         self.assertFalse(vis.gameplay)
         self.assertTrue(vis.modal)
@@ -120,6 +126,12 @@ class AdCloseTextTests(unittest.TestCase):
         # Must choose the button 'ĐÓNG VIDEO', NOT the title question!
         self.assertAlmostEqual(btn[0], 0.36, delta=0.04)
         self.assertAlmostEqual(btn[1], 0.58, delta=0.04)
+
+        # Must also detect correctly at native 1080x1920 emulator resolution
+        up_btn = botcore.detect_close_button(cv2.resize(frame, (1080, 1920)))
+        self.assertIsNotNone(up_btn)
+        self.assertAlmostEqual(up_btn[0], 0.36, delta=0.04)
+        self.assertAlmostEqual(up_btn[1], 0.58, delta=0.04)
 
         vis = botcore.inspect_game(frame)
         self.assertFalse(vis.gameplay)

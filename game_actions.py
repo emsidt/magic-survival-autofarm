@@ -78,16 +78,19 @@ def _returned_to_game(frame):
 
 
 def dismiss_death(controller, rect, capture, sleep=time.sleep):
-    """Tap only a freshly verified Die label, never the nearby rewarded Revive."""
+    """Tap strictly the Die button below Revive (y >= 0.69), never Revive (y ~ 0.64)."""
     controller.release()
     frame = capture()
-    if botcore.detect_die_button(frame) is None:
+    die_btn = botcore.detect_die_button(frame)
+    if die_btn is None:
         return False
-    target = botcore.detect_verified_die_text(frame)
-    if target is None:
-        return False
-    # CRITICAL HARD SAFETY GATE: Revive is at y ~ 0.64. Die is strictly at y >= 0.68.
-    if target[1] < 0.68 or target[1] > 0.85:
+    die_txt = botcore.detect_verified_die_text(frame)
+    # Target the Die button (below Revive): prefer fresh OCR word coordinate, fallback to template match
+    target = die_txt or die_btn
+    # CRITICAL HARD SAFETY GATE:
+    # Revive is at y ~ 0.64. Die is strictly at y >= 0.69 (center is at y ~ 0.73).
+    # NEVER EVER tap if target[1] < 0.69 (Revive button zone) or target[1] > 0.85!
+    if target[1] < 0.69 or target[1] > 0.85:
         return False
     controller.tap(list(target), rect)
     sleep(0.40)
