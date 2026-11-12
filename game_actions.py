@@ -400,7 +400,10 @@ def format_match_summary(
     if kills > 0:
         lines.append(f"⚔️  Số quái hạ gục: {kills:,}")
     if is_dict_report and report and "reward" in report:
-        lines.append(f"🎯  Điểm cộng/trừ AI: {reward_str} điểm (Ván #{n_runs} | Mốc TB mới: {n_m:02d}:{n_s:02d})")
+        if report.get("is_human"):
+            lines.append(f"🎯  Điểm cộng/trừ AI: {reward_str} điểm (Ván người chơi - Học build xuất sắc | Mốc TB bot: {n_m:02d}:{n_s:02d})")
+        else:
+            lines.append(f"🎯  Điểm cộng/trừ AI: {reward_str} điểm (Ván #{n_runs} | Mốc TB mới: {n_m:02d}:{n_s:02d})")
     elif survival_seconds > 0:
         lines.append("🎯  Điểm cộng/trừ AI: Đã ghi nhận thời gian sống")
     else:

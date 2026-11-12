@@ -108,18 +108,20 @@ class AdaptiveLearner:
 
         # Baseline: initialize from first run if no history
         if n == 0 or prev_avg <= 10.0:
-            prev_avg = max(180.0, survival_seconds)
+            prev_avg = max(180.0, min(600.0, survival_seconds))
             self.policy["average_survival_sec"] = prev_avg
 
+        # Phân biệt ván người chơi (>= 20 phút) vs ván bot tự chơi (< 20 phút)
+        is_human_run = bool(survival_seconds >= 1200.0)
         diff = survival_seconds - prev_avg
 
-        if diff >= 0:
-            # Better than average: Strong reward to encourage this build progression
-            reward = min(1.5, diff / max(prev_avg * 0.70, 120.0))
+        if is_human_run or diff >= 0:
+            # Vượt mốc trung bình hoặc ván người chơi xuất sắc:
+            # Trao thưởng điểm dương để bot học hỏi cách chọn kỹ năng mạnh
+            reward = min(1.5, max(1.0 if is_human_run else 0.0, diff / max(prev_avg * 0.70, 120.0)))
             lr = 0.20
         else:
-            # Below average: Mild penalty because the bot is still clumsy in movement
-            # Never harshly punish a build that the user knows is strong!
+            # Dưới trung bình: Giảm nhẹ điểm để tránh phá vỡ các build tốt khi bot di chuyển lỗi
             reward = max(-0.30, diff / max(prev_avg * 2.5, 360.0))
             lr = 0.06  # Asymmetric: much slower decay on losses
 
@@ -147,11 +149,16 @@ class AdaptiveLearner:
                 synergies_updated[pair_key] = new_syn
                 synergy_deltas[pair_key] = round(new_syn - cur_syn, 3)
 
-        # Moving average update with dampening so it doesn't fluctuate wildly
-        weight = min(n, 12)
-        new_avg = round((prev_avg * weight + survival_seconds) / (weight + 1), 1)
-        self.policy["total_runs_analyzed"] = n + 1
-        self.policy["average_survival_sec"] = new_avg
+        # Cập nhật thời gian trung bình (Moving average)
+        # QUAN TRỌNG: TUYỆT ĐỐI KHÔNG để các ván người chơi (25p - 110p) làm lệch mốc trung bình của bot!
+        if not is_human_run:
+            weight = min(n, 12)
+            new_avg = round((prev_avg * weight + survival_seconds) / (weight + 1), 1)
+            self.policy["total_runs_analyzed"] = n + 1
+            self.policy["average_survival_sec"] = new_avg
+        else:
+            self.policy["total_runs_analyzed"] = n + 1
+            new_avg = prev_avg
 
         run_record = {
             "run_id": run_id,
@@ -163,6 +170,7 @@ class AdaptiveLearner:
             "skills": all_skills,
             "skill_deltas": skill_deltas,
             "combos": combos,
+            "is_human": is_human_run,
         }
         if skill_levels:
             run_record["skill_levels"] = {k: int(v) for k, v in skill_levels.items() if k in all_skills}
@@ -178,9 +186,13 @@ class AdaptiveLearner:
             "diff_sec": diff,
             "reward": reward,
             "total_runs": n + 1,
+            "average_survival_sec": new_avg,
             "new_avg_survival": new_avg,
             "skills_updated": skills_updated,
             "skill_deltas": skill_deltas,
+            "synergies_updated": synergies_updated,
+            "synergy_deltas": synergy_deltas,
+            "is_human": is_human_run,
         }
 
     def get_skill_bonus(self, skill_key: str, active_skills: Optional[set[str]] = None) -> float:
