@@ -33,6 +33,20 @@ class PickupMovementTests(unittest.TestCase):
         vision = self.scene(chest=(480, 400), gems=[(250, 365)])
         self.assertEqual(choose_direction(vision, 0), (0, -1))
 
+    def test_chest_takes_priority_over_distracting_mana_in_opposite_direction(self):
+        vision = self.scene(chest=(480, 400), gems=[(180, 400)])
+        # Must head towards the chest (+x direction), never turn away to a mana orb in opposite direction
+        direction = choose_direction(vision, 0)
+        self.assertGreater(direction[0], 0.90)
+
+    def test_bottom_left_chest_with_top_right_mana_heads_directly_bottom_left(self):
+        # Scenario: Player at center (250, 400), chest at bottom-left (100, 700), mana orb at top-right (350, 200)
+        vision = self.scene(chest=(100, 700), gems=[(350, 200)])
+        direction = choose_direction(vision, 0)
+        # Direction must point bottom-left towards chest (dx < 0, dy > 0)
+        self.assertLess(direction[0], -0.3)
+        self.assertGreater(direction[1], 0.6)
+
     def test_sword_approaches_nearest_blocker(self):
         vision = self.scene(enemies=[(325, 400, 14)], chest=(420, 400))
         self.assertLess(choose_direction(vision, 0)[0], 0.99)

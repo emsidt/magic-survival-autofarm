@@ -182,11 +182,14 @@ def locate_game(title: str = "Magic Survival"):
         w_low = w_text.lower()
         c_low = c_text.lower()
 
-        # Exclude dev tools / browsers / editors, unless window title matches the game (e.g. Google Play Games uses HwndWrapper)
+        # Always exclude dev tools / editors / browsers by window title keyword
+        if any(k in w_low for k in EXCLUDE_KEYWORDS):
+            return
+
+        # Exclude window classes like browsers or wrappers, unless window title matches the game (e.g. Google Play Games uses HwndWrapper)
         is_game_title = (title.lower() in w_low) or ("magic survival" in w_low) or ("magic-survival" in w_low)
-        if not is_game_title:
-            if any(k in w_low for k in EXCLUDE_KEYWORDS) or any(c_low.startswith(k) for k in EXCLUDE_CLASSES):
-                return
+        if not is_game_title and any(c_low.startswith(k) for k in EXCLUDE_CLASSES):
+            return
 
         try:
             left, top, right, bottom = win32gui.GetClientRect(hwnd)

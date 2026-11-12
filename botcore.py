@@ -723,12 +723,22 @@ def choose_direction(
                 best_orb_val = val
                 best_orb = (gx, gy, bw, dist, gem_safety)
 
-    # Commit to one concrete pickup rather than blending several attraction
-    # vectors. Nearby mana remains worth collecting on the way to a distant chest.
+    # Commit to one concrete pickup rather than blending several attraction vectors.
+    # Monolith and Chest are top-priority pickups.
+    # When a chest is distant, nearby mana orbs may be collected on the way only if they do
+    # not pull backwards in the opposite direction (odot >= 0.0).
     pickup_target = vision.monolith
     if pickup_target is None and vision.chest is not None:
-        chest_distance = math.hypot(vision.chest[0] - px, vision.chest[1] - py)
+        cdx, cdy = vision.chest[0] - px, vision.chest[1] - py
+        chest_distance = math.hypot(cdx, cdy)
+        divert_to_orb = False
         if best_orb is not None and chest_distance > span * 0.35 and best_orb[3] < chest_distance * 0.65:
+            odx, ody = best_orb[0] - px, best_orb[1] - py
+            if best_orb[3] > 0 and chest_distance > 0:
+                odot = (odx * cdx + ody * cdy) / (best_orb[3] * chest_distance)
+                if odot >= 0.0:
+                    divert_to_orb = True
+        if divert_to_orb:
             pickup_target = (best_orb[0], best_orb[1])
         else:
             pickup_target = vision.chest
