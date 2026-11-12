@@ -1409,6 +1409,54 @@ class VisionTests(unittest.TestCase):
             self.assertIsNotNone(t_res3)
             self.assertEqual(t_res3, (2, 31, 151))
 
+    def test_depth_monolith_and_spirit_lv7_priority(self):
+        import botcore
+        from unittest.mock import patch
+
+        # 1. Monolith pasted onto dark Depth map floor must be detected and rammed directly
+        m = cv2.imread(str(botcore._BASE_DIR / "assets" / "monolith.png"))
+        self.assertIsNotNone(m)
+        depth_frame = np.full((1011, 584, 3), (62, 56, 46), dtype=np.uint8)
+        hsv_m = cv2.cvtColor(m, cv2.COLOR_BGR2HSV)
+        ground_mask = (hsv_m[:, :, 0] >= 18) & (hsv_m[:, :, 0] <= 35) & (hsv_m[:, :, 1] >= 35) & (hsv_m[:, :, 2] >= 90)
+        spirit_mask = np.zeros(m.shape[:2], dtype=bool)
+        spirit_mask[:60, 95:] = True
+        keep = ~(ground_mask | spirit_mask)
+        depth_frame[150 : 150 + m.shape[0], 180 : 180 + m.shape[1]][keep] = m[keep]
+        m_pos = botcore.detect_monolith(depth_frame)
+        self.assertIsNotNone(m_pos, "Monolith on dark Depth background must be detected")
+        v = botcore.inspect_game(depth_frame, player=(0.5, 0.5))
+        self.assertIsNotNone(v.monolith)
+        dx, dy = botcore.choose_direction(v, elapsed=180.0, player=(0.5, 0.5))
+        self.assertLess(dy, -0.80, "Player must drive straight North into distant monolith without dodging")
+
+        # 2. Spirit Lv 7 ('You can obtain an attribute.') must take immediate priority over Electric Zone & Special Passives
+        cards = {
+            1: botcore.CardSlotData(1, text_lines=["electric zone", "lv 2"], skills=["electric_zone"], offered_level=2),
+            2: botcore.CardSlotData(
+                2,
+                text_lines=["spirit", "you can obtain an attribute."],
+                skills=["spirit"],
+                offered_level=7,
+            ),
+            3: botcore.CardSlotData(
+                3,
+                text_lines=["adrenaline", "*"],
+                skills=["adrenaline"],
+                has_asterisk=True,
+                is_special_passive=True,
+                special_passive_name="adrenaline",
+            ),
+        }
+        dummy = np.zeros((960, 540, 3), dtype=np.uint8)
+        with patch("botcore._detect_cards_ocr", return_value=cards), patch(
+            "botcore._detect_skills_templates", return_value={1: [], 2: [], 3: []}
+        ):
+            res = botcore.choose_best_artifact_or_card(dummy, active_skills={"spirit", "electric_zone"}, level_count=5)
+        self.assertEqual(res.idx, 2)
+        self.assertEqual(res.skill_key, "spirit")
+        self.assertEqual(res.offered_level, 7)
+
 
 if __name__ == "__main__":
     unittest.main()

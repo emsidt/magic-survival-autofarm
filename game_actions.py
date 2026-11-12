@@ -232,7 +232,7 @@ def select_attribute(controller, rect, capture, sleep=time.sleep):
     last_index = None
     for index, target in circles.items():
         controller.tap(list(target), rect)
-        sleep(0.30)
+        sleep(0.18)
         frame = capture()
         if not botcore.is_attribute_screen(frame):
             return None
@@ -240,18 +240,22 @@ def select_attribute(controller, rect, capture, sleep=time.sleep):
         if (parent or label != "Nhánh Attribute") and (best is None or score > best[0]):
             best = (score, index, label, parent)
         last_index = index
+        # Once a top-priority Combination Trait (score >= 500, e.g. Magic Blade / Chain Lightning)
+        # is found, learn it immediately without wasting time clicking remaining circles!
+        if best is not None and best[0] >= 500 and last_index == best[1]:
+            break
     if best is None:
         return None
     _, index, label, parent = best
     if last_index != index:
         controller.tap(list(circles[index]), rect)
-        sleep(0.30)
+        sleep(0.18)
     frame = capture()
     learn = botcore.detect_learn_button(frame)
     if not botcore.is_attribute_screen(frame) or not learn or not botcore.is_learn_button_active(frame):
         return None
     controller.tap(list(learn), rect)
-    sleep(0.45)
+    sleep(0.32)
     if not _returned_to_game(capture()):
         return None
     return LearnedSelection(parent, label, index)

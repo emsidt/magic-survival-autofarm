@@ -213,13 +213,13 @@ def detect_chest(
     return None
 
 
-def detect_monolith(frame: np.ndarray, min_confidence: float = 0.56) -> Optional[tuple[int, int]]:
+def detect_monolith(frame: np.ndarray, min_confidence: float = 0.48) -> Optional[tuple[int, int]]:
     """Detect the post-wave milestone stone monolith / obelisk with vertical crimson rune glyphs.
 
     In Magic Survival, when a boss wave is cleared, a monolith tower spawns on the map.
     Touching it triggers the Legendary Artifact selection modal. Until touched, no monsters spawn.
-    Uses resolution-proportional multi-scale template matching against assets/monolith.png and
-    strictly verifies the vertical crimson fissure and gray stone pillar body.
+    Uses tight spire multi-scale template matching (independent of map ground color) plus direct
+    vertical crimson rune + silver-gray stone spire verification so the bot never dodges the Obelisk.
     """
     template_path = _BASE_DIR / "assets" / "monolith.png"
     tmpl = get_cached_image(template_path)
@@ -227,69 +227,97 @@ def detect_monolith(frame: np.ndarray, min_confidence: float = 0.56) -> Optional
         return None
 
     h, w = frame.shape[:2]
+    span = min(h, w)
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     tmpl_gray = cv2.cvtColor(tmpl, cv2.COLOR_BGR2GRAY)
-    th, tw = tmpl_gray.shape[:2]
+    # Tight spire crop excludes the surrounding Academy ground and Spirit projectile in monolith.png
+    spire_gray = tmpl_gray[26:134, 68:110] if (tmpl_gray.shape[0] >= 134 and tmpl_gray.shape[1] >= 110) else tmpl_gray
 
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
     H, S, V = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
 
     small = cv2.resize(gray, (w // 2, h // 2))
+    base_scale = max(0.55, w / 617.0)
+    scales = [base_scale * factor for factor in (0.78, 0.85, 0.92, 1.00, 1.08, 1.16, 1.25)]
+
+    def _verify_monolith_at(mcx: int, mcy: int, scale: float = 1.0) -> bool:
+        # Monolith tower is a physical ground obstacle inside the playable field:
+        # its center is NEVER on the 6% screen border, top status bar, or top-left/top-right HUD icons
+        if mcx < int(w * 0.06) or mcx > int(w * 0.94):
+            return False
+        if mcy < int(h * 0.14) or mcy > int(h * 0.92):
+            return False
+        if mcx < int(w * 0.20) and mcy < int(h * 0.22):
+            return False
+        if mcx > int(w * 0.80) and mcy < int(h * 0.22):
+            return False
+        box_w = max(24, int(36 * scale))
+        box_h = max(36, int(56 * scale))
+        y0, y1 = max(0, mcy - box_h), min(h, mcy + box_h)
+        x0, x1 = max(0, mcx - box_w), min(w, mcx + box_w)
+        roi_H = H[y0:y1, x0:x1]
+        roi_S = S[y0:y1, x0:x1]
+        roi_V = V[y0:y1, x0:x1]
+        if roi_H.size == 0:
+            return False
+        # Distinctive vertical crimson rune glyph in center of monolith
+        red_mask = ((roi_H <= 14) | (roi_H >= 166)) & (roi_S >= 50) & (roi_V >= 50)
+        red_count = int(np.sum(red_mask))
+        min_red = max(20, int(28 * scale))
+        red_frac = red_count / float(roi_H.size)
+        # Reject round red monster cores that fill > 16% of the ROI
+        if red_count < min_red or red_frac > 0.16:
+            return False
+        ys, xs = np.where(red_mask)
+        if len(ys) < min_red:
+            return False
+        red_h = int(ys.max() - ys.min()) + 1
+        red_w = int(xs.max() - xs.min()) + 1
+        # Real monolith rune is a tall vertical fissure (height / width >= 1.35), not a circular blob
+        if red_h / max(1.0, float(red_w)) < 1.35 or red_h < max(22, int(32 * scale)):
+            return False
+        # Must have bright silver-gray stone highlights (S <= 48, V >= 125) AND dark rock outline (V <= 30)
+        bright_stone = int(np.sum((roi_S <= 48) & (roi_V >= 125) & (roi_V <= 235)))
+        dark_outline = int(np.sum(roi_V <= 30))
+        if bright_stone < max(24, int(32 * scale)) or dark_outline < max(24, int(32 * scale)):
+            return False
+        return True
+
     best_val = 0.0
     best_pos = None
+    for tmpl_g in (spire_gray, tmpl_gray):
+        th, tw = tmpl_g.shape[:2]
+        for scale in scales:
+            sw, sh = max(10, int(tw * scale / 2)), max(16, int(th * scale / 2))
+            if sw >= small.shape[1] or sh >= small.shape[0]:
+                continue
+            st = cv2.resize(tmpl_g, (sw, sh))
+            res = cv2.matchTemplate(small, st, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+            if max_val > best_val and max_val >= min_confidence:
+                mcx = int((max_loc[0] + sw / 2) * 2)
+                mcy = int((max_loc[1] + sh / 2) * 2)
+                if _verify_monolith_at(mcx, mcy, scale):
+                    best_val = max_val
+                    best_pos = (mcx, mcy)
 
-    # Scale relative to frame width (monolith.png was captured from a w=617 window)
-    base_scale = max(0.55, w / 617.0)
-    scales = [base_scale * factor for factor in (0.78, 0.84, 0.90, 0.95, 1.00, 1.06, 1.12, 1.18, 1.25)]
-    for scale in scales:
-        sw, sh = max(14, int(tw * scale / 2)), max(16, int(th * scale / 2))
-        if sw >= small.shape[1] or sh >= small.shape[0]:
-            continue
-        st = cv2.resize(tmpl_gray, (sw, sh))
-        res = cv2.matchTemplate(small, st, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, max_loc = cv2.minMaxLoc(res)
-        if max_val > best_val and max_val >= min_confidence:
-            mcx = int((max_loc[0] + sw / 2) * 2)
-            mcy = int((max_loc[1] + sh / 2) * 2)
-            # Monolith tower is a physical ground obstacle:
-            # its center is NEVER in the top status bar or top-left/top-right HUD icons
-            if mcy < int(h * 0.14):
-                continue
-            if mcx < int(w * 0.20) and mcy < int(h * 0.22):
-                continue
-            if mcx > int(w * 0.80) and mcy < int(h * 0.22):
-                continue
-            box_w = max(24, int(sw * 0.65))
-            box_h = max(30, int(sh * 0.65))
-            roi_H = H[max(0, mcy - box_h): min(h, mcy + box_h), max(0, mcx - box_w): min(w, mcx + box_w)]
-            roi_S = S[max(0, mcy - box_h): min(h, mcy + box_h), max(0, mcx - box_w): min(w, mcx + box_w)]
-            roi_V = V[max(0, mcy - box_h): min(h, mcy + box_h), max(0, mcx - box_w): min(w, mcx + box_w)]
-            if roi_H.size == 0:
-                continue
-            # Distinctive vertical crimson rune glyph in center of monolith
-            red_mask = ((roi_H <= 14) | (roi_H >= 166)) & (roi_S >= 50) & (roi_V >= 50)
-            red_count = int(np.sum(red_mask))
-            min_red = max(24, int(32 * scale))
-            red_frac = red_count / float(roi_H.size)
-            # Reject round red monster cores that fill > 9% of the ROI
-            if red_count < min_red or red_frac > 0.095:
-                continue
-            ys, xs = np.where(red_mask)
-            if len(ys) < min_red:
-                continue
-            red_h = int(ys.max() - ys.min()) + 1
-            red_w = int(xs.max() - xs.min()) + 1
-            # Real monolith rune is a tall vertical fissure (height / width >= 1.65), not a circular blob
-            if red_h / max(1.0, float(red_w)) < 1.65:
-                continue
-            # Verify stone body (moderate-to-high brightness, low saturation gray rock)
-            gray_stone = int(np.sum((roi_S <= 45) & (roi_V >= 40) & (roi_V <= 215)))
-            min_stone = max(45, int(55 * scale))
-            if gray_stone >= min_stone:
-                best_val = max_val
-                best_pos = (mcx, mcy)
+    if best_pos is not None:
+        return best_pos
 
-    return best_pos
+    # Direct vertical crimson rune + silver-gray stone spire detector (handles partial spell overlap)
+    red_full = (((H <= 14) | (H >= 166)) & (S >= 55) & (V >= 55)).astype(np.uint8) * 255
+    red_full[: int(h * 0.14)] = 0
+    red_full[int(h * 0.92) :] = 0
+    red_closed = cv2.morphologyEx(red_full, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 9)))
+    cnt, _, stats, centroids = cv2.connectedComponentsWithStats(red_closed, 8)
+    for i in range(1, cnt):
+        rx, ry, rw, rh, _ = stats[i]
+        if max(26, int(span * 0.055)) <= rh <= int(span * 0.22) and (rh / max(1.0, float(rw))) >= 1.45:
+            mcx, mcy = int(round(centroids[i][0])), int(round(centroids[i][1]))
+            if _verify_monolith_at(mcx, mcy, base_scale):
+                return (mcx, mcy)
+
+    return None
 
 
 @dataclass
@@ -508,6 +536,7 @@ def inspect_game(
         monolith_clear_radius = max(110, int(span * 0.18))
         cv2.circle(dark, (mx, my), monolith_clear_radius, 0, -1)
         cv2.ellipse(dark, (mx, my), (int(monolith_clear_radius * 0.85), int(monolith_clear_radius * 1.45)), 0, 0, 360, 0, -1)
+        enemy_mask[max(0, my - monolith_clear_radius) : min(h, my + monolith_clear_radius), max(0, mx - monolith_clear_radius) : min(w, mx + monolith_clear_radius)] = 0
 
     # Loot/player exclusions must never carve a passage through a wave's dark zone.
     dark |= hazard_mask
@@ -646,10 +675,13 @@ def _approach_pickup(
             proj_x, proj_y = px + t * dx, py + t * dy
             if math.hypot(bcx - proj_x, bcy - proj_y) < br * 1.9:
                 return None
-    # For large monolith tower (180x166px), touching the base perimeter (<= 55px) triggers collision
+    # For large monolith tower (180x166px), no monsters spawn while the monolith is active:
+    # always drive straight into the monolith regardless of distance!
     # For artifact chests on the ground, touching triggers modal collection
     is_monolith = bool(getattr(vision, "monolith", None) == target)
-    contact_dist = max(55.0, span * 0.09) if is_monolith else max(32.0, span * 0.055)
+    if is_monolith:
+        return direction
+    contact_dist = max(32.0, span * 0.055)
     if distance <= contact_dist:
         # Already within contact range of pickup: drive straight into it to guarantee collection!
         return direction
@@ -662,11 +694,8 @@ def _approach_pickup(
     if not len(blocked):
         return direction
 
-    # For monolith, ignore minor non-boss blockers when approaching the tower
-    if is_monolith and distance < span * 0.45:
-        return direction
     # For chest, when within close contact range, drive straight through minor blockers
-    if not is_monolith and distance < max(42.0, span * 0.075):
+    if distance < max(42.0, span * 0.075):
         return direction
 
     if not has_nearest_target_attack:
@@ -3031,6 +3060,14 @@ def detect_learn_button(frame: np.ndarray, min_confidence: float = 0.65) -> Opti
         if best_score >= min_confidence and best_match:
             return (round(best_match[0] / w, 4), round(best_match[1] / h, 4))
 
+    # Fast visual gate before OCR fallback: on 'Select Magic' level-up screens, the Pause button is visible
+    # in the top-right corner, whereas 'Select Attribute' / 'Magic Combination' screens have no Pause button.
+    if detect_pause_button(frame) is not None:
+        return None
+    gray_check = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+    if int(np.sum(gray_check >= 80)) < 25:
+        return None
+
     # Fast OCR fallback for 'Learn' button
     try:
         import asyncio
@@ -3565,6 +3602,13 @@ SPECIAL_STAR_PASSIVES: dict[str, list[str]] = {
     "recombination": ["recombination", "recombinant"],
     "mutation": ["mutation", "mutant"],
     "enchant": ["enchant", "select one attack spell to enhance"],
+    "energy_engineering": ["energy engineering"],
+    "weather_controller": ["weather controller"],
+    "natural_science": ["natural science"],
+    "electromagnetism": ["electromagnetism"],
+    "high_output": ["high output"],
+    "geometry": ["geometry"],
+    "astronomy": ["astronomy"],
 }
 
 # Special Passive Priority Score (Wiki & Reddit Tier List)
@@ -3592,6 +3636,13 @@ SPECIAL_PASSIVE_SCORES: dict[str, float] = {
     "taoist": 110.0,
     "eldritch": 110.0,
     "enchant": 165.0,
+    "energy_engineering": 145.0,
+    "weather_controller": 145.0,
+    "natural_science": 135.0,
+    "electromagnetism": 145.0,
+    "high_output": 135.0,
+    "geometry": 135.0,
+    "astronomy": 145.0,
 }
 
 # Freeze traits for Blizzard, Frost Nova, Tsunami (Absolute priority for ice spells)
@@ -3831,9 +3882,14 @@ def _detect_cards_ocr(frame: np.ndarray, h: int, w: int) -> dict[int, CardSlotDa
                 continue
 
             full_card_text = " ".join(card.text_lines)
-            level_match = re.search(r"\b(?:lv\.?|level)\s*(\d{1,2})\b", full_card_text)
-            if level_match and 1 <= int(level_match[1]) <= 10:
-                card.offered_level = int(level_match[1])
+            if "obtain an attribute" in full_card_text or "you can obtain an attribute" in full_card_text:
+                card.offered_level = 7
+            else:
+                level_match = re.search(r"\b(?:lv\.?|level)\s*(\d{1,2})\b", full_card_text)
+                if level_match and 1 <= int(level_match[1]) <= 10:
+                    card.offered_level = int(level_match[1])
+                elif re.search(r"\b(?:lv\.?|level)\s*[il|!]\b", full_card_text):
+                    card.offered_level = 1
             if any(m in full_card_text for m in ("(max)", "[max]", "(max", "max)", "lv max", "lv. max", "level max", "max level", "maxed")) or bool(re.search(r'\b(lv\.?\s*max|max\s*level|maxed)\b', full_card_text)):
                 card.is_maxed = True
 
@@ -3864,26 +3920,29 @@ def _detect_cards_ocr(frame: np.ndarray, h: int, w: int) -> dict[int, CardSlotDa
                         break
 
             # 2. Match Skills: Title lines first (prevents description text from polluting skill name)
-            title_skills: list[str] = []
-            for line in card.text_lines[:2]:
-                for skill_key, aliases in SKILL_ALIASES.items():
-                    for a in aliases:
-                        if _match_keyword(a, line):
-                            if skill_key not in title_skills:
-                                title_skills.append(skill_key)
-                            break
-                if title_skills:
-                    break  # The first recognized title outranks skill names in its description.
-            if title_skills:
-                card.skills = list(dict.fromkeys(card.skills + title_skills))
-            else:
-                for line in card.text_lines[2:]:
+            if not card.is_special_passive:
+                title_skills: list[str] = []
+                for line in card.text_lines[:2]:
                     for skill_key, aliases in SKILL_ALIASES.items():
                         for a in aliases:
                             if _match_keyword(a, line):
-                                if skill_key not in card.skills:
-                                    card.skills.append(skill_key)
+                                if skill_key not in title_skills:
+                                    title_skills.append(skill_key)
                                 break
+                    if title_skills:
+                        break  # The first recognized title outranks skill names in its description.
+                if title_skills:
+                    card.skills = list(dict.fromkeys(card.skills + title_skills))
+                else:
+                    for line in card.text_lines[2:]:
+                        if "following magic" in line or line.count(",") >= 2:
+                            continue
+                        for skill_key, aliases in SKILL_ALIASES.items():
+                            for a in aliases:
+                                if _match_keyword(a, line):
+                                    if skill_key not in card.skills:
+                                        card.skills.append(skill_key)
+                                    break
 
         # Visual check: detect red star badge in icon region of each card slot
         if num_cards == 4:
@@ -4364,6 +4423,45 @@ def choose_best_artifact_or_card(
             target = get_upgrade_target(idx, num_cards=num_cards)
             return make_choice(idx, target, f"Nhánh Hỗ Trợ Meta: {trait_name}", trait_key=s_trait)
 
+    priority_order = list(skill_priority) if skill_priority is not None else list(DEFAULT_SKILL_PRIORITY)
+    for fallback_skill in DEFAULT_SKILL_PRIORITY:
+        if fallback_skill not in priority_order:
+            priority_order.append(fallback_skill)
+
+    normalized_priority: list[str] = []
+    for item in priority_order:
+        clean = str(item).lower().strip().replace("-", "_").replace(" ", "_")
+        for std_key, aliases in SKILL_ALIASES.items():
+            if clean == std_key or clean in aliases:
+                if std_key not in normalized_priority:
+                    normalized_priority.append(std_key)
+                break
+        else:
+            if clean not in normalized_priority:
+                normalized_priority.append(clean)
+
+    # 1.2. LEVEL 7 ATTRIBUTE UNLOCK PRIORITY (e.g. Spirit Lv 7 / Electric Shock Lv 7):
+    # When a priority skill is at Level 7 ('You can obtain an attribute.'), pick it IMMEDIATELY!
+    best_lv7_idx = None
+    best_lv7_rank = 999999
+    best_lv7_skill = ""
+    for idx in all_indices:
+        if ocr_cards[idx].is_maxed or ocr_cards[idx].offered_level != 7:
+            continue
+        for skill in slot_skills.get(idx, []):
+            if maxed_skills and skill in maxed_skills:
+                continue
+            if skill in normalized_priority:
+                p_idx = normalized_priority.index(skill)
+                if p_idx < best_lv7_rank:
+                    best_lv7_rank = p_idx
+                    best_lv7_idx = idx
+                    best_lv7_skill = skill
+    if best_lv7_idx is not None:
+        target = get_upgrade_target(best_lv7_idx, num_cards=num_cards)
+        display_name = best_lv7_skill.replace("_", " ").title()
+        return make_choice(best_lv7_idx, target, f"★ Cấp 7 mở Thuộc Tính: {display_name}", skill_key=best_lv7_skill)
+
     # 1.5. CHECK EARLY PRIORITY SKILLS (e.g. Electric Zone up to Lv 3-4 in first 10 levels for early survival)
     effective_early_skills = (
         early_priority_skills
@@ -4424,24 +4522,6 @@ def choose_best_artifact_or_card(
         return make_choice(best_sp_card_idx, target, f"Kỹ năng đặc biệt [★]: {display_name}", skill_key=best_sp_name)
 
     # 3. CHECK SKILLS & COMBINATIONS (PRIORITIZED SKILLS HAVE ABSOLUTE PRIORITY)
-    priority_order = list(skill_priority) if skill_priority is not None else list(DEFAULT_SKILL_PRIORITY)
-    # Ensure all meta support & passive skills in DEFAULT_SKILL_PRIORITY act as smart fallbacks
-    for fallback_skill in DEFAULT_SKILL_PRIORITY:
-        if fallback_skill not in priority_order:
-            priority_order.append(fallback_skill)
-
-    normalized_priority: list[str] = []
-    for item in priority_order:
-        clean = str(item).lower().strip().replace("-", "_").replace(" ", "_")
-        for std_key, aliases in SKILL_ALIASES.items():
-            if clean == std_key or clean in aliases:
-                if std_key not in normalized_priority:
-                    normalized_priority.append(std_key)
-                break
-        else:
-            if clean not in normalized_priority:
-                normalized_priority.append(clean)
-
     best_skill_card_idx = None
     best_priority_rank = -1
     best_detected_skill = ""
@@ -4455,14 +4535,17 @@ def choose_best_artifact_or_card(
             if maxed_skills and skill in maxed_skills:
                 continue
             if skill in normalized_priority:
-                rank = (total_priority_count - normalized_priority.index(skill)) * 4.0
+                rank = (total_priority_count - normalized_priority.index(skill)) * 25.0
+                if ocr_cards[idx].offered_level == 7:
+                    rank += 500.0
                 # If card is starred or fusion component, give it a major priority boost
                 if ocr_cards[idx].has_asterisk:
                     rank += 120.0
                 try:
                     from learning_engine import get_adaptive_learner
                     learned_bonus = (learner or get_adaptive_learner()).get_skill_bonus(skill, active_skills)
-                    rank += learned_bonus * 2.5
+                    # Cap learned_bonus tie-breaker so it never overrides explicit skill_priority order
+                    rank += min(12.0, max(-12.0, learned_bonus * 0.5))
                 except Exception:
                     pass
                 if rank > best_priority_rank:
