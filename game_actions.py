@@ -86,9 +86,19 @@ def dismiss_death(controller, rect, capture, sleep=time.sleep):
     target = botcore.detect_verified_die_text(frame)
     if target is None:
         return False
+    # CRITICAL HARD SAFETY GATE: Revive is at y ~ 0.64. Die is strictly at y >= 0.68.
+    if target[1] < 0.68 or target[1] > 0.85:
+        return False
     controller.tap(list(target), rect)
     sleep(0.40)
-    return botcore.detect_confirm_button(capture()) is not None
+    confirm = botcore.detect_confirm_button(capture())
+    if confirm is not None:
+        return True
+    for _ in range(2):
+        sleep(0.40)
+        if botcore.detect_confirm_button(capture()) is not None:
+            return True
+    return False
 
 
 def close_ad(controller, rect, capture):

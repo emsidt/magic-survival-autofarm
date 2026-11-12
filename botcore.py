@@ -1897,20 +1897,25 @@ def detect_die_button(frame: np.ndarray, min_confidence: float = 0.68) -> Option
             best_score = max_val
             best_match = (x0 + max_loc[0] + stw // 2, y0 + max_loc[1] + sth // 2)
 
-    # 2. Fallback: match full Revive+Die block, clicking at 80% height (center of 'Die' row)
-    for scale in (0.45, 0.60, 0.75, 0.90, 1.05, 1.25, 1.50, 1.75, 2.00, 2.25):
-        stw, sth = int(tw * scale), int(th * scale)
-        if stw >= roi.shape[1] or sth >= roi.shape[0] or stw < 15 or sth < 15:
-            continue
-        rt = cv2.resize(template, (stw, sth))
-        res = cv2.matchTemplate(gray_roi, rt, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, max_loc = cv2.minMaxLoc(res)
-        if max_val > best_score:
-            best_score = max_val
-            best_match = (x0 + max_loc[0] + stw // 2, y0 + max_loc[1] + int(sth * 0.80))
+    # 2. Fallback only if die_only match is weak: match full Revive+Die block, clicking at 80% height (center of 'Die' row)
+    if best_score < min_confidence:
+        for scale in (0.45, 0.60, 0.75, 0.90, 1.05, 1.25, 1.50, 1.75, 2.00, 2.25):
+            stw, sth = int(tw * scale), int(th * scale)
+            if stw >= roi.shape[1] or sth >= roi.shape[0] or stw < 15 or sth < 15:
+                continue
+            rt = cv2.resize(template, (stw, sth))
+            res = cv2.matchTemplate(gray_roi, rt, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+            if max_val > best_score:
+                best_score = max_val
+                best_match = (x0 + max_loc[0] + stw // 2, y0 + max_loc[1] + int(sth * 0.80))
 
     if best_score >= min_confidence and best_match:
-        return (round(best_match[0] / w, 4), round(best_match[1] / h, 4))
+        ny = round(best_match[1] / h, 4)
+        nx = round(best_match[0] / w, 4)
+        # CRITICAL SAFETY GATE: 'Die' row is strictly at y >= 0.68. Revive is at y ~ 0.64.
+        if 0.68 <= ny <= 0.85:
+            return (nx, ny)
 
     # 3. OCR must locate the actual Die word, never infer its position from Revive.
     try:
@@ -1932,7 +1937,9 @@ def detect_die_button(frame: np.ndarray, min_confidence: float = 0.68) -> Option
                         r = word.bounding_rect
                         cx = x0 + r.x + r.width / 2
                         cy = y0 + r.y + r.height / 2
-                        return (round(cx / w, 4), round(cy / h, 4))
+                        ny = round(cy / h, 4)
+                        if ny >= 0.68:
+                            return (round(cx / w, 4), ny)
     except Exception:
         pass
 
@@ -1942,10 +1949,6 @@ def detect_die_button(frame: np.ndarray, min_confidence: float = 0.68) -> Option
 def detect_verified_die_text(frame: np.ndarray) -> Optional[tuple[float, float]]:
     """Independent text verification before a tap near the rewarded Revive button."""
     h, w = frame.shape[:2]
-    x0, y0 = int(w * 0.20), int(h * 0.55)
-    roi = frame[y0:int(h * 0.90), x0:int(w * 0.80)]
-    if roi.size == 0:
-        return None
     try:
         import asyncio
         import winocr
@@ -1954,24 +1957,44 @@ def detect_verified_die_text(frame: np.ndarray) -> Optional[tuple[float, float]]
         async def recognize(image):
             return await winocr.recognize_pil(Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB)), lang="en")
 
-        # The game's large stylized font is sometimes missed at native resolution.
-        # Retry smaller text, mapping the measured word box back to the same frame.
-        for scale in (1.0, min(1.0, 180.0 / roi.shape[1])):
-            image = roi if scale == 1.0 else cv2.resize(roi, (180, max(1, round(roi.shape[0] * scale))))
-            result = asyncio.run(recognize(image))
-            candidates, revive_y = [], []
-            for line in result.lines:
-                for word in line.words:
-                    text = word.text.strip().lower()
-                    r = word.bounding_rect
-                    point = ((x0 + (r.x + r.width / 2) / scale) / w,
-                             (y0 + (r.y + r.height / 2) / scale) / h)
-                    if text == "die":
-                        candidates.append(point)
-                    elif text == "revive":
-                        revive_y.append(point[1])
-            if len(candidates) == 1 and all(candidates[0][1] > y for y in revive_y):
-                return candidates[0]
+        # 1. First, check the targeted 'Die' button row (y: 68% to 79%)
+        # In this crop, the rewarded Revive button (y: ~64%) is completely excluded!
+        dx0, dy0 = int(w * 0.20), int(h * 0.68)
+        dx1, dy1 = int(w * 0.80), int(h * 0.79)
+        roi_die = frame[dy0:dy1, dx0:dx1]
+        if roi_die.size > 0:
+            for scale in (1.0, 0.75):
+                image = roi_die if scale == 1.0 else cv2.resize(roi_die, (0, 0), fx=scale, fy=scale)
+                result = asyncio.run(recognize(image))
+                for line in result.lines:
+                    for word in line.words:
+                        if word.text.strip().lower() == "die":
+                            r = word.bounding_rect
+                            point = ((dx0 + (r.x + r.width / 2) / scale) / w,
+                                     (dy0 + (r.y + r.height / 2) / scale) / h)
+                            if 0.68 <= point[1] <= 0.85:
+                                return point
+
+        # 2. Fallback to wider modal area (y: 55% to 90%)
+        x0, y0 = int(w * 0.20), int(h * 0.55)
+        roi = frame[y0:int(h * 0.90), x0:int(w * 0.80)]
+        if roi.size > 0:
+            for scale in (1.0, 0.75, min(1.0, 180.0 / roi.shape[1])):
+                image = roi if scale == 1.0 else cv2.resize(roi, (round(roi.shape[1] * scale), max(1, round(roi.shape[0] * scale))))
+                result = asyncio.run(recognize(image))
+                candidates, revive_y = [], []
+                for line in result.lines:
+                    for word in line.words:
+                        text = word.text.strip().lower()
+                        r = word.bounding_rect
+                        point = ((x0 + (r.x + r.width / 2) / scale) / w,
+                                 (y0 + (r.y + r.height / 2) / scale) / h)
+                        if text == "die":
+                            candidates.append(point)
+                        elif text == "revive":
+                            revive_y.append(point[1])
+                if len(candidates) == 1 and all(candidates[0][1] > y for y in revive_y) and candidates[0][1] >= 0.68:
+                    return candidates[0]
     except Exception:
         pass
     return None
