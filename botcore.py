@@ -158,8 +158,8 @@ def detect_chest(
     small = cv2.resize(gray, (fw // 2, fh // 2))
 
     px, py = int(fw * player[0]), int(fh * player[1])
-    min_player_dist = max(55, int(span * 0.08))
-    top_hud_y = int(fh * 0.075)
+    min_player_dist = max(14, int(span * 0.025))
+    top_hud_y = int(fh * 0.11)
 
     candidates = []
     all_positions: list[tuple[int, int]] = []
@@ -175,11 +175,22 @@ def detect_chest(
                 val = float(res[pt_y, pt_x])
                 cx = int(pt_x * 2 + tw)
                 cy = int(pt_y * 2 + th)
-                if cy < top_hud_y or math.hypot(cx - px, cy - py) < min_player_dist:
+                # Static HUD elements: top status/level bar, top-left avatar portrait, top-right pause button
+                if cy < top_hud_y:
+                    continue
+                if cx < int(fw * 0.18) and cy < int(fh * 0.16):
+                    continue
+                if cx > int(fw * 0.80) and cy < int(fh * 0.15):
+                    continue
+                dist_to_player = math.hypot(cx - px, cy - py)
+                # Protect immediate player sprite center pixel core
+                if dist_to_player < min_player_dist:
                     continue
                 # Off-screen indicators ONLY exist along the HUD perimeter, NEVER in the middle of battle
                 if is_indicator:
                     if (int(fw * 0.22) <= cx <= int(fw * 0.78)) and (int(fh * 0.16) <= cy <= int(fh * 0.84)):
+                        continue
+                    if dist_to_player < span * 0.25:
                         continue
                 if all(math.hypot(cx - ox, cy - oy) > 30 for ox, oy in all_positions):
                     roi = frame[max(0, cy - 25) : min(fh, cy + 25), max(0, cx - 25) : min(fw, cx + 25)]
@@ -578,17 +589,19 @@ def _approach_pickup(
     px, py = player_px
     dx, dy = target[0] - px, target[1] - py
     distance = math.hypot(dx, dy)
-    if distance <= max(16.0, span * 0.035):
-        return None
-    direction = (dx / distance, dy / distance)
+    direction = (dx / distance, dy / distance) if distance > 0 else (0.0, 0.0)
     # Boss & Elite avoidance: Never charge towards or near a giant boss!
     for bcx, bcy, br in getattr(vision, "bosses", []):
         if math.hypot(target[0] - bcx, target[1] - bcy) < br * 2.2:
             return None
-        t = max(0.0, min(1.0, ((bcx - px) * dx + (bcy - py) * dy) / (distance * distance)))
-        proj_x, proj_y = px + t * dx, py + t * dy
-        if math.hypot(bcx - proj_x, bcy - proj_y) < br * 1.9:
-            return None
+        if distance > 0:
+            t = max(0.0, min(1.0, ((bcx - px) * dx + (bcy - py) * dy) / (distance * distance)))
+            proj_x, proj_y = px + t * dx, py + t * dy
+            if math.hypot(bcx - proj_x, bcy - proj_y) < br * 1.9:
+                return None
+    if distance <= max(16.0, span * 0.035):
+        # Already within contact range of pickup: drive straight into it to guarantee collection!
+        return direction
     clearance = max(3.0, span * 0.012)
     # Dense path samples avoid stepping over thin enemies/walls between rays.
     steps = np.linspace(0.0, distance, max(2, int(distance / max(1.0, span * 0.004)) + 1))
@@ -811,7 +824,8 @@ def choose_direction(
                 chest_dot = (cdx * direction[0] + cdy * direction[1]) / chest_dist
 
         chest_heading = bool(vision.chest and chest_dot > 0.25)
-        allow_chest_approach = bool(chest_heading and (has_nearest_target_attack or has_guaranteed_attack) and not boss_emergency)
+        is_close_chest = bool(vision.chest and chest_dist < span * 0.25)
+        allow_chest_approach = bool(chest_heading and (is_close_chest or has_nearest_target_attack or has_guaranteed_attack) and not boss_emergency)
 
         if has_clear_exit and near_danger_dist < (4.0 if allow_chest_approach else 10.0):
             # Loot rewards must never outweigh an immediate collision when an

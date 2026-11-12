@@ -186,6 +186,26 @@ class PickupMovementTests(unittest.TestCase):
         d = choose_direction(v, 0.0, previous=(1.0, 0.0), player=(0.5, 0.5), active_skills={"spirit", "electric_zone"})
         self.assertLess(d[0], -0.1, f"Expected steering away from boss rather than charging into it for chest, got dx={d[0]}")
 
+    def test_close_chest_within_contact_range_drives_straight_into_it(self):
+        """When player is within 10-15px of a chest, it must commit the final step straight into it to guarantee collection."""
+        mask = np.zeros((800, 500), np.uint8)
+        distance = cv2.distanceTransform(255 - mask, cv2.DIST_L2, 5)
+        # Player is at (250, 400), chest is right next to player at (258, 404) (distance = 8.94px)
+        vision = Vision(mask, distance, [], True, 1.0, chest=(258, 404))
+        direction = choose_direction(vision, 0)
+        expected = np.array([8, 4]) / math.hypot(8, 4)
+        np.testing.assert_allclose(direction, expected, atol=1e-4)
+
+    def test_detect_chest_excludes_top_hud_and_pause_button(self):
+        """Candidates in the top HUD status bar, top-left avatar, or top-right pause button must be rejected."""
+        from botcore import detect_chest
+        frame = np.full((1000, 600, 3), 110, np.uint8)
+        # Draw fake matching badges in top-left avatar zone (50, 80) and top-right pause zone (540, 80)
+        cv2.circle(frame, (50, 80), 20, (255, 255, 255), -1)
+        cv2.circle(frame, (540, 80), 20, (255, 255, 255), -1)
+        result = detect_chest(frame)
+        self.assertIsNone(result)
+
 
 if __name__ == "__main__":
     unittest.main()
