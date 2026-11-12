@@ -65,6 +65,7 @@ from botcore import (
     inspect_game,
     is_attribute_screen,
     is_level_up_screen,
+    is_shop_artifact_worth_buying,
     is_shop_buy_enabled,
     is_three_card_chest,
 )
@@ -1168,10 +1169,10 @@ class FarmApp:
 
                                         is_affordable = is_shop_buy_enabled(f_item, buy_pos=shop_buy_pos)
                                         s_item, l_item = evaluate_selected_shop_artifact(f_item, prefer_cc, active_skills=build_skills)
-                                        has_synergy = ("Build:" in l_item) or ("★" in l_item) or ("S-Tier" in l_item) or ("Special" in l_item) or ("Legendary" in l_item)
+                                        is_worth = is_shop_artifact_worth_buying(s_item, l_item)
 
-                                        if is_affordable:
-                                            effective_score = s_item + (1000 if has_synergy else 0)
+                                        if is_affordable and is_worth:
+                                            effective_score = s_item + (2000 if "Build:" in l_item else 0)
                                             if effective_score > best_buy_score:
                                                 best_buy_score = effective_score
                                                 best_buy_slot = s_target
@@ -1181,8 +1182,8 @@ class FarmApp:
                                         last_shop_action_time = time.monotonic()
                                         continue
 
-                                    # Nếu có món đủ tiền mua -> chọn và bấm BUY!
-                                    if best_buy_slot and best_buy_score > 0:
+                                    # Nếu có món đủ tiền mua và thật sự đáng mua -> chọn và bấm BUY!
+                                    if best_buy_slot and best_buy_score > 0 and is_shop_artifact_worth_buying(best_buy_score, best_buy_label):
                                         controller.tap(list(best_buy_slot), rect)
                                         time.sleep(0.25)
                                         selected_item = capture()
@@ -1195,7 +1196,7 @@ class FarmApp:
                                         last_shop_action_time = now_tick
                                         last_auto_action_time = now_tick
                                         self.rule_counts["mua_do"] = self.rule_counts.get("mua_do", 0) + 1
-                                        self._push("status", f"[Cửa hàng] Đã bấm Buy cho món: [{best_buy_label}]!")
+                                        self._push("status", f"[Cửa hàng] Đã mua thành công: [{best_buy_label}]!")
                                         auto_action_done = True
                                         time.sleep(0.65)
                                         f_after = capture()
@@ -1204,7 +1205,7 @@ class FarmApp:
                                             controller.tap(list(shop_x_pos), rect)
                                         time.sleep(0.4)
                                     else:
-                                        # Không đủ mana mua món nào hoặc không có món hợp build -> Bấm nút 'X' đóng cửa hàng
+                                        # Không đủ mana mua món nào hoặc không có món hợp build -> Bấm nút 'X' đóng cửa hàng giữ Mana
                                         shop_x_pos = detect_shop_x_button(capture())
                                         if shop_x_pos:
                                             controller.tap(list(shop_x_pos), rect)
@@ -1212,7 +1213,7 @@ class FarmApp:
                                         last_shop_action_time = now_tick
                                         last_auto_action_time = now_tick
                                         self.rule_counts["dong_cua_hang"] = self.rule_counts.get("dong_cua_hang", 0) + 1
-                                        self._push("status", f"[Cửa hàng] Đã duyệt 8 món: Chưa đủ Mana hoặc không có món hợp build -> Đóng shop!")
+                                        self._push("status", f"[Cửa hàng] Không có món phù hợp với build -> Giữ Mana, bấm 'X' đóng shop!")
                                         auto_action_done = True
                                         time.sleep(0.8)
                                 continue

@@ -9,6 +9,7 @@ import unittest
 import cv2
 import numpy as np
 
+import botcore
 from botcore import (
     choose_best_artifact_or_card,
     choose_direction,
@@ -525,6 +526,19 @@ class VisionTests(unittest.TestCase):
             self.assertIn("Special", label)
             self.assertGreaterEqual(score, 400)
             self.assertIn("Special", label)
+
+    def test_unlearned_meteor_artifact_is_rejected_and_not_bought(self):
+        # When player does not have meteor, an artifact buffing meteor must be penalized and NOT worth buying
+        self.assertEqual(botcore.check_unlearned_magic_target("Increase Meteor damage by 30%", {"spirit"}), "meteor")
+        self.assertIsNone(botcore.check_unlearned_magic_target("Increase Meteor damage by 30%", {"meteor"}))
+        self.assertIsNone(botcore.check_unlearned_magic_target("Increase Spirit count by 1", {"spirit"}))
+
+        # Test is_shop_artifact_worth_buying
+        self.assertFalse(botcore.is_shop_artifact_worth_buying(-9000, "Asteroid [Normal | ❌ Lệch Build: Chưa học Meteor]"))
+        self.assertFalse(botcore.is_shop_artifact_worth_buying(180, "Boots [Normal | Synergy]"))
+        self.assertTrue(botcore.is_shop_artifact_worth_buying(60000, "Toy Castle [★ Ưu Tiên Tuyệt Đối]"))
+        self.assertTrue(botcore.is_shop_artifact_worth_buying(12000, "Gaia [Legendary]"))
+        self.assertTrue(botcore.is_shop_artifact_worth_buying(380, "Ether [Rare | Build: Spirit]"))
 
     def test_active_mana_collection_with_distant_chest(self):
         # When a chest is distant (400px away to the right), nearby safe mana orbs (80px up)

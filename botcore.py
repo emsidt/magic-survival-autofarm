@@ -2266,6 +2266,24 @@ SKILL_SYNERGY_KEYWORDS: dict[str, list[str]] = {
     "arcane_ray": [
         "arcane ray", "ray", "laser",
     ],
+    "meteor": [
+        "meteor", "meteorite", "asteroid", "giant impact", "crater", "volcano",
+    ],
+    "fireball": [
+        "fireball", "fire ball", "phoenix bow", "candle", "torch", "ignite",
+    ],
+    "incineration": [
+        "incineration", "cerberus", "dragon breath", "flamethrower",
+    ],
+    "lava_zone": [
+        "lava zone", "lava", "magma", "melting",
+    ],
+    "energy_bolt": [
+        "energy bolt", "charged bolt", "spark",
+    ],
+    "magic_bolt": [
+        "magic bolt", "magic bullet", "doppelganger", "continuous casting",
+    ],
 }
 
 
@@ -2327,6 +2345,67 @@ def compute_skill_synergy_bonus(full_text: str, active_skills: Optional[set[str]
     # Cap to max +360 if multiple synergizing skills match
     bonus = min(360, bonus)
     return bonus, matched_skills
+
+
+# Specific magic identifiers that uniquely target a specific active skill
+SPECIFIC_MAGIC_IDENTIFIERS: dict[str, list[str]] = {
+    "meteor": ["meteor", "meteorite", "asteroid", "giant impact"],
+    "blizzard": ["blizzard", "sub-zero", "sub zero"],
+    "cyclone": ["cyclone", "weather vane"],
+    "tsunami": ["tsunami", "wave-calming flute", "wave calming flute"],
+    "satellite": ["satellite", "astrolabe"],
+    "spirit": ["spirit", "sword of devil", "ether blade"],
+    "electric_zone": ["electric zone"],
+    "frost_nova": ["frost nova"],
+    "arcane_ray": ["arcane ray"],
+    "flash_shock": ["flash shock"],
+    "fireball": ["fireball", "phoenix bow"],
+    "incineration": ["incineration", "cerberus"],
+    "energy_bolt": ["energy bolt", "charged bolt"],
+    "lava_zone": ["lava zone"],
+    "magic_bolt": ["magic bolt"],
+    "electric_shock": ["electric shock", "lightning rod"],
+    "shield": ["organic shield"],
+    "magic_circle": ["magic circle", "magic grimoire"],
+    "armageddon": ["armageddon", "book of revelation"],
+    "cloaking": ["merlin's cloak", "merlins cloak"],
+}
+
+
+def check_unlearned_magic_target(full_text: str, active_skills: Optional[set[str]] = None) -> Optional[str]:
+    """Check if the artifact description specifically targets a magic skill that the player DOES NOT have.
+    Returns the name of the unlearned magic (e.g. 'meteor') if mismatched, or None if acceptable.
+    """
+    if not active_skills:
+        return None
+    text_lower = full_text.lower()
+    expanded_skills = set(active_skills)
+    for s_key in active_skills:
+        if s_key in COMBINATION_COMPONENTS:
+            expanded_skills.update(COMBINATION_COMPONENTS[s_key])
+
+    for magic_k, kws in SPECIFIC_MAGIC_IDENTIFIERS.items():
+        if magic_k not in expanded_skills:
+            if any(_match_keyword(kw, text_lower) for kw in kws):
+                return magic_k
+    return None
+
+
+def is_shop_artifact_worth_buying(score: int, label: str) -> bool:
+    """Return True only if an artifact is truly high-value and worth spending Mana on in the Merchant Shop."""
+    if score <= 0 or "❌ Lệch Build" in label:
+        return False
+    # 1. Top-tier items are always worth buying
+    if any(k in label for k in ("★", "Special", "Legendary", "Toy Castle", "S-Tier")):
+        return True
+    # 2. Items that directly buff the active skills in the current build
+    if "Build:" in label:
+        return score >= 280
+    # 3. High-impact universal stats (Cooldown / Crit) of Epic tier or higher
+    if ("Hồi chiêu" in label or "Chí mạng" in label) and ("Epic" in label or score >= 350):
+        return True
+    # 4. Universal threshold: score >= 350 (Epic with good stats)
+    return score >= 350
 
 
 def is_toy_castle_artifact(text: str) -> bool:
@@ -2536,6 +2615,13 @@ def evaluate_selected_chest_artifact(
     if syn_matched:
         bonus += syn_bonus
         tags.append(f"Build: {'+'.join(syn_matched)}")
+
+    # Anti-synergy: Penalty if the artifact specifically buffs a skill not in the player's build
+    unlearned_magic = check_unlearned_magic_target(full_text, active_skills)
+    if unlearned_magic:
+        tier_base = 0
+        bonus = -10000
+        tags.append(f"❌ Lệch Build: Chưa học {unlearned_magic.title()}")
 
     display_title = artifact_name if artifact_name else "Artifact"
     label = f"{display_title} [{' | '.join(tags)}]"
@@ -2823,6 +2909,13 @@ def evaluate_selected_shop_artifact(
     if syn_matched:
         bonus += syn_bonus
         tags.append(f"Build: {'+'.join(syn_matched)}")
+
+    # Anti-synergy: Penalty if the artifact specifically buffs a skill not in the player's build
+    unlearned_magic = check_unlearned_magic_target(full_text, active_skills)
+    if unlearned_magic:
+        tier_base = 0
+        bonus = -10000
+        tags.append(f"❌ Lệch Build: Chưa học {unlearned_magic.title()}")
 
     display_title = artifact_name if artifact_name else "Artifact"
     label = f"{display_title} [{' | '.join(tags)}]"

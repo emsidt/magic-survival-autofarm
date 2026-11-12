@@ -543,18 +543,19 @@ def run_cli_bot():
                                     active_skills=build_skills,
                                 )
 
-                                # Kiểm tra xem món đồ có khớp với build hiện tại hoặc độ hiếm cao không
-                                has_synergy = ("Build:" in s_lbl) or ("★" in s_lbl) or ("S-Tier" in s_lbl) or ("Special" in s_lbl) or ("Legendary" in s_lbl)
+                                # Kiểm tra xem món đồ có thực sự đáng mua không (hợp build hoặc Tier cao/Toy Castle)
+                                is_worth = botcore.is_shop_artifact_worth_buying(s_score, s_lbl)
 
-                                if is_affordable:
-                                    syn_tag = " [HỢP BUILD ⭐]" if has_synergy else ""
-                                    print(f"   - Ô {idx}/8: [{s_lbl}] -> 🟢 ĐỦ MANA (Điểm: {s_score}){syn_tag}")
-                                    # Ưu tiên vượt trội cho các món đồ hợp build hoặc Tier cao
-                                    effective_score = s_score + (1000 if has_synergy else 0)
+                                if is_affordable and is_worth:
+                                    syn_tag = " [HỢP BUILD ⭐]" if ("Build:" in s_lbl or "★" in s_lbl or "Special" in s_lbl or "Legendary" in s_lbl) else ""
+                                    print(f"   - Ô {idx}/8: [{s_lbl}] -> 🟢 ĐỦ MANA & ĐÁNG MUA (Điểm: {s_score}){syn_tag}")
+                                    effective_score = s_score + (2000 if "Build:" in s_lbl else 0)
                                     if effective_score > best_buy_score:
                                         best_buy_score = effective_score
                                         best_buy_slot = s_pos
                                         best_buy_label = s_lbl
+                                elif is_affordable:
+                                    print(f"   - Ô {idx}/8: [{s_lbl}] -> 🟡 BỎ QUA (Không hợp build/không đáng tốn Mana)")
                                 else:
                                     print(f"   - Ô {idx}/8: [{s_lbl}] -> 🔴 Chưa đủ Mana")
 
@@ -562,7 +563,7 @@ def run_cli_bot():
                                 continue
 
                             # Quyết định mua hoặc đóng cửa hàng
-                            if best_buy_slot and best_buy_score > 0:
+                            if best_buy_slot and best_buy_score > 0 and botcore.is_shop_artifact_worth_buying(best_buy_score, best_buy_label):
                                 controller.tap(list(best_buy_slot), rect)
                                 time.sleep(0.25)
                                 selected_item = capture()
@@ -570,7 +571,7 @@ def run_cli_bot():
                                 if not fresh_buy or not botcore.is_shop_buy_enabled(selected_item, fresh_buy):
                                     continue
                                 controller.tap(list(fresh_buy), rect)
-                                print(f"🛒 [Cửa hàng] Đã bấm Buy cho món: [{best_buy_label}]!")
+                                print(f"💰 [Cửa hàng] Đã mua thành công vật phẩm giá trị: [{best_buy_label}]!")
                                 time.sleep(0.65)
                                 f_after = capture()
                                 x_pos = botcore.detect_shop_x_button(f_after)
@@ -581,7 +582,7 @@ def run_cli_bot():
                                 x_pos = botcore.detect_shop_x_button(capture())
                                 if x_pos:
                                     controller.tap(list(x_pos), rect)
-                                print(f"🛒 [Cửa hàng] Đã duyệt xong 8 món: Không có món phù hợp hoặc chưa đủ Mana -> Bấm 'X' đóng shop farm tiếp!")
+                                print(f"🛒 [Cửa hàng] Không có món phù hợp với build -> Giữ Mana, bấm 'X' đóng shop farm tiếp!")
                                 time.sleep(0.5)
                         continue
 
