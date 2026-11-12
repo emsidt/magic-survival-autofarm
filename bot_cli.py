@@ -177,6 +177,8 @@ def run_cli_bot():
     last_learn_time = 0.0
     last_monolith_pos = None
     last_monolith_time = 0.0
+    last_monolith_log_time = 0.0
+    last_logged_monolith_pos = None
     previous_direction = None
     in_shop = False
     last_shop_label = ""
@@ -501,10 +503,11 @@ def run_cli_bot():
 
                             # 8.1 Kiểm tra xem có mở khóa Phép Kết Hợp Fusion (ngôi sao đỏ góc trên-phải) không
                             combo_star_pos = botcore.detect_combination_star(frame)
-                            if combo_star_pos and now - last_combination_attempt >= 10.0:
+                            if combo_star_pos and now - last_combination_attempt >= 3.5:
                                 last_combination_attempt = time.monotonic()
                                 learned = select_combination(controller, rect, frame, capture, config.get("skill_priority"))
                                 if learned:
+                                    last_combination_attempt = 0.0
                                     active_skills.add(learned.key)
                                     maxed_skills.add(learned.key)
                                     recorder.record_decision(frame, "combination_magic", learned.key,
@@ -677,11 +680,23 @@ def run_cli_bot():
                     )
 
                     # Theo dõi Tháp qua màn (Monolith) liên tục kèm bù trừ vector di chuyển
-                    if getattr(vision, "monolith", None) is not None:
+                    is_fresh_monolith = getattr(
+                        vision,
+                        "monolith_detected",
+                        getattr(vision, "monolith", None) is not None and last_monolith_pos is None,
+                    )
+                    if is_fresh_monolith and getattr(vision, "monolith", None) is not None:
                         last_monolith_pos = vision.monolith
                         last_monolith_time = now
-                        print(f"🏛️ [Tháp qua màn] ƯU TIÊN TUYỆT ĐỐI: Phát hiện Tháp tại {vision.monolith}! Đang lao thẳng vào để chạm Tháp nhận Cổ vật Huyền thoại!")
-                    elif last_monolith_pos is not None and (now - last_monolith_time <= 3.0):
+                        if (
+                            last_logged_monolith_pos is None
+                            or math.hypot(last_monolith_pos[0] - last_logged_monolith_pos[0], last_monolith_pos[1] - last_logged_monolith_pos[1]) > 50
+                            or (now - last_monolith_log_time >= 3.0)
+                        ):
+                            print(f"🏛️ [Tháp qua màn] ƯU TIÊN TUYỆT ĐỐI: Phát hiện Tháp tại {vision.monolith}! Đang lao thẳng vào để chạm Tháp nhận Cổ vật Huyền thoại!")
+                            last_logged_monolith_pos = last_monolith_pos
+                            last_monolith_log_time = now
+                    elif last_monolith_pos is not None and (now - last_monolith_time <= 2.5):
                         if previous_direction:
                             est_mx = int(round(last_monolith_pos[0] - 12.0 * previous_direction[0]))
                             est_my = int(round(last_monolith_pos[1] - 12.0 * previous_direction[1]))
@@ -694,15 +709,22 @@ def run_cli_bot():
                             vision.monolith = last_monolith_pos
                         else:
                             last_monolith_pos = None
+                            vision.monolith = None
                     else:
                         last_monolith_pos = None
+                        vision.monolith = None
 
                     if not config.get("auto_chest", True):
                         vision.chest = None
                         last_chest_pos = None
 
                     # Theo dõi Rương cổ vật / Chỉ dẫn rương liên tục kèm bù trừ vector di chuyển
-                    if getattr(vision, "chest", None) is not None:
+                    is_fresh_chest = getattr(
+                        vision,
+                        "chest_detected",
+                        getattr(vision, "chest", None) is not None and last_chest_pos is None,
+                    )
+                    if is_fresh_chest and getattr(vision, "chest", None) is not None:
                         raw_c = vision.chest
                         last_chest_pos = (int(raw_c[0]), int(raw_c[1]))
                         last_chest_hunt_time = now
@@ -717,7 +739,7 @@ def run_cli_bot():
                             print(f"📦 [Săn Rương] ƯU TIÊN CAO: Phát hiện {c_type} tại {last_chest_pos}! Đang dũng mãnh lao tới nhặt...")
                             last_logged_chest_pos = last_chest_pos
                             last_chest_log_time = now
-                    elif last_chest_pos is not None and (now - last_chest_hunt_time <= 3.0):
+                    elif last_chest_pos is not None and (now - last_chest_hunt_time <= 2.5) and config.get("auto_chest", True):
                         if previous_direction:
                             est_cx = int(round(last_chest_pos[0] - 12.0 * previous_direction[0]))
                             est_cy = int(round(last_chest_pos[1] - 12.0 * previous_direction[1]))
@@ -732,8 +754,10 @@ def run_cli_bot():
                             vision.chest_weight = last_chest_weight
                         else:
                             last_chest_pos = None
+                            vision.chest = None
                     else:
                         last_chest_pos = None
+                        vision.chest = None
 
                     # Điều khiển né quái thông minh bằng thuật toán trường tiềm năng (Potential Field)
                     if getattr(vision, "bosses", None) and (now - last_boss_alert_time) >= 4.0:

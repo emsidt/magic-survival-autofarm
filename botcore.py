@@ -213,13 +213,13 @@ def detect_chest(
     return None
 
 
-def detect_monolith(frame: np.ndarray, min_confidence: float = 0.48) -> Optional[tuple[int, int]]:
+def detect_monolith(frame: np.ndarray, min_confidence: float = 0.56) -> Optional[tuple[int, int]]:
     """Detect the post-wave milestone stone monolith / obelisk with vertical crimson rune glyphs.
 
     In Magic Survival, when a boss wave is cleared, a monolith tower spawns on the map.
     Touching it triggers the Legendary Artifact selection modal. Until touched, no monsters spawn.
-    Uses multi-scale template matching against assets/monolith.png and verifies the crimson core rune.
-    Downsampled 2x for fast, reliable sub-50ms execution on all window scales (LDPlayer, Google Play Games PC).
+    Uses resolution-proportional multi-scale template matching against assets/monolith.png and
+    strictly verifies the vertical crimson fissure and gray stone pillar body.
     """
     template_path = _BASE_DIR / "assets" / "monolith.png"
     tmpl = get_cached_image(template_path)
@@ -238,8 +238,9 @@ def detect_monolith(frame: np.ndarray, min_confidence: float = 0.48) -> Optional
     best_val = 0.0
     best_pos = None
 
-    # Dense scale range from 0.70 to 2.25 with step 0.06 (covers 540p up to 1440p)
-    scales = np.arange(0.70, 2.25, 0.06)
+    # Scale relative to frame width (monolith.png was captured from a w=617 window)
+    base_scale = max(0.55, w / 617.0)
+    scales = [base_scale * factor for factor in (0.78, 0.84, 0.90, 0.95, 1.00, 1.06, 1.12, 1.18, 1.25)]
     for scale in scales:
         sw, sh = max(14, int(tw * scale / 2)), max(16, int(th * scale / 2))
         if sw >= small.shape[1] or sh >= small.shape[0]:
@@ -251,24 +252,40 @@ def detect_monolith(frame: np.ndarray, min_confidence: float = 0.48) -> Optional
             mcx = int((max_loc[0] + sw / 2) * 2)
             mcy = int((max_loc[1] + sh / 2) * 2)
             # Monolith tower is a physical ground obstacle:
-            # its center is NEVER in the top status bar or top-left avatar icon
-            if mcy < int(h * 0.12):
+            # its center is NEVER in the top status bar or top-left/top-right HUD icons
+            if mcy < int(h * 0.14):
                 continue
-            if mcx < int(w * 0.18) and mcy < int(h * 0.18):
+            if mcx < int(w * 0.20) and mcy < int(h * 0.22):
+                continue
+            if mcx > int(w * 0.80) and mcy < int(h * 0.22):
                 continue
             box_w = max(24, int(sw * 0.65))
             box_h = max(30, int(sh * 0.65))
             roi_H = H[max(0, mcy - box_h): min(h, mcy + box_h), max(0, mcx - box_w): min(w, mcx + box_w)]
             roi_S = S[max(0, mcy - box_h): min(h, mcy + box_h), max(0, mcx - box_w): min(w, mcx + box_w)]
             roi_V = V[max(0, mcy - box_h): min(h, mcy + box_h), max(0, mcx - box_w): min(w, mcx + box_w)]
+            if roi_H.size == 0:
+                continue
             # Distinctive vertical crimson rune glyph in center of monolith
-            red_count = np.sum(((roi_H <= 14) | (roi_H >= 166)) & (roi_S >= 50) & (roi_V >= 50))
-            # Real monolith has a prominent vertical rune fissure (at least 28-35px red)
-            min_red = max(28, int(35 * scale))
-            # Verify stone body (moderate brightness, low saturation gray rock)
-            gray_stone = np.sum((roi_S <= 45) & (roi_V >= 40) & (roi_V <= 210))
-            min_stone = max(40, int(50 * scale))
-            if red_count >= min_red and gray_stone >= min_stone:
+            red_mask = ((roi_H <= 14) | (roi_H >= 166)) & (roi_S >= 50) & (roi_V >= 50)
+            red_count = int(np.sum(red_mask))
+            min_red = max(24, int(32 * scale))
+            red_frac = red_count / float(roi_H.size)
+            # Reject round red monster cores that fill > 9% of the ROI
+            if red_count < min_red or red_frac > 0.095:
+                continue
+            ys, xs = np.where(red_mask)
+            if len(ys) < min_red:
+                continue
+            red_h = int(ys.max() - ys.min()) + 1
+            red_w = int(xs.max() - xs.min()) + 1
+            # Real monolith rune is a tall vertical fissure (height / width >= 1.65), not a circular blob
+            if red_h / max(1.0, float(red_w)) < 1.65:
+                continue
+            # Verify stone body (moderate-to-high brightness, low saturation gray rock)
+            gray_stone = int(np.sum((roi_S <= 45) & (roi_V >= 40) & (roi_V <= 215)))
+            min_stone = max(45, int(55 * scale))
+            if gray_stone >= min_stone:
                 best_val = max_val
                 best_pos = (mcx, mcy)
 
@@ -292,6 +309,8 @@ class Vision:
     monolith: Optional[tuple[int, int]] = None
     hazard_mask: Optional[np.ndarray] = None
     bosses: list[tuple[int, int, int]] = field(default_factory=list)
+    monolith_detected: bool = False
+    chest_detected: bool = False
 
 
 def measure_modal_panel(gray: np.ndarray) -> float:
@@ -427,12 +446,15 @@ def inspect_game(
                 panel_fraction=panel_fraction,
             )
     chest_target = detect_chest(frame, player=player) if gameplay else None
+    chest_detected = chest_target is not None
     chest_pos = (chest_target[0], chest_target[1]) if chest_target else None
     if chest_pos is None and gameplay and known_chest is not None:
         chest_pos = known_chest
     chest_type = getattr(chest_target, "chest_type", "treasure_chest")
     chest_weight = getattr(chest_target, "weight", 24.0)
-    monolith_pos = detect_monolith(frame) if gameplay else None
+    raw_monolith = detect_monolith(frame) if gameplay else None
+    monolith_detected = raw_monolith is not None
+    monolith_pos = raw_monolith
     if monolith_pos is None and gameplay and known_monolith is not None:
         monolith_pos = known_monolith
 
@@ -472,9 +494,10 @@ def inspect_game(
     cv2.ellipse(dark, (px, py), (int(span * 0.070), int(span * 0.105)), 0, 0, 360, 0, -1)
     # Crucial: mask out all detected chests so their dark outlines / Black Box stone
     # are NEVER treated as monsters that repel the player!
-    if chest_target is not None:
+    if chest_target is not None or chest_pos is not None:
         chest_clear_radius = max(75, int(span * 0.12))
-        for c_pt in getattr(chest_target, "all_positions", [chest_pos]):
+        chest_pts = getattr(chest_target, "all_positions", [chest_pos]) if chest_target is not None else [chest_pos]
+        for c_pt in chest_pts:
             if c_pt is not None:
                 cv2.circle(dark, c_pt, chest_clear_radius, 0, -1)
                 enemy_mask[max(0, c_pt[1] - chest_clear_radius) : min(h, c_pt[1] + chest_clear_radius), max(0, c_pt[0] - chest_clear_radius) : min(w, c_pt[0] + chest_clear_radius)] = 0
@@ -541,6 +564,8 @@ def inspect_game(
         monolith_pos,
         hazard_mask,
         bosses,
+        monolith_detected,
+        chest_detected,
     )
 
 
@@ -3199,7 +3224,10 @@ DEFAULT_SKILL_PRIORITY = [
 
 SKILL_ALIASES: dict[str, list[str]] = {
     # Combinations: Spirit + Electric Shock
-    "telekinetic_sword": ["telekinetic sword", "telekinetic", "telekineticsword"],
+    "telekinetic_sword": [
+        "telekinetic sword", "telekinetic", "telekineticsword",
+        "teiekinetic sword", "telekinetlc sword", "telekinetic swords", "teleklnctic sword",
+    ],
     "superconductivity": ["superconductivity", "super conductivity"],
     "current_overload": ["current overload", "currentoverload", "overload"],
 
@@ -3997,19 +4025,20 @@ def detect_combination_star(frame: np.ndarray, threshold: float = 0.65) -> Optio
     When the star is dull/grey/inactive (no fusion available), returns None!
     """
     h, w = frame.shape[:2]
-    # Combination star is strictly situated in the upper right corner (y: 6%..22%, x: 76%..98%)
-    y0, y1 = int(h * 0.06), int(h * 0.22)
-    x0, x1 = int(w * 0.76), int(w * 0.98)
+    # Combination star is situated in the upper right corner:
+    # On 4-card level-up screens: y is ~7%..16%. On 3-card level-up screens: y is ~13%..24%.
+    y0, y1 = int(h * 0.05), int(h * 0.27)
+    x0, x1 = int(w * 0.75), int(w * 0.99)
     roi = frame[y0:y1, x0:x1]
     if roi.shape[0] < 20 or roi.shape[1] < 20:
         return None
 
     # Strict red glow verification:
-    # A glowing star has crimson/pink/bright-red glow (H in [148..180] or [0..16], S >= 50, V >= 60).
-    # The dull/grey star has almost zero saturated red pixels (< 40px).
+    # A glowing star has crimson/pink/bright-red glow (H in [150..180] or [0..12], S >= 50, V >= 60).
+    # Avoids H in [13..16] which matches brown dirt ground behind the transparent corners.
     hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
     H, S, V = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
-    red_mask = (((H >= 148) | (H <= 16)) & (S >= 50) & (V >= 60)).astype(np.uint8)
+    red_mask = (((H >= 150) | (H <= 12)) & (S >= 50) & (V >= 60)).astype(np.uint8)
     total_red = int(np.sum(red_mask))
     if total_red < 150:
         return None
@@ -4025,7 +4054,7 @@ def detect_combination_star(frame: np.ndarray, threshold: float = 0.65) -> Optio
     tmpl = get_cached_image(tmpl_path)
     if tmpl is not None:
         rh, rw = roi.shape[:2]
-        for scale in (0.70, 0.80, 0.85, 0.95, 1.0, 1.05, 1.20, 1.35, 1.50, 1.70, 1.85, 2.00, 2.15):
+        for scale in (0.70, 0.80, 0.85, 0.90, 0.95, 1.0, 1.05, 1.20, 1.35, 1.50, 1.70, 1.85, 1.90, 2.00, 2.15):
             th, tw = int(tmpl.shape[0] * scale), int(tmpl.shape[1] * scale)
             if th >= rh or tw >= rw:
                 continue
@@ -4034,7 +4063,7 @@ def detect_combination_star(frame: np.ndarray, threshold: float = 0.65) -> Optio
             _, max_val, _, max_loc = cv2.minMaxLoc(res)
             if max_val > best_score:
                 m_roi_red = red_mask[max_loc[1] : max_loc[1] + th, max_loc[0] : max_loc[0] + tw]
-                if np.sum(m_roi_red) >= max(150, int(th * tw * 0.08)):
+                if np.sum(m_roi_red) >= max(150, int(th * tw * 0.12)):
                     best_score = max_val
                     best_pos = (
                         round(float(max_loc[0] + tw / 2 + x0) / w, 3),
@@ -4068,7 +4097,8 @@ def find_best_combination_option(
         res = asyncio.run(_do())
         if not res or not res.lines:
             return None
-        if not any("magic combination" in line.text.lower() for line in res.lines):
+        full_header_text = " ".join(line.text.lower() for line in res.lines)
+        if "magic combination" not in full_header_text and "combinations" not in full_header_text:
             return None
 
         # Build prioritized combination list

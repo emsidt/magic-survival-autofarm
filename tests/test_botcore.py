@@ -850,6 +850,16 @@ class VisionTests(unittest.TestCase):
         active_frame[100:100 + sh, 680:680 + sw] = active_star
         self.assertIsNotNone(detect_combination_star(active_frame))
 
+        # 3-card level-up screens position the red star lower (extending down to y ~ 0.235, below 0.22):
+        three_card_frame = np.zeros((960, 540, 3), dtype=np.uint8)
+        star_3c = cv2.resize(active_star, (int(sw * 0.95), int(sh * 0.95)))
+        s3h, s3w = star_3c.shape[:2]
+        three_card_frame[142:142 + s3h, 449:449 + s3w] = star_3c
+        star_3c_pos = detect_combination_star(three_card_frame)
+        self.assertIsNotNone(star_3c_pos, "Must detect red combination star on 3-card level-up screens (y ~ 0.188)")
+        self.assertAlmostEqual(star_3c_pos[0], 0.895, delta=0.03)
+        self.assertAlmostEqual(star_3c_pos[1], 0.188, delta=0.03)
+
         # 3. Synthetic frame with combination menu:
         frame_combo = np.full((1000, 600, 3), 15, dtype=np.uint8)
         cv2.putText(frame_combo, "Magic Combinations", (160, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2)
@@ -882,6 +892,14 @@ class VisionTests(unittest.TestCase):
         hud_frame = np.full((1000, 600, 3), 100, dtype=np.uint8)
         cv2.circle(hud_frame, (91, 155), 25, (0, 0, 255), -1)
         self.assertIsNone(detect_monolith(hud_frame))
+
+        # Inherited known_monolith / known_chest must set monolith_detected=False / chest_detected=False
+        # so the main loop does not infinitely reset their expiry timers.
+        v_inherited = inspect_game(blank, player=(0.5, 0.5), known_monolith=(200, 600), known_chest=(400, 300))
+        self.assertEqual(v_inherited.monolith, (200, 600))
+        self.assertFalse(v_inherited.monolith_detected)
+        self.assertEqual(v_inherited.chest, (400, 300))
+        self.assertFalse(v_inherited.chest_detected)
 
         # 2. Uploaded image with post-wave milestone monolith:
         img_path = r"C:/Users/User/.gemini/antigravity/brain/2dc840cb-72eb-45f9-92e9-a3fe999f18b4/.user_uploaded/media_1794152395302_9c8311df.png"

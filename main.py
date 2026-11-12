@@ -1256,11 +1256,12 @@ class FarmApp:
                                 combo_star_pos = detect_combination_star(frame)
                                 if (combo_star_pos and self.config.get("auto_levelup", True)
                                         and start_tick - last_auto_action_time >= 0.8
-                                        and start_tick - last_combination_attempt >= 10.0):
+                                        and start_tick - last_combination_attempt >= 3.5):
                                     last_combination_attempt = time.monotonic()
                                     learned = select_combination(controller, rect, frame, capture, self.config.get("skill_priority"))
                                     last_auto_action_time = time.monotonic()
                                     if learned:
+                                        last_combination_attempt = 0.0
                                         active_skills.add(learned.key)
                                         maxed_skills.add(learned.key)
                                         self.recorder.record_decision(frame, "combination_magic", learned.key,
@@ -1333,7 +1334,12 @@ class FarmApp:
                             py = int(fh * self.config["player_position"][1])
 
                             # Monolith (Cột mốc qua màn / Legendary Artifact) tracking with movement compensation
-                            if getattr(vision, "monolith", None) is not None:
+                            is_fresh_monolith = getattr(
+                                vision,
+                                "monolith_detected",
+                                getattr(vision, "monolith", None) is not None and last_monolith_pos is None,
+                            )
+                            if is_fresh_monolith and getattr(vision, "monolith", None) is not None:
                                 last_monolith_pos = vision.monolith
                                 last_monolith_time = start_tick
                             elif last_monolith_pos is not None and (start_tick - last_monolith_time <= 2.5):
@@ -1349,14 +1355,21 @@ class FarmApp:
                                     vision.monolith = last_monolith_pos
                                 else:
                                     last_monolith_pos = None
+                                    vision.monolith = None
                             else:
                                 last_monolith_pos = None
+                                vision.monolith = None
 
                             if not self.config.get("auto_chest", True):
                                 vision.chest = None
                                 last_chest_pos = None
                             else:
-                                if vision.chest is not None:
+                                is_fresh_chest = getattr(
+                                    vision,
+                                    "chest_detected",
+                                    vision.chest is not None and last_chest_pos is None,
+                                )
+                                if is_fresh_chest and vision.chest is not None:
                                     last_chest_pos = vision.chest
                                     last_chest_type = getattr(vision, "chest_type", "treasure_chest")
                                     last_chest_weight = getattr(vision, "chest_weight", 24.0)
@@ -1377,8 +1390,10 @@ class FarmApp:
                                         vision.chest_weight = last_chest_weight
                                     else:
                                         last_chest_pos = None
+                                        vision.chest = None
                                 else:
                                     last_chest_pos = None
+                                    vision.chest = None
                             last_gameplay_time = start_tick
                             uncertain_since = 0.0
                             match_running = True
