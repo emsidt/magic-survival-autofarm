@@ -723,9 +723,14 @@ def run_cli_bot():
                 rule_streak_name, rule_streak = "", 0
                 print(f"[ADB] Tạm ngắt input: {error}. Sẽ chụp ảnh mới trước khi tiếp tục.")
                 time.sleep(0.5)
+            except ActionCancelled:
+                controller.release()
+                previous_direction = None
+                if now - last_focus_warning >= 5.0:
+                    last_focus_warning = now
+                    print("[⏸️] Cửa sổ game tạm mất focus. Tạm dừng thao tác, chờ bạn quay lại cửa sổ game...")
+                time.sleep(0.5)
 
-    except ActionCancelled:
-        print("[!] Game mất focus; đã dừng input. Chạy lại khi cửa sổ game được chọn.")
     except KeyboardInterrupt:
         print("\n[!] Đã nhận lệnh dừng từ bàn phím. Đang giải phóng bộ điều khiển...")
         if controller:
