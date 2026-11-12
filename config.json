@@ -17,7 +17,7 @@
   ],
   "joystick_radius_px": 180,
   "fps": 30,
-  "max_session_minutes": 120,
+  "max_session_minutes": 0,
   "auto_levelup": true,
   "card_choice": 1,
   "auto_close_ads": true,

@@ -92,7 +92,7 @@ DEFAULTS = {
     "joystick_position": [0.08, 0.12],
     "joystick_radius_px": 65,
     "fps": 30,
-    "max_session_minutes": 120,
+    "max_session_minutes": 0,
     "auto_levelup": True,
     "card_choice": 1,
     "auto_close_ads": True,
@@ -655,8 +655,8 @@ class FarmApp:
             self.config["auto_chest"] = bool(self.auto_chest.get())
             if not 0 <= self.config["crop_left_px"] <= 250:
                 raise ValueError("crop cần từ 0 đến 250")
-            if not 1 <= self.config["max_session_minutes"] <= 1440:
-                raise ValueError("phút phải từ 1 đến 1440")
+            if self.config["max_session_minutes"] < 0:
+                raise ValueError("phút phải >= 0 (0 = không giới hạn)")
             save_json(CONFIG_PATH, self.config)
             return True
         except ValueError as error:
@@ -760,7 +760,8 @@ class FarmApp:
 
                     start_tick = time.monotonic()
                     input_generation = self.input_generation
-                    if self.session_start and start_tick - self.session_start > 60 * self.config["max_session_minutes"]:
+                    max_session_mins = float(self.config.get("max_session_minutes", 0) or 0)
+                    if max_session_mins > 0 and self.session_start and start_tick - self.session_start > 60 * max_session_mins:
                         self.running.clear()
                         controller.release()
                         self._push("status", "Đã dừng vì hết giới hạn thời gian.")

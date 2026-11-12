@@ -200,7 +200,8 @@ def run_cli_bot():
             try:
                 time.sleep(0.02)
                 now = time.monotonic()
-                if now - session_start >= 60 * float(config.get("max_session_minutes", 120)):
+                max_session_mins = float(config.get("max_session_minutes", 0) or 0)
+                if max_session_mins > 0 and now - session_start >= 60 * max_session_mins:
                     print("Đã hết giới hạn thời gian phiên chơi.")
                     break
 
