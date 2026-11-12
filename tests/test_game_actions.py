@@ -7,7 +7,7 @@ import numpy as np
 from botcore import CardChoice
 from game_actions import (ActionCancelled, FrameCaptureError, GuardedController,
                           capture_frame, finish_match, remember_card,
-                          select_attribute, select_card, select_combination)
+                          select_attribute, select_card, select_combination, select_strengthen_magic)
 
 
 class TestGameActions(unittest.TestCase):
@@ -76,11 +76,55 @@ class TestGameActions(unittest.TestCase):
         self.assertEqual(self.controller.tap.call_args_list[-2].args[0], [0.31, 0.44])
         self.assertEqual(self.controller.tap.call_args_list[-1].args[0], [0.5, 0.88])
 
+    @patch("game_actions.botcore.is_strengthen_magic_screen", return_value=False)
     @patch("game_actions.botcore.is_level_up_screen", return_value=True)
     @patch("game_actions.botcore.is_attribute_screen", return_value=False)
     def test_same_card_screen_does_not_increment_levels(self, *_):
         choice = CardChoice(1, (0.5, 0.38), skill_key="spirit")
         self.assertFalse(select_card(self.controller, {}, self.frame, choice, Mock(return_value=self.frame), sleep=lambda _: None))
+
+    @patch("game_actions.botcore.detect_selected", return_value=(0.503, 0.903))
+    def test_select_strengthen_magic_picks_spirit_then_cyclone(self, _):
+        strengthened = set()
+        # 1st call: Spirit (Row 1, Col 3 = 0.605, 0.260) succeeds and screen closes
+        with patch("game_actions.botcore.is_strengthen_magic_screen", side_effect=[True, False]):
+            res1 = select_strengthen_magic(
+                self.controller, {}, self.frame, Mock(return_value=self.frame),
+                strengthened_skills=strengthened, sleep=lambda _: None,
+            )
+        self.assertIsNotNone(res1)
+        self.assertEqual(res1.key, "spirit")
+        self.assertIn("spirit", strengthened)
+        self.assertEqual(self.controller.tap.call_args_list[-2].args[0], [0.605, 0.260])
+        self.assertEqual(self.controller.tap.call_args_list[-1].args[0], [0.503, 0.903])
+
+        # 2nd call: Since 'spirit' is already in strengthened, picks Cyclone (Row 3, Col 2 = 0.397, 0.522)
+        self.controller.tap.reset_mock()
+        with patch("game_actions.botcore.is_strengthen_magic_screen", side_effect=[True, False]):
+            res2 = select_strengthen_magic(
+                self.controller, {}, self.frame, Mock(return_value=self.frame),
+                strengthened_skills=strengthened, sleep=lambda _: None,
+            )
+        self.assertIsNotNone(res2)
+        self.assertEqual(res2.key, "cyclone")
+        self.assertIn("cyclone", strengthened)
+        self.assertEqual(self.controller.tap.call_args_list[-2].args[0], [0.397, 0.522])
+        self.assertEqual(self.controller.tap.call_args_list[-1].args[0], [0.503, 0.903])
+
+        # 3rd scenario: Spirit already strengthened in-game before bot started (screen stays open on Spirit, closes on Cyclone)
+        self.controller.tap.reset_mock()
+        fresh_set = set()
+        with patch("game_actions.botcore.is_strengthen_magic_screen", side_effect=[True, True, False]):
+            res3 = select_strengthen_magic(
+                self.controller, {}, self.frame, Mock(return_value=self.frame),
+                strengthened_skills=fresh_set, sleep=lambda _: None,
+            )
+        self.assertIsNotNone(res3)
+        self.assertEqual(res3.key, "cyclone")
+        self.assertEqual(self.controller.tap.call_args_list[0].args[0], [0.605, 0.260])
+        self.assertEqual(self.controller.tap.call_args_list[1].args[0], [0.503, 0.903])
+        self.assertEqual(self.controller.tap.call_args_list[2].args[0], [0.397, 0.522])
+        self.assertEqual(self.controller.tap.call_args_list[3].args[0], [0.503, 0.903])
 
     def test_level_four_and_unknown_level_do_not_mark_maxed(self):
         active, levels, maxed = set(), {}, set()

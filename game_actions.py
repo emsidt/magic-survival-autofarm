@@ -288,6 +288,39 @@ def select_combination(controller, rect, frame, capture, priority=None, sleep=ti
     return LearnedSelection(key, label)
 
 
+def select_strengthen_magic(
+    controller,
+    rect,
+    frame,
+    capture,
+    strengthened_skills=None,
+    sleep=time.sleep,
+):
+    """Select a magic to strengthen on 'Choose the Magic to strengthen' (Enchant screen).
+    Prioritizes Spirit (Row 1, Col 3) first; if Spirit was already strengthened, selects Cyclone (Row 3, Col 2).
+    """
+    controller.release()
+    if not botcore.is_strengthen_magic_screen(frame):
+        return None
+    candidates = botcore.get_strengthen_magic_targets(strengthened_skills)
+    for idx, (skill_key, label, target) in enumerate(candidates[:4], 1):
+        controller.tap(list(target), rect)
+        sleep(0.30)
+        curr = capture()
+        sel_pos = botcore.detect_selected(curr) or (0.503, 0.903)
+        controller.tap(list(sel_pos), rect)
+        sleep(0.45)
+        after = capture()
+        if not botcore.is_strengthen_magic_screen(after):
+            if strengthened_skills is not None:
+                strengthened_skills.add(skill_key)
+            return LearnedSelection(skill_key, label, idx)
+        # If still on the strengthen screen, mark this skill as already strengthened/unavailable and try the next (Cyclone)
+        if strengthened_skills is not None:
+            strengthened_skills.add(skill_key)
+    return None
+
+
 def select_card(controller, rect, frame, choice, capture, sleep=time.sleep):
     """Accept a card only when the choice screen visibly transitions to a known state."""
     if choice.target is None:
@@ -295,7 +328,7 @@ def select_card(controller, rect, frame, choice, capture, sleep=time.sleep):
     controller.tap(list(choice.target), rect)
     sleep(0.40)
     after = capture()
-    if botcore.is_attribute_screen(after):
+    if botcore.is_attribute_screen(after) or botcore.is_strengthen_magic_screen(after):
         return True
     if botcore.is_level_up_screen(after):
         # Repeated attempts on the same level-up screen must not inflate skill levels.
@@ -316,8 +349,9 @@ def remember_card(choice, active_skills, skill_levels, maxed_skills):
         skill_levels[key] = 1
     # A count of clicks is not proof that a skill reached its cap, particularly
     # when attaching to an ongoing run or when a level-4 trait screen appears.
+    # Note: 'enchant' can appear multiple times per run to strengthen different spells.
     cap = botcore.SKILL_MAX_LEVELS.get(key, 1 if key in botcore.SPECIAL_STAR_PASSIVES else 7)
-    if key in botcore.SPECIAL_STAR_PASSIVES or (level is not None and level >= cap):
+    if (key in botcore.SPECIAL_STAR_PASSIVES and key != "enchant") or (level is not None and level >= cap):
         maxed_skills.add(key)
 
 

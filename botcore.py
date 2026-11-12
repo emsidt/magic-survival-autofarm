@@ -3081,6 +3081,61 @@ def is_attribute_screen(frame: np.ndarray) -> bool:
     return False
 
 
+# Grid coordinates for 'Choose the Magic to strengthen' (Enchant screen):
+# Priority 1: Spirit (Row 1, Col 3) -> Priority 2: Cyclone (Row 3, Col 2) -> Meta fallbacks
+STRENGTHEN_MAGIC_GRID: list[tuple[str, str, tuple[float, float]]] = [
+    ("spirit", "Spirit (Hàng 1, Cột 3)", (0.605, 0.260)),
+    ("cyclone", "Cyclone (Hàng 3, Cột 2)", (0.397, 0.522)),
+    ("electric_shock", "Electric Shock (Hàng 3, Cột 3)", (0.604, 0.522)),
+    ("satellite", "Satellite (Hàng 4, Cột 1)", (0.295, 0.653)),
+    ("blizzard", "Blizzard (Hàng 4, Cột 2)", (0.502, 0.653)),
+    ("tsunami", "Tsunami (Hàng 2, Cột 4)", (0.813, 0.391)),
+    ("frost_nova", "Frost Nova (Hàng 2, Cột 1)", (0.190, 0.391)),
+    ("flash_shock", "Flash Shock (Hàng 5, Cột 2)", (0.607, 0.783)),
+    ("electric_zone", "Electric Zone (Hàng 2, Cột 3)", (0.606, 0.391)),
+]
+
+
+def get_strengthen_magic_targets(
+    strengthened_skills: Optional[set[str]] = None,
+) -> list[tuple[str, str, tuple[float, float]]]:
+    """Return ordered (skill_key, label, (rel_x, rel_y)) candidates for 'Choose the Magic to strengthen'.
+    Prioritizes Spirit (Row 1, Col 3) first; if Spirit was already strengthened, picks Cyclone (Row 3, Col 2).
+    """
+    used = set(strengthened_skills or ())
+    available = [item for item in STRENGTHEN_MAGIC_GRID if item[0] not in used]
+    already_used = [item for item in STRENGTHEN_MAGIC_GRID if item[0] in used]
+    return available + already_used
+
+
+def is_strengthen_magic_screen(frame: np.ndarray) -> bool:
+    """Detect if the 'Choose the Magic to strengthen' (Enchant) screen is open."""
+    if frame is None or frame.size == 0:
+        return False
+    # Fast visual gate: the Enchant modal is a dark screen (< 48 mean brightness) with no Pause button
+    if float(np.mean(frame)) > 48.0:
+        return False
+    if detect_pause_button(frame) is not None:
+        return False
+    h, w = frame.shape[:2]
+    try:
+        import asyncio
+        import winocr
+        from PIL import Image
+        roi_top = frame[int(h * 0.06):int(h * 0.18), int(w * 0.05):int(w * 0.95)]
+        if roi_top.size > 0:
+            pil_roi = Image.fromarray(cv2.cvtColor(roi_top, cv2.COLOR_BGR2RGB))
+            async def _ocr_str():
+                return await winocr.recognize_pil(pil_roi, lang="en")
+            res = asyncio.run(_ocr_str())
+            txt = " ".join(l.text.lower() for l in res.lines)
+            if "strengthen" in txt or "choose the magic" in txt:
+                return True
+    except Exception:
+        pass
+    return False
+
+
 def get_attribute_circle_targets() -> dict[int, tuple[float, float]]:
     """Return normalized screen coordinates for the 3 Level 7 Attribute circles.
     1: Top (0.50, 0.29)
@@ -3334,6 +3389,7 @@ SKILL_ALIASES: dict[str, list[str]] = {
     "chaser": ["chaser"],
     "recombination": ["recombination", "recombinant"],
     "mutation": ["mutation", "mutant"],
+    "enchant": ["enchant", "select one attack spell to enhance"],
 }
 
 # Human-readable skill display names
@@ -3411,6 +3467,7 @@ READABLE_SKILL_NAMES: dict[str, str] = {
     "curse": "Curse",
     "blood_thirst": "Blood Thirst",
     "proliferation": "Proliferation",
+    "enchant": "Enchant [★ Cường hóa]",
 }
 
 # Starting inherent skills for characters in Magic Survival
@@ -3507,6 +3564,7 @@ SPECIAL_STAR_PASSIVES: dict[str, list[str]] = {
     "chaser": ["chaser"],
     "recombination": ["recombination", "recombinant"],
     "mutation": ["mutation", "mutant"],
+    "enchant": ["enchant", "select one attack spell to enhance"],
 }
 
 # Special Passive Priority Score (Wiki & Reddit Tier List)
@@ -3533,6 +3591,7 @@ SPECIAL_PASSIVE_SCORES: dict[str, float] = {
     "florist": 115.0,
     "taoist": 110.0,
     "eldritch": 110.0,
+    "enchant": 165.0,
 }
 
 # Freeze traits for Blizzard, Frost Nova, Tsunami (Absolute priority for ice spells)

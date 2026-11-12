@@ -16,7 +16,8 @@ import botcore
 from adb_controller import ADBCommandError
 from game_actions import (ActionCancelled, FrameCaptureError, GuardedController, capture_frame,
                           select_attribute, select_combination, select_card, remember_card, finish_match,
-                          select_character, dismiss_death, close_ad, back_from_ad, move_from_frame, select_chest_artifact)
+                          select_character, dismiss_death, close_ad, back_from_ad, move_from_frame,
+                          select_chest_artifact, select_strengthen_magic)
 from data_recorder import DataRecorder
 from learning_engine import get_adaptive_learner
 
@@ -159,6 +160,7 @@ def run_cli_bot():
     active_skills: set[str] = set()
     skill_levels: dict[str, int] = {}
     maxed_skills: set[str] = set()
+    strengthened_skills: set[str] = set()
     match_start_time = 0.0
     match_running = False
     last_auto_action_time = 0.0
@@ -360,6 +362,7 @@ def run_cli_bot():
                             active_skills.clear()
                             skill_levels.clear()
                             maxed_skills.clear()
+                            strengthened_skills.clear()
                             last_monolith_pos = None
                             last_chest_pos = None
                             previous_direction = None
@@ -378,6 +381,27 @@ def run_cli_bot():
                         time.sleep(0.5)
                         continue
 
+                    # 3.5. MÀN HÌNH CƯỜNG HÓA PHÉP (Choose the Magic to strengthen / Enchant)
+                    if botcore.is_strengthen_magic_screen(frame):
+                        controller.release()
+                        match_running = True
+                        if not config.get("auto_levelup", True):
+                            continue
+                        if now - last_learn_time >= 1.2:
+                            last_learn_time = now
+                            strengthened = select_strengthen_magic(
+                                controller, rect, frame, capture, strengthened_skills=strengthened_skills
+                            )
+                            if strengthened:
+                                recorder.record_decision(
+                                    frame, "strengthen_magic", strengthened.key,
+                                    metadata={"chosen_magic": strengthened.label},
+                                )
+                                print(f"✨ [Cường hóa Phép] Đã chọn {strengthened.label} và bấm Selected!")
+                            else:
+                                print("✨ [Cường hóa Phép] Chưa xác nhận được Selected; đọc lại màn hình.")
+                        continue
+
                     # 4-6. Màn hình sảnh & bắt đầu trận (chỉ kiểm tra khi ngoài trận đấu)
                     if not match_running:
                         # 4. Màn hình chính -> Bấm "Start Game"
@@ -390,6 +414,7 @@ def run_cli_bot():
                             active_skills.clear()
                             skill_levels.clear()
                             maxed_skills.clear()
+                            strengthened_skills.clear()
                             match_start_time = 0.0
                             currencies = botcore.detect_main_screen_currencies(frame)
                             gold = currencies.get("gold")

@@ -37,7 +37,8 @@ class TestCLIFlow(unittest.TestCase):
                     "detect_buy_button", "detect_pause_button", "detect_resume_button", "detect_combination_star",
                     "detect_restore_gold", "detect_player_level", "detect_close_button")}
         detectors.update({name: False for name in ("detect_settings_dialog", "is_attribute_screen",
-                                                  "is_level_up_screen", "is_chest_screen", "is_fast_combat_frame", "is_ad_screen")})
+                                                  "is_strengthen_magic_screen", "is_level_up_screen",
+                                                  "is_chest_screen", "is_fast_combat_frame", "is_ad_screen")})
         detectors.update({"detect_game_timer": (2, 0, 120), "choose_direction": (1, 0)})
         distance = np.full((200, 100), 100, np.float32)
         detectors["inspect_game"] = botcore.Vision(np.zeros((200, 100), np.uint8), distance, [], True, 1)

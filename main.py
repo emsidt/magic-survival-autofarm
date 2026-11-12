@@ -39,7 +39,8 @@ pydirectinput.FAILSAFE = False
 import botcore
 from game_actions import (ActionCancelled, GuardedController, capture_frame,
                           select_attribute, select_combination, select_card, remember_card, finish_match,
-                          select_character, dismiss_death, close_ad, back_from_ad, move_from_frame, select_chest_artifact)
+                          select_character, dismiss_death, close_ad, back_from_ad, move_from_frame,
+                          select_chest_artifact, select_strengthen_magic)
 
 from botcore import (
     choose_best_artifact_or_card,
@@ -739,6 +740,7 @@ class FarmApp:
         level_up_clicks = 0
         match_running = False
         post_death_phase = False
+        strengthened_skills: set[str] = set()
         last_chest_pos: Optional[tuple[int, int]] = None
         last_chest_type: str = "treasure_chest"
         last_chest_weight: float = 24.0
@@ -952,6 +954,29 @@ class FarmApp:
                                 time.sleep(0.5)
                                 continue
 
+                            # A0.5 MÀN HÌNH CƯỜNG HÓA PHÉP (Choose the Magic to strengthen / Enchant)
+                            if botcore.is_strengthen_magic_screen(frame):
+                                controller.release()
+                                self.previous_direction = None
+                                uncertain_since = 0.0
+                                match_running = True
+                                post_death_phase = False
+                                if self.config.get("auto_levelup", True) and (start_tick - last_learn_click_time >= 1.2):
+                                    last_learn_click_time = time.monotonic()
+                                    strengthened = select_strengthen_magic(
+                                        controller, rect, frame, capture, strengthened_skills=strengthened_skills
+                                    )
+                                    if strengthened:
+                                        self.recorder.record_decision(
+                                            frame, "strengthen_magic", strengthened.key,
+                                            metadata={"chosen_magic": strengthened.label},
+                                        )
+                                        self._push("status", f"[Cường hóa Phép] Đã chọn {strengthened.label} và bấm Selected!")
+                                    else:
+                                        self._push("status", "[Cường hóa Phép] Chưa xác nhận được Selected; đọc lại màn hình.")
+                                    last_auto_action_time = time.monotonic()
+                                continue
+
                             # A1-A3: Màn hình sảnh & bắt đầu trận (chỉ kiểm tra khi không trong trận)
                             if not match_running:
                                 # A1. ƯU TIÊN MÀN HÌNH CHÍNH (TITLE SCREEN): Bấm "Start Game"
@@ -962,6 +987,7 @@ class FarmApp:
                                     active_skills.clear()
                                     skill_levels.clear()
                                     maxed_skills.clear()
+                                    strengthened_skills.clear()
                                     ad_wait_start_time = 0.0
                                     match_start_time = 0.0
                                     currencies = botcore.detect_main_screen_currencies(frame)
