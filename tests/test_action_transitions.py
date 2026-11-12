@@ -24,6 +24,18 @@ class ActionTransitionTests(unittest.TestCase):
         self.controller.tap.assert_called_once_with([0.11, 0.06], {})
         self.controller.press_esc.assert_not_called()
 
+    def test_ad_click_redirecting_to_chrome_forces_browser_stop_and_game_relaunch(self):
+        controller = Mock(spec=["tap", "move", "press_esc", "release", "lock",
+                                "get_foreground_package", "close_external_browsers", "launch_game"])
+        controller.lock = threading.RLock()
+        controller.get_foreground_package.return_value = "com.android.chrome"
+        capture = Mock(return_value=self.frame)
+        with patch("botcore.detect_close_button", return_value=(0.95, 0.05)):
+            self.assertEqual(close_ad(controller, {}, capture, sleep=Mock()), (0.95, 0.05))
+        controller.tap.assert_called_once_with([0.95, 0.05], {})
+        controller.close_external_browsers.assert_called_once()
+        controller.launch_game.assert_called_once()
+
     def test_disappeared_ad_close_sends_no_input(self):
         with patch("botcore.detect_close_button", return_value=None):
             self.assertIsNone(close_ad(self.controller, {}, Mock(return_value=self.frame)))

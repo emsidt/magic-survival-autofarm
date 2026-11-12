@@ -278,6 +278,37 @@ class ADBController:
         with self.lock:
             self._run_adb(["shell", "monkey", "-p", package_name, "-c", "android.intent.category.LAUNCHER", "1"], timeout=3.0)
 
+    def get_foreground_package(self) -> Optional[str]:
+        """Return the package name of the currently focused Android window, if any."""
+        try:
+            res = self._run_adb(["shell", "dumpsys", "window"], timeout=2.0)
+            out = res.stdout.decode("utf-8", errors="ignore")
+            for line in out.splitlines():
+                if "mCurrentFocus" in line and "Window{" in line:
+                    m = re.search(r"u\d+\s+([^/]+)/", line)
+                    if m:
+                        return m.group(1).strip()
+        except Exception:
+            pass
+        return None
+
+    def close_external_browsers(self):
+        """Force-stop external browsers and app stores that hijack clicks (Chrome, Play Store, Android Browser)."""
+        unwanted_packages = (
+            "com.android.chrome",
+            "com.android.browser",
+            "com.android.vending",
+            "org.chromium.chrome",
+            "com.google.android.apps.chrome",
+        )
+        self.release()
+        with self.lock:
+            for pkg in unwanted_packages:
+                try:
+                    self._run_adb(["shell", "am", "force-stop", pkg], timeout=2.0)
+                except Exception:
+                    pass
+
     def screenshot(self) -> Optional[np.ndarray]:
         """Capture Android screen directly from framebuffer pipe in background without window focus."""
         try:

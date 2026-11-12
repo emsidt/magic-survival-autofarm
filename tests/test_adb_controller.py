@@ -179,6 +179,19 @@ class TestADBController(unittest.TestCase):
                 timeout=3.0,
             )
 
+    def test_get_foreground_package_and_close_external_browsers(self):
+        """Test reading focused package and killing unwanted browser/store apps."""
+        mock_res = MagicMock()
+        mock_res.stdout = b"mCurrentFocus=Window{ceef773 u0 com.android.chrome/com.google.android.apps.chrome.Main}\n"
+        with patch.object(self.ctrl, "_run_adb", return_value=mock_res):
+            self.assertEqual(self.ctrl.get_foreground_package(), "com.android.chrome")
+
+        with patch.object(self.ctrl, "_run_adb") as mock_run:
+            self.ctrl.close_external_browsers()
+            calls = [c.args[0] for c in mock_run.call_args_list]
+            self.assertIn(["shell", "am", "force-stop", "com.android.chrome"], calls)
+            self.assertIn(["shell", "am", "force-stop", "com.android.vending"], calls)
+
     def test_continuous_movement_sustains_and_stops_on_release(self):
         """Test continuous movement keeps sending swipes until release() is called."""
         with patch.object(self.ctrl, "_run_adb") as mock_run:

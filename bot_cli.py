@@ -127,11 +127,25 @@ def run_cli_bot():
                     break
 
                 if is_adb:
-                    # Tự phục hồi: Nếu game bị văng ra màn hình chính LDPlayer hoặc mở Play Store -> tự động đóng & mở lại
+                    # Tự phục hồi: Nếu game bị văng ra màn hình chính LDPlayer hoặc mở Play Store / Chrome -> tự động đóng & mở lại
                     if hasattr(controller, "is_game_foreground") and not controller.is_game_foreground():
                         controller.release()
                         match_running = False
                         previous_direction = None
+
+                        # Kiểm tra xem có bị nhảy sang Chrome hoặc Google Play Store sau khi bấm X không
+                        if hasattr(controller, "get_foreground_package"):
+                            fg_pkg = controller.get_foreground_package() or ""
+                            if any(p in fg_pkg.lower() for p in ("chrome", "browser", "vending")):
+                                print(f"🌐 [Trình duyệt] Phát hiện {fg_pkg} mở sau khi bấm quảng cáo -> Đang tự động tắt Chrome và đưa game về màn hình chính...")
+                                if hasattr(controller, "close_external_browsers"):
+                                    controller.close_external_browsers()
+                                if hasattr(controller, "launch_game"):
+                                    controller.launch_game()
+                                time.sleep(1.2)
+                                last_auto_action_time = now
+                                continue
+
                         # An ad/store overlay can own focus without the game crashing.
                         # Look for its actual dismiss control before reopening the game.
                         if config.get("auto_close_ads", True):

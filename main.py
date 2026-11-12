@@ -767,6 +767,19 @@ class FarmApp:
                             controller.release()
                             self.previous_direction = None
                             match_running = False
+
+                            # Kiểm tra xem có bị nhảy sang Chrome hoặc Google Play Store sau khi bấm X không
+                            if hasattr(controller, "get_foreground_package"):
+                                fg_pkg = controller.get_foreground_package() or ""
+                                if any(p in fg_pkg.lower() for p in ("chrome", "browser", "vending")):
+                                    self._push("status", f"🌐 [Trình duyệt] Phát hiện {fg_pkg} mở sau khi bấm quảng cáo -> Đã tự động tắt Chrome!")
+                                    if hasattr(controller, "close_external_browsers"):
+                                        controller.close_external_browsers()
+                                    if hasattr(controller, "launch_game"):
+                                        controller.launch_game()
+                                    time.sleep(1.2)
+                                    continue
+
                             if self.config.get("auto_close_ads", True):
                                 close = close_ad(controller, rect, capture)
                                 if close is not None:

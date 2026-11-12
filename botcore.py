@@ -1406,6 +1406,7 @@ def is_ad_screen(frame: np.ndarray) -> bool:
             "free download", "bo qua quang cao", "skip ad", "close ad", "close video",
             "dong video", "dong quang cao", "mat phan thuong", "tiep tuc video",
             "cua hang play", "choi ngay", "tai ngay", "play now", "war inc",
+            "chrome", "tim kiem hoac nhap url", "search or type", "web address", "nhap url",
         )
         if any(kw in full_text for kw in ad_kws):
             return True

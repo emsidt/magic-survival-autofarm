@@ -1,13 +1,13 @@
 {
   "version": 1,
-  "total_runs_analyzed": 119,
+  "total_runs_analyzed": 120,
   "skill_weights": {
     "electric_shock": 7.969,
     "frost_nova": 7.969,
-    "spirit": 7.897,
+    "spirit": 7.861,
     "arcane_ray": 2.721,
     "magic_circle": 4.625,
-    "cyclone": 7.964,
+    "cyclone": 7.928,
     "blizzard": 7.933,
     "satellite": 7.031,
     "arcane_effuse": 0.833,
@@ -47,7 +47,7 @@
     "frost_nova+magic_circle": 3.094,
     "cyclone+electric_shock": 5.0,
     "cyclone+frost_nova": 4.373,
-    "cyclone+spirit": 4.973,
+    "cyclone+spirit": 4.946,
     "blizzard+frost_nova": 3.771,
     "electric_shock+satellite": 4.469,
     "frost_nova+satellite": 3.589,
@@ -493,7 +493,7 @@
     "armageddon+flash_shock": -0.02,
     "armageddon+snipe": -0.02
   },
-  "average_survival_sec": 1524.7,
+  "average_survival_sec": 1434.0,
   "recent_run_ids": [
     "run_20261111_120822_248530_69abb649",
     "run_20261111_121044_119634_a8c59b6e",
@@ -549,6 +549,7 @@
     "run_20261112_151634_304391_55c8a44a",
     "run_20261112_152130_962022_5d474341",
     "run_20261112_152417_637789_f1e42518",
-    "unrecorded_0ef35045cba84eceb5199e10b7477cfb"
+    "unrecorded_0ef35045cba84eceb5199e10b7477cfb",
+    "unrecorded_e449428759a74c5b9596871ab0503114"
   ]
 }

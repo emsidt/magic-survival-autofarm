@@ -15,11 +15,13 @@ import botcore
 class TestCLIFlow(unittest.TestCase):
     def run_frames(self, frames, overrides=None, config=None, controller_effects=None):
         controller = Mock(spec=["device", "screen_width", "screen_height", "lock", "release",
-                                "screenshot", "is_game_foreground", "tap", "move", "press_esc", "close", "launch_game"])
+                                "screenshot", "is_game_foreground", "tap", "move", "press_esc", "close", "launch_game",
+                                "get_foreground_package", "close_external_browsers"])
         controller.device = "emulator-test"
         controller.screen_width, controller.screen_height = 100, 200
         controller.lock = threading.RLock()
         controller.is_game_foreground.return_value = True
+        controller.get_foreground_package.return_value = "com.vkslrzm.Zombie"
         controller.screenshot.side_effect = list(frames) + [KeyboardInterrupt()]
         for name, effect in (controller_effects or {}).items():
             getattr(controller, name).side_effect = effect
@@ -177,6 +179,21 @@ class TestCLIFlow(unittest.TestCase):
         controller.launch_game.assert_not_called()
         controller.move.assert_called_once()
         controller.close.assert_called_once()
+
+    def test_chrome_browser_takeover_is_closed_and_game_relaunched(self):
+        chrome = np.zeros((200, 100, 3), np.uint8)
+        playing = chrome + 100
+        controller, _, _ = self.run_frames(
+            [chrome, playing],
+            {"is_fast_combat_frame": lambda f: f is playing,
+             "detect_pause_button": lambda f: (0.9, 0.04) if f is playing else None},
+            controller_effects={
+                "is_game_foreground": [False, True, True, True],
+                "get_foreground_package": ["com.android.chrome", "com.vkslrzm.Zombie", "com.vkslrzm.Zombie"],
+            },
+        )
+        controller.close_external_browsers.assert_called_once()
+        controller.launch_game.assert_called_once()
 
     def test_selected_menu_uses_summoner_selection_flow(self):
         frame = np.zeros((200, 100, 3), np.uint8)

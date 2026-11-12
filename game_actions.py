@@ -104,20 +104,44 @@ def dismiss_death(controller, rect, capture, sleep=time.sleep):
     return False
 
 
-def close_ad(controller, rect, capture):
+def close_ad(controller, rect, capture, sleep=time.sleep):
     """Find a dismiss control on a fresh frame and send exactly one input."""
     controller.release()
     target = botcore.detect_close_button(capture())
     if target is None:
         return None
     controller.tap(list(target), rect)
-    # The ad may already have returned to the game. Never append a blind Back.
+    sleep(0.35)
+    # If clicking the ad's dismiss control accidentally triggered an ad redirect to Chrome/external store,
+    # immediately close the browser and recover the game.
+    if hasattr(controller, "get_foreground_package"):
+        try:
+            fg = controller.get_foreground_package() or ""
+            if any(p in fg.lower() for p in ("chrome", "browser", "vending")):
+                if hasattr(controller, "close_external_browsers"):
+                    controller.close_external_browsers()
+                if hasattr(controller, "launch_game"):
+                    controller.launch_game()
+        except Exception:
+            pass
     return target
 
 
 def back_from_ad(controller, rect, capture):
     """Use Back only while a fresh frame still shows an ad without a close control."""
     controller.release()
+    # If Chrome/browser was opened, close it directly instead of sending back
+    if hasattr(controller, "get_foreground_package"):
+        try:
+            fg = controller.get_foreground_package() or ""
+            if any(p in fg.lower() for p in ("chrome", "browser", "vending")):
+                if hasattr(controller, "close_external_browsers"):
+                    controller.close_external_browsers()
+                if hasattr(controller, "launch_game"):
+                    controller.launch_game()
+                return True
+        except Exception:
+            pass
     frame = capture()
     if botcore.detect_close_button(frame) is not None or not botcore.is_ad_screen(frame):
         return False
