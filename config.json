@@ -1,9 +1,9 @@
 {
   "window_title": "Magic Survival",
-  "control_mode": "adb",
+  "control_mode": "desktop",
   "adb_path": "D:\\LDPlayer\\LDPlayer9\\adb.exe",
   "input_mode": "keyboard",
-  "crop_left_px": 65,
+  "crop_left_px": 0,
   "crop_top_px": 0,
   "crop_right_px": 0,
   "crop_bottom_px": 0,

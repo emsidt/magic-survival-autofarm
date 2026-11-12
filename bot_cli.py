@@ -58,9 +58,17 @@ def run_cli_bot():
             print(f"[!] Không khởi tạo được ADB: {e}")
             return
     else:
-        print("[*] Chế độ điều khiển: DirectInput (Windows)")
+        print("[*] Chế độ điều khiển: DirectInput (Google Play Games / Windows)")
         import main
         controller = main.Controller()
+        h_init = main.locate_game(config.get("window_title", "Magic Survival"))
+        if h_init:
+            import win32gui
+            t_init = win32gui.GetWindowText(h_init)
+            print(f"[+] Đã tìm thấy cửa sổ game: '{t_init}' (HWND: {h_init})")
+            print("[+] Hãy click chuột vào cửa sổ Magic Survival để bot bắt đầu tự động chơi!")
+        else:
+            print("[!] Chưa tìm thấy cửa sổ Magic Survival. Hãy mở game trên Google Play Games!")
 
     recorder = DataRecorder(enabled=bool(config.get("record_gameplay_data", True)), max_runs=int(config.get("max_data_runs", 50)))
     learner = get_adaptive_learner()
@@ -116,6 +124,7 @@ def run_cli_bot():
     rule_streak = 0
     last_rule_click = {}
     last_boss_alert_time = 0.0
+    last_focus_warning = 0.0
 
     try:
         while True:
@@ -174,7 +183,18 @@ def run_cli_bot():
                 else:
                     import main
                     hwnd = main.locate_game(config.get("window_title", "Magic Survival"))
-                    if not hwnd or not main.is_game_or_popup_active(hwnd)[0]:
+                    if not hwnd:
+                        if now - last_focus_warning >= 5.0:
+                            last_focus_warning = now
+                            print("[!] Chưa tìm thấy cửa sổ game Magic Survival; đang chờ game mở...")
+                        controller.release()
+                        time.sleep(0.5)
+                        continue
+                    active, _ = main.is_game_or_popup_active(hwnd)
+                    if not active:
+                        if now - last_focus_warning >= 5.0:
+                            last_focus_warning = now
+                            print("[⏸️] Cửa sổ Magic Survival đang không có tiêu điểm (focus). Hãy click chuột vào cửa sổ game để bot chạy tiếp!")
                         controller.release()
                         time.sleep(0.4)
                         continue

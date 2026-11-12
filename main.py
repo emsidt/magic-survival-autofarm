@@ -182,9 +182,11 @@ def locate_game(title: str = "Magic Survival"):
         w_low = w_text.lower()
         c_low = c_text.lower()
 
-        # Exclude dev tools / browsers / editors
-        if any(k in w_low for k in EXCLUDE_KEYWORDS) or any(c_low.startswith(k) for k in EXCLUDE_CLASSES):
-            return
+        # Exclude dev tools / browsers / editors, unless window title matches the game (e.g. Google Play Games uses HwndWrapper)
+        is_game_title = (title.lower() in w_low) or ("magic survival" in w_low) or ("magic-survival" in w_low)
+        if not is_game_title:
+            if any(k in w_low for k in EXCLUDE_KEYWORDS) or any(c_low.startswith(k) for k in EXCLUDE_CLASSES):
+                return
 
         try:
             left, top, right, bottom = win32gui.GetClientRect(hwnd)
@@ -198,7 +200,7 @@ def locate_game(title: str = "Magic Survival"):
             candidates_ldplayer.append(hwnd)
             return
 
-        # 2. Window title contains the specified title (e.g. Magic Survival)
+        # 2. Window title contains the specified title (e.g. Magic Survival - Google Play Games, etc.)
         if title.lower() in w_low:
             candidates_exact.append(hwnd)
             return
@@ -211,13 +213,11 @@ def locate_game(title: str = "Magic Survival"):
     win32gui.EnumWindows(visit, None)
 
     # Priority selection:
-    # If the user specifically set title to something custom, exact match takes precedence.
-    if title.lower() not in ("magic survival", "magic-survival") and candidates_exact:
+    # An exact title match (e.g. Google Play Games 'Magic Survival - emsidt') takes precedence over generic emulators.
+    if candidates_exact:
         selected = candidates_exact[0]
     elif candidates_ldplayer:
         selected = candidates_ldplayer[0]
-    elif candidates_exact:
-        selected = candidates_exact[0]
     elif candidates_emulator:
         selected = candidates_emulator[0]
     else:
