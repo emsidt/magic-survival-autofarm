@@ -1587,21 +1587,58 @@ def detect_resume_button(frame: np.ndarray) -> Optional[tuple[float, float]]:
     return None
 
 
-def parse_timer_text(text: str) -> Optional[tuple[int, int, int]]:
-    """Parse minutes and seconds from OCR string (e.g. '03:32', '03 : 32', '03 •.32', '05 : 43', '14:25').
+def parse_timer_text(text: str, max_mins: int = 180, autocorrect: bool = False) -> Optional[tuple[int, int, int]]:
+    """Parse minutes and seconds from OCR string (e.g. '03:32', '03 : 32', '03 •.32', '05 : 43', '14:25', '100:05').
+    When autocorrect=True, fixes common digital font OCR distortions where leading '0' is misread as 9, 8, 6, 5, or 4 (e.g. '93:58' -> '03:58').
     Returns (minutes, seconds, total_seconds) or None.
     """
     cleaned = re.sub(r'[^0-9:]+', ':', text.strip())
     m = re.search(r'(?<!\d)(\d{1,3}):+(\d{2})(?!\d)', cleaned)
     if m:
         mins, secs = int(m.group(1)), int(m.group(2))
-        if secs < 60 and mins < 180:
+        if secs < 60 and mins < max_mins:
+            if autocorrect and mins >= 40:
+                mins = mins % 10
             return (mins, secs, mins * 60 + secs)
     m4 = re.search(r'\b(\d{1,2})[\s]+(\d{2})\b', text)
     if m4:
         mins, secs = int(m4.group(1)), int(m4.group(2))
-        if secs < 60 and mins < 180:
+        if secs < 60 and mins < max_mins:
+            if autocorrect and mins >= 40:
+                mins = mins % 10
             return (mins, secs, mins * 60 + secs)
+    return None
+
+
+def validate_game_timer(
+    t: Optional[tuple[int, int, int]],
+    last_known_sec: float = 0.0,
+    match_start_time: float = 0.0,
+    current_time: float = 0.0,
+    time_mult: float = 1.0,
+) -> Optional[float]:
+    """Validate and sanitize a detected game timer reading against wall-clock time and monotonicity.
+    Returns the validated total seconds (float) or None if the reading is invalid/impossible.
+    """
+    if not t:
+        return None
+    mins, secs, total = t
+    sec_val = float(total)
+
+    # Sanity guard against wall-clock time if match_start_time is known
+    if match_start_time > 0.0 and current_time >= match_start_time:
+        wall_elapsed = (current_time - match_start_time) * time_mult
+        max_allowed = wall_elapsed + 30.0  # 30s buffer for clock drift / startup lag
+        if sec_val > max_allowed:
+            # Try modulo 10 on minutes if font OCR misread leading 0
+            alt_mins = mins % 10
+            alt_sec = float(alt_mins * 60 + secs)
+            if alt_sec <= max_allowed and (alt_sec >= last_known_sec or last_known_sec == 0.0):
+                return alt_sec
+            return None  # Physically impossible reading, reject
+
+    if sec_val >= last_known_sec or last_known_sec == 0.0:
+        return sec_val
     return None
 
 
@@ -1641,7 +1678,7 @@ def detect_game_timer(frame: np.ndarray) -> Optional[tuple[int, int, int]]:
         pil_img = Image.fromarray(cv2.cvtColor(roi_scaled, cv2.COLOR_BGR2RGB))
         res = asyncio.run(_ocr(pil_img))
         txt = " ".join(l.text for l in res.lines)
-        parsed = parse_timer_text(txt)
+        parsed = parse_timer_text(txt, autocorrect=True)
         if parsed is not None:
             return parsed
 
@@ -1651,7 +1688,7 @@ def detect_game_timer(frame: np.ndarray) -> Optional[tuple[int, int, int]]:
         pil_norm = Image.fromarray(norm)
         res_norm = asyncio.run(_ocr(pil_norm))
         txt_norm = " ".join(l.text for l in res_norm.lines)
-        return parse_timer_text(txt_norm)
+        return parse_timer_text(txt_norm, autocorrect=True)
     except Exception:
         pass
 
@@ -1677,20 +1714,37 @@ def detect_results_survival_time(frame: np.ndarray) -> Optional[tuple[int, int, 
         async def _ocr(p_img):
             return await winocr.recognize_pil(p_img, lang="en")
 
+        # Pass 1: raw ROI
         pil_img = Image.fromarray(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB))
         res = asyncio.run(_ocr(pil_img))
         text = " ".join(line.text for line in res.lines)
-        parsed = parse_timer_text(text)
+        parsed = parse_timer_text(text, autocorrect=True)
         if parsed is not None:
             return parsed
 
-        # Pass 2: normalized contrast for dimmed / dark backgrounds
-        gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+        # Pass 2: 1.5x scaled ROI (crucial for digital font recognition on 1080p/720p screens)
+        rw, rh = int(roi.shape[1] * 1.5), int(roi.shape[0] * 1.5)
+        roi_scaled = cv2.resize(roi, (rw, rh), interpolation=cv2.INTER_CUBIC)
+        res_scaled = asyncio.run(_ocr(Image.fromarray(cv2.cvtColor(roi_scaled, cv2.COLOR_BGR2RGB))))
+        text_scaled = " ".join(line.text for line in res_scaled.lines)
+        parsed_scaled = parse_timer_text(text_scaled, autocorrect=True)
+        if parsed_scaled is not None:
+            return parsed_scaled
+
+        # Pass 3: normalized contrast for dimmed / dark backgrounds
+        gray = cv2.cvtColor(roi_scaled, cv2.COLOR_BGR2GRAY)
         norm = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
         pil_norm = Image.fromarray(norm)
         res_norm = asyncio.run(_ocr(pil_norm))
         text_norm = " ".join(line.text for line in res_norm.lines)
-        return parse_timer_text(text_norm)
+        parsed_norm = parse_timer_text(text_norm, autocorrect=True)
+        if parsed_norm is not None:
+            return parsed_norm
+
+        # Pass 4: whole frame fallback
+        res_full = asyncio.run(_ocr(Image.fromarray(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))))
+        text_full = " ".join(line.text for line in res_full.lines)
+        return parse_timer_text(text_full, autocorrect=True)
     except Exception:
         pass
     return None

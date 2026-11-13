@@ -1396,8 +1396,23 @@ class VisionTests(unittest.TestCase):
         self.assertEqual(botcore.parse_timer_text("03 •.32"), (3, 32, 212))
         self.assertEqual(botcore.parse_timer_text("05 : 43"), (5, 43, 343))
         self.assertEqual(botcore.parse_timer_text("14:25"), (14, 25, 865))
+        # Autocorrect digital font misreading leading '0' as 9, 8, 6, 5
+        self.assertEqual(botcore.parse_timer_text("93:58", autocorrect=True), (3, 58, 238))
+        self.assertEqual(botcore.parse_timer_text("94:54", autocorrect=True), (4, 54, 294))
+        self.assertEqual(botcore.parse_timer_text("66:45", autocorrect=True), (6, 45, 405))
+        self.assertEqual(botcore.parse_timer_text("100:05"), (100, 5, 6005))
         self.assertIsNone(botcore.parse_timer_text("no timer here"))
         self.assertIsNone(botcore.parse_timer_text("99:99"))
+
+        # 1.1 validate_game_timer tests
+        # Normal reading matching wall clock
+        self.assertEqual(botcore.validate_game_timer((3, 32, 212), last_known_sec=180.0, match_start_time=100.0, current_time=320.0), 212.0)
+        # Impossible jump without autocorrect -> rejected (None)
+        self.assertIsNone(botcore.validate_game_timer((45, 10, 2710), last_known_sec=120.0, match_start_time=100.0, current_time=250.0))
+        # Monotonic check
+        self.assertIsNone(botcore.validate_game_timer((1, 0, 60), last_known_sec=180.0, match_start_time=100.0, current_time=300.0))
+        # Autocorrect 93:58 (238s) when wall clock is ~240s
+        self.assertEqual(botcore.validate_game_timer((93, 58, 5638), last_known_sec=220.0, match_start_time=1000.0, current_time=1240.0), 238.0)
 
         # 2. Blank frame has no game timer
         frame_blank = np.zeros((1920, 1080, 3), dtype=np.uint8)

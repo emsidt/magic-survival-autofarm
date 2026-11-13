@@ -200,6 +200,7 @@ def run_cli_bot():
             try:
                 time.sleep(0.02)
                 now = time.monotonic()
+                time_mult = 1.24 if str(config.get("game_map", "depth")).lower().strip() == "depth" else 1.0
                 max_session_mins = float(config.get("max_session_minutes", 0) or 0)
                 if max_session_mins > 0 and now - session_start >= 60 * max_session_mins:
                     print("Đã hết giới hạn thời gian phiên chơi.")
@@ -316,8 +317,9 @@ def run_cli_bot():
                         controller.release()
                         match_running = False
                         t_die = botcore.detect_game_timer(frame)
-                        if t_die and t_die[2] >= last_known_game_timer_sec:
-                            last_known_game_timer_sec = float(t_die[2])
+                        v_die = botcore.validate_game_timer(t_die, last_known_game_timer_sec, match_start_time, now, time_mult)
+                        if v_die is not None:
+                            last_known_game_timer_sec = v_die
                         if now - last_die_time >= 1.5:
                             last_die_time = now
                             if dismiss_death(controller, rect, capture):
@@ -335,12 +337,22 @@ def run_cli_bot():
                         if now - last_confirm_time >= 2.0:
                             last_confirm_time = now
                             if match_start_time > 0.0 or recorder.current_run_id or last_known_game_timer_sec > 0.0:
-                                t_final = botcore.detect_game_timer(frame) or botcore.detect_results_survival_time(frame)
-                                if t_final:
-                                    last_known_game_timer_sec = max(last_known_game_timer_sec, float(t_final[2]))
-                                time_mult = 1.24 if str(config.get("game_map", "depth")).lower().strip() == "depth" else 1.0
-                                if last_known_game_timer_sec <= 0.0 and match_start_time > 0.0:
-                                    last_known_game_timer_sec = max(0.0, (now - match_start_time) * time_mult)
+                                # Results screen survival time is official ground truth from game engine
+                                t_res = botcore.detect_results_survival_time(frame)
+                                if t_res:
+                                    last_known_game_timer_sec = float(t_res[2])
+                                else:
+                                    t_final = botcore.detect_game_timer(frame)
+                                    v_fin = botcore.validate_game_timer(t_final, last_known_game_timer_sec, match_start_time, now, time_mult)
+                                    if v_fin is not None:
+                                        last_known_game_timer_sec = v_fin
+
+                                if match_start_time > 0.0:
+                                    wall_sec = max(0.0, (now - match_start_time) * time_mult)
+                                    # Fallback if timer <= 0 or impossible drift
+                                    if last_known_game_timer_sec <= 0.0 or last_known_game_timer_sec > wall_sec + 35.0:
+                                        last_known_game_timer_sec = wall_sec
+
                                 stats = botcore.detect_results_stats(frame)
                                 rep = finish_match(
                                     recorder, learner, frame, last_known_game_timer_sec,
@@ -522,8 +534,9 @@ def run_cli_bot():
                         if now - last_timer_scan_time >= 1.5:
                             last_timer_scan_time = now
                             t_lvl = botcore.detect_game_timer(frame)
-                            if t_lvl and t_lvl[2] >= last_known_game_timer_sec:
-                                last_known_game_timer_sec = float(t_lvl[2])
+                            v_lvl = botcore.validate_game_timer(t_lvl, last_known_game_timer_sec, match_start_time, now, time_mult)
+                            if v_lvl is not None:
+                                last_known_game_timer_sec = v_lvl
                         if now - last_level_up_time >= 1.2:
                             last_level_up_time = now
 
@@ -578,8 +591,9 @@ def run_cli_bot():
                         if now - last_timer_scan_time >= 1.5:
                             last_timer_scan_time = now
                             t_ch = botcore.detect_game_timer(frame)
-                            if t_ch and t_ch[2] >= last_known_game_timer_sec:
-                                last_known_game_timer_sec = float(t_ch[2])
+                            v_ch = botcore.validate_game_timer(t_ch, last_known_game_timer_sec, match_start_time, now, time_mult)
+                            if v_ch is not None:
+                                last_known_game_timer_sec = v_ch
                         if now - last_chest_modal_time >= 1.2:
                             last_chest_modal_time = now
                             chosen = select_chest_artifact(
@@ -690,8 +704,9 @@ def run_cli_bot():
                     if now - last_timer_scan_time >= 1.0:
                         last_timer_scan_time = now
                         t_live = botcore.detect_game_timer(frame)
-                        if t_live and (t_live[2] >= last_known_game_timer_sec or last_known_game_timer_sec == 0.0):
-                            last_known_game_timer_sec = float(t_live[2])
+                        v_live = botcore.validate_game_timer(t_live, last_known_game_timer_sec, match_start_time, now, time_mult)
+                        if v_live is not None:
+                            last_known_game_timer_sec = v_live
 
                     player_coords = tuple(config.get("player_position", [0.5, 0.5]))
                     px = int(w * player_coords[0])

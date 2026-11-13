@@ -885,8 +885,9 @@ class FarmApp:
                                 match_running = False
                                 post_death_phase = True
                                 final_timer = botcore.detect_game_timer(frame)
-                                if final_timer:
-                                    last_known_game_timer_sec = max(last_known_game_timer_sec, float(final_timer[2]))
+                                v_die = botcore.validate_game_timer(final_timer, last_known_game_timer_sec, match_start_time, start_tick)
+                                if v_die is not None:
+                                    last_known_game_timer_sec = v_die
                                 if start_tick - last_die_click_time >= 1.2:
                                     last_die_click_time = start_tick
                                     last_auto_action_time = start_tick
@@ -909,11 +910,18 @@ class FarmApp:
                                 post_death_phase = True
                                 if start_tick - last_confirm_click_time >= 2.0:
                                     if match_start_time > 0.0 or last_known_game_timer_sec > 0.0 or self.recorder.current_run_id:
-                                        t_fin = botcore.detect_game_timer(frame) or botcore.detect_results_survival_time(frame)
-                                        if t_fin:
-                                            last_known_game_timer_sec = max(last_known_game_timer_sec, float(t_fin[2]))
-                                        if last_known_game_timer_sec <= 0.0 and match_start_time > 0.0:
-                                            last_known_game_timer_sec = max(0.0, start_tick - match_start_time)
+                                        t_res = botcore.detect_results_survival_time(frame)
+                                        if t_res:
+                                            last_known_game_timer_sec = float(t_res[2])
+                                        else:
+                                            t_fin = botcore.detect_game_timer(frame)
+                                            v_fin = botcore.validate_game_timer(t_fin, last_known_game_timer_sec, match_start_time, start_tick)
+                                            if v_fin is not None:
+                                                last_known_game_timer_sec = v_fin
+                                        if match_start_time > 0.0:
+                                            wall_sec = max(0.0, start_tick - match_start_time)
+                                            if last_known_game_timer_sec <= 0.0 or last_known_game_timer_sec > wall_sec + 35.0:
+                                                last_known_game_timer_sec = wall_sec
                                         stats = botcore.detect_results_stats(frame)
                                         report = finish_match(
                                             self.recorder, self.learner, frame, last_known_game_timer_sec,
@@ -1353,8 +1361,9 @@ class FarmApp:
                             if start_tick - last_timer_scan_time >= 1.0:
                                 last_timer_scan_time = start_tick
                                 t_live = botcore.detect_game_timer(frame)
-                                if t_live and (t_live[2] >= last_known_game_timer_sec or last_known_game_timer_sec == 0.0):
-                                    last_known_game_timer_sec = float(t_live[2])
+                                v_live = botcore.validate_game_timer(t_live, last_known_game_timer_sec, match_start_time, start_tick)
+                                if v_live is not None:
+                                    last_known_game_timer_sec = v_live
 
                             fh, fw = frame.shape[:2]
                             px = int(fw * self.config["player_position"][0])
