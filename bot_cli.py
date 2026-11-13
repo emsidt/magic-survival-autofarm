@@ -308,7 +308,7 @@ def run_cli_bot():
                             active_skills.clear()
                             skill_levels.clear()
                             maxed_skills.clear()
-                            previous_direction = last_chest_pos = last_monolith_pos = None
+                            previous_direction = last_chest_pos = last_monolith_pos = last_logged_chest_pos = last_logged_monolith_pos = None
                             print("[Restore Gold] Đã bấm Confirm nhận lại vàng sau crash.")
                         continue
 
@@ -378,7 +378,9 @@ def run_cli_bot():
                             maxed_skills.clear()
                             strengthened_skills.clear()
                             last_monolith_pos = None
+                            last_logged_monolith_pos = None
                             last_chest_pos = None
+                            last_logged_chest_pos = None
                             previous_direction = None
                             last_known_game_timer_sec = 0.0
                             last_timer_scan_time = 0.0
@@ -494,7 +496,9 @@ def run_cli_bot():
                                 last_timer_scan_time = 0.0
                                 step_count = 0
                                 last_monolith_pos = None
+                                last_logged_monolith_pos = None
                                 last_chest_pos = None
+                                last_logged_chest_pos = None
                                 previous_direction = None
                                 controller.tap(list(ea_pos), rect)
                                 print("\n" + "-" * 60)
@@ -608,6 +612,7 @@ def run_cli_bot():
                                 )
                                 print(f"[Rương] Đã xác nhận nhận cổ vật: {chosen.label} (ô {chosen.index})")
                                 last_chest_pos = None
+                                last_logged_chest_pos = None
                             else:
                                 print("[Rương] Chưa xác nhận nhận cổ vật; đọc lại màn hình.")
                         continue
@@ -728,14 +733,14 @@ def run_cli_bot():
                         getattr(vision, "monolith", None) is not None and last_monolith_pos is None,
                     )
                     if is_fresh_monolith and getattr(vision, "monolith", None) is not None:
-                        last_monolith_pos = vision.monolith
+                        raw_m = vision.monolith
+                        last_monolith_pos = (int(raw_m[0]), int(raw_m[1]))
                         last_monolith_time = now
                         if (
                             last_logged_monolith_pos is None
-                            or math.hypot(last_monolith_pos[0] - last_logged_monolith_pos[0], last_monolith_pos[1] - last_logged_monolith_pos[1]) > 50
-                            or (now - last_monolith_log_time >= 3.0)
+                            or (now - last_monolith_log_time >= 15.0)
                         ):
-                            print(f"🏛️ [Tháp qua màn] ƯU TIÊN TUYỆT ĐỐI: Phát hiện Tháp tại {vision.monolith}! Đang lao thẳng vào để chạm Tháp nhận Cổ vật Huyền thoại!")
+                            print(f"🏛️ [Tháp] Phát hiện Tháp qua màn tại ({last_monolith_pos[0]}, {last_monolith_pos[1]})")
                             last_logged_monolith_pos = last_monolith_pos
                             last_monolith_log_time = now
                     elif last_monolith_pos is not None and (now - last_monolith_time <= 2.5):
@@ -751,14 +756,17 @@ def run_cli_bot():
                             vision.monolith = last_monolith_pos
                         else:
                             last_monolith_pos = None
+                            last_logged_monolith_pos = None
                             vision.monolith = None
                     else:
                         last_monolith_pos = None
+                        last_logged_monolith_pos = None
                         vision.monolith = None
 
                     if not config.get("auto_chest", True):
                         vision.chest = None
                         last_chest_pos = None
+                        last_logged_chest_pos = None
 
                     # Theo dõi Rương cổ vật / Chỉ dẫn rương liên tục kèm bù trừ vector di chuyển
                     is_fresh_chest = getattr(
@@ -775,10 +783,10 @@ def run_cli_bot():
                         last_chest_weight = vision.chest_weight
                         if (
                             last_logged_chest_pos is None
-                            or math.hypot(last_chest_pos[0] - last_logged_chest_pos[0], last_chest_pos[1] - last_logged_chest_pos[1]) > 50
-                            or (now - last_chest_log_time >= 3.0)
+                            or (now - last_chest_log_time >= 15.0)
                         ):
-                            print(f"📦 [Săn Rương] ƯU TIÊN CAO: Phát hiện {c_type} tại {last_chest_pos}! Đang dũng mãnh lao tới nhặt...")
+                            c_label = "Rương báu" if c_type == "treasure_chest" else ("Chỉ dẫn rương" if "indicator" in c_type or "arrow" in c_type else c_type.replace("_", " ").title())
+                            print(f"📦 [Rương] Phát hiện {c_label} tại ({last_chest_pos[0]}, {last_chest_pos[1]})")
                             last_logged_chest_pos = last_chest_pos
                             last_chest_log_time = now
                     elif last_chest_pos is not None and (now - last_chest_hunt_time <= 2.5) and config.get("auto_chest", True):
@@ -796,9 +804,11 @@ def run_cli_bot():
                             vision.chest_weight = last_chest_weight
                         else:
                             last_chest_pos = None
+                            last_logged_chest_pos = None
                             vision.chest = None
                     else:
                         last_chest_pos = None
+                        last_logged_chest_pos = None
                         vision.chest = None
 
                     # Điều khiển né quái thông minh bằng thuật toán trường tiềm năng (Potential Field)
@@ -871,7 +881,7 @@ def run_cli_bot():
             except (ADBCommandError, FrameCaptureError) as error:
                 controller.release()
                 previous_direction = None
-                last_chest_pos = last_monolith_pos = None
+                last_chest_pos = last_monolith_pos = last_logged_chest_pos = last_logged_monolith_pos = None
                 rule_streak_name, rule_streak = "", 0
                 print(f"[ADB] Tạm ngắt input: {error}. Sẽ chụp ảnh mới trước khi tiếp tục.")
                 time.sleep(0.5)
