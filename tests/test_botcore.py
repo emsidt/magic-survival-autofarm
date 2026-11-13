@@ -1518,6 +1518,34 @@ class VisionTests(unittest.TestCase):
         self.assertEqual(res.skill_key, "spirit")
         self.assertEqual(res.offered_level, 7)
 
+    def test_monolith_strictly_overrides_chest_and_rejects_bush_false_positive(self):
+        import botcore
+        import os
+
+        # 1. When BOTH a close chest (to the East) and a distant monolith (to the West) are present,
+        # choose_direction MUST ignore the chest and drive West toward the monolith!
+        mask = np.zeros((1000, 600), dtype=np.uint8)
+        dist = cv2.distanceTransform(255 - mask, cv2.DIST_L2, 5)
+        v_both = botcore.Vision(
+            enemy_mask=mask,
+            distance=dist,
+            gems=[],
+            gameplay=True,
+            background_fraction=0.8,
+            chest=(360, 500),  # Very close chest to the East (60px from player at 300, 500)
+            chest_type="treasure_chest",
+            chest_weight=36.0,
+            monolith=(100, 500),  # Distant monolith to the West (200px from player at 300, 500)
+        )
+        dx, dy = botcore.choose_direction(v_both, elapsed=300.0, player=(0.5, 0.5))
+        self.assertLess(dx, -0.85, "Must ignore close chest and drive directly West into monolith")
+
+        # 2. Bush on brown dirt map (media_1794323585626_71a8795c.jpg) must not be falsely detected as chest
+        bush_path = r"C:/Users/User/.gemini/antigravity/brain/2dc840cb-72eb-45f9-92e9-a3fe999f18b4/.user_uploaded/media_1794323585626_71a8795c.jpg"
+        if os.path.isfile(bush_path):
+            img_bush = cv2.imread(bush_path)
+            self.assertIsNone(botcore.detect_chest(img_bush), "Bush on brown dirt ground must not be detected as chest")
+
 
 if __name__ == "__main__":
     unittest.main()

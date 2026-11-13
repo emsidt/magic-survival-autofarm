@@ -1396,7 +1396,7 @@ class FarmApp:
                                 last_monolith_pos = None
                                 vision.monolith = None
 
-                            if not self.config.get("auto_chest", True):
+                            if not self.config.get("auto_chest", True) or getattr(vision, "monolith", None) is not None or last_monolith_pos is not None:
                                 vision.chest = None
                                 last_chest_pos = None
                             else:

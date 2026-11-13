@@ -188,6 +188,8 @@ def run_cli_bot():
     step_count = 0
     last_known_game_timer_sec = 0.0
     last_timer_scan_time = 0.0
+    last_timer_advance_time = 0.0
+    last_wave_clear_log_time = 0.0
     rule_streak_name = ""
     rule_streak = 0
     last_rule_click = {}
@@ -384,6 +386,7 @@ def run_cli_bot():
                             previous_direction = None
                             last_known_game_timer_sec = 0.0
                             last_timer_scan_time = 0.0
+                            last_timer_advance_time = 0.0
                             last_boss_alert_time = 0.0
                             controller.tap(list(confirm_pos), rect)
                             last_auto_action_time = now
@@ -494,6 +497,7 @@ def run_cli_bot():
                                 run_id = recorder.current_run_id or "recording_disabled"
                                 last_known_game_timer_sec = 0.0
                                 last_timer_scan_time = 0.0
+                                last_timer_advance_time = now
                                 step_count = 0
                                 last_monolith_pos = None
                                 last_logged_monolith_pos = None
@@ -705,6 +709,7 @@ def run_cli_bot():
                     match_running = True
                     if match_start_time == 0.0:
                         match_start_time = now
+                        last_timer_advance_time = now
 
                     # Quét đồng hồ thời gian sống thực tế trên thanh HUD mỗi ~1.0 giây
                     if now - last_timer_scan_time >= 1.0:
@@ -712,6 +717,8 @@ def run_cli_bot():
                         t_live = botcore.detect_game_timer(frame)
                         v_live = botcore.validate_game_timer(t_live, last_known_game_timer_sec, match_start_time, now, time_mult)
                         if v_live is not None:
+                            if v_live > last_known_game_timer_sec:
+                                last_timer_advance_time = now
                             last_known_game_timer_sec = v_live
 
                     player_coords = tuple(config.get("player_position", [0.5, 0.5]))
@@ -740,7 +747,7 @@ def run_cli_bot():
                             last_logged_monolith_pos is None
                             or (now - last_monolith_log_time >= 15.0)
                         ):
-                            print(f"🏛️ [Tháp] Phát hiện Tháp qua màn tại ({last_monolith_pos[0]}, {last_monolith_pos[1]})")
+                            print(f"🏛️ [Tháp] Phát hiện Tháp qua màn tại ({last_monolith_pos[0]}, {last_monolith_pos[1]})! Đang lao tới qua màn...")
                             last_logged_monolith_pos = last_monolith_pos
                             last_monolith_log_time = now
                     elif last_monolith_pos is not None and (now - last_monolith_time <= 2.5):
@@ -763,53 +770,73 @@ def run_cli_bot():
                         last_logged_monolith_pos = None
                         vision.monolith = None
 
-                    if not config.get("auto_chest", True):
+                    # Phát hiện trạng thái Xong màn (đã dọn sạch đợt quái/boss, đồng hồ dừng chờ chạm Tháp):
+                    enemy_px_count = int(np.sum(vision.enemy_mask > 0))
+                    is_wave_cleared = bool(
+                        getattr(vision, "monolith", None) is not None
+                        or last_monolith_pos is not None
+                        or (
+                            last_known_game_timer_sec >= 120.0
+                            and not getattr(vision, "bosses", None)
+                            and enemy_px_count < int(w * h * 0.006)
+                            and last_timer_advance_time > 0.0
+                            and (now - last_timer_advance_time >= 2.8)
+                        )
+                    )
+
+                    # Khi đã xong màn hoặc có Tháp, CẤM TUYỆT ĐỐI đi tìm rương để tập trung 100% tìm Tháp qua màn!
+                    if is_wave_cleared or not config.get("auto_chest", True):
                         vision.chest = None
                         last_chest_pos = None
                         last_logged_chest_pos = None
-
-                    # Theo dõi Rương cổ vật / Chỉ dẫn rương liên tục kèm bù trừ vector di chuyển
-                    is_fresh_chest = getattr(
-                        vision,
-                        "chest_detected",
-                        getattr(vision, "chest", None) is not None and last_chest_pos is None,
-                    )
-                    if is_fresh_chest and getattr(vision, "chest", None) is not None:
-                        raw_c = vision.chest
-                        last_chest_pos = (int(raw_c[0]), int(raw_c[1]))
-                        last_chest_hunt_time = now
-                        c_type = getattr(vision, "chest_type", "treasure_chest")
-                        last_chest_type = c_type
-                        last_chest_weight = vision.chest_weight
-                        if (
-                            last_logged_chest_pos is None
-                            or (now - last_chest_log_time >= 15.0)
-                        ):
-                            c_label = "Rương báu" if c_type == "treasure_chest" else ("Chỉ dẫn rương" if "indicator" in c_type or "arrow" in c_type else c_type.replace("_", " ").title())
-                            print(f"📦 [Rương] Phát hiện {c_label} tại ({last_chest_pos[0]}, {last_chest_pos[1]})")
-                            last_logged_chest_pos = last_chest_pos
-                            last_chest_log_time = now
-                    elif last_chest_pos is not None and (now - last_chest_hunt_time <= 2.5) and config.get("auto_chest", True):
-                        if previous_direction:
-                            est_cx = int(round(last_chest_pos[0] - 12.0 * previous_direction[0]))
-                            est_cy = int(round(last_chest_pos[1] - 12.0 * previous_direction[1]))
-                            last_chest_pos = (est_cx, est_cy)
-                        if (
-                            -80 <= last_chest_pos[0] < w + 80
-                            and -80 <= last_chest_pos[1] < h + 80
-                            and math.hypot(last_chest_pos[0] - px, last_chest_pos[1] - py) > 8
-                        ):
-                            vision.chest = last_chest_pos
-                            vision.chest_type = last_chest_type
-                            vision.chest_weight = last_chest_weight
+                        if is_wave_cleared and getattr(vision, "monolith", None) is None:
+                            vision.gems = []
+                            if now - last_wave_clear_log_time >= 15.0:
+                                print("🏛️ [Xong màn] Đã dọn xong đợt quái! Ngưng tìm rương, đang quét tìm Tháp để qua màn...")
+                                last_wave_clear_log_time = now
+                    else:
+                        # Theo dõi Rương cổ vật / Chỉ dẫn rương liên tục kèm bù trừ vector di chuyển
+                        is_fresh_chest = getattr(
+                            vision,
+                            "chest_detected",
+                            getattr(vision, "chest", None) is not None and last_chest_pos is None,
+                        )
+                        if is_fresh_chest and getattr(vision, "chest", None) is not None:
+                            raw_c = vision.chest
+                            last_chest_pos = (int(raw_c[0]), int(raw_c[1]))
+                            last_chest_hunt_time = now
+                            c_type = getattr(vision, "chest_type", "treasure_chest")
+                            last_chest_type = c_type
+                            last_chest_weight = vision.chest_weight
+                            if (
+                                last_logged_chest_pos is None
+                                or (now - last_chest_log_time >= 15.0)
+                            ):
+                                c_label = "Rương báu" if c_type == "treasure_chest" else ("Chỉ dẫn rương" if "indicator" in c_type or "arrow" in c_type else c_type.replace("_", " ").title())
+                                print(f"📦 [Rương] Phát hiện {c_label} tại ({last_chest_pos[0]}, {last_chest_pos[1]})")
+                                last_logged_chest_pos = last_chest_pos
+                                last_chest_log_time = now
+                        elif last_chest_pos is not None and (now - last_chest_hunt_time <= 2.5) and config.get("auto_chest", True):
+                            if previous_direction:
+                                est_cx = int(round(last_chest_pos[0] - 12.0 * previous_direction[0]))
+                                est_cy = int(round(last_chest_pos[1] - 12.0 * previous_direction[1]))
+                                last_chest_pos = (est_cx, est_cy)
+                            if (
+                                -80 <= last_chest_pos[0] < w + 80
+                                and -80 <= last_chest_pos[1] < h + 80
+                                and math.hypot(last_chest_pos[0] - px, last_chest_pos[1] - py) > 8
+                            ):
+                                vision.chest = last_chest_pos
+                                vision.chest_type = last_chest_type
+                                vision.chest_weight = last_chest_weight
+                            else:
+                                last_chest_pos = None
+                                last_logged_chest_pos = None
+                                vision.chest = None
                         else:
                             last_chest_pos = None
                             last_logged_chest_pos = None
                             vision.chest = None
-                    else:
-                        last_chest_pos = None
-                        last_logged_chest_pos = None
-                        vision.chest = None
 
                     # Điều khiển né quái thông minh bằng thuật toán trường tiềm năng (Potential Field)
                     if getattr(vision, "bosses", None) and (now - last_boss_alert_time) >= 4.0:

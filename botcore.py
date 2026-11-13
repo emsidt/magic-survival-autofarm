@@ -170,7 +170,8 @@ def detect_chest(
             if tmpl.shape[0] >= small.shape[0] or tmpl.shape[1] >= small.shape[1]:
                 continue
             res = cv2.matchTemplate(small, tmpl, cv2.TM_CCOEFF_NORMED)
-            locs = np.where(res >= min_confidence)
+            eff_conf = max(min_confidence, 0.62) if is_indicator else min_confidence
+            locs = np.where(res >= eff_conf)
             for pt_y, pt_x in zip(*locs):
                 val = float(res[pt_y, pt_x])
                 cx = int(pt_x * 2 + tw)
@@ -263,23 +264,23 @@ def detect_monolith(frame: np.ndarray, min_confidence: float = 0.48) -> Optional
         # Distinctive vertical crimson rune glyph in center of monolith
         red_mask = ((roi_H <= 14) | (roi_H >= 166)) & (roi_S >= 50) & (roi_V >= 50)
         red_count = int(np.sum(red_mask))
-        min_red = max(20, int(28 * scale))
+        min_red = max(16, int(22 * scale))
         red_frac = red_count / float(roi_H.size)
-        # Reject round red monster cores that fill > 16% of the ROI
-        if red_count < min_red or red_frac > 0.16:
+        # Reject round red monster cores that fill > 18% of the ROI
+        if red_count < min_red or red_frac > 0.18:
             return False
         ys, xs = np.where(red_mask)
         if len(ys) < min_red:
             return False
         red_h = int(ys.max() - ys.min()) + 1
         red_w = int(xs.max() - xs.min()) + 1
-        # Real monolith rune is a tall vertical fissure (height / width >= 1.35), not a circular blob
-        if red_h / max(1.0, float(red_w)) < 1.35 or red_h < max(22, int(32 * scale)):
+        # Real monolith rune is a tall vertical fissure (height / width >= 1.30), not a circular blob
+        if red_h / max(1.0, float(red_w)) < 1.30 or red_h < max(20, int(26 * scale)):
             return False
         # Must have bright silver-gray stone highlights (S <= 48, V >= 125) AND dark rock outline (V <= 30)
         bright_stone = int(np.sum((roi_S <= 48) & (roi_V >= 125) & (roi_V <= 235)))
         dark_outline = int(np.sum(roi_V <= 30))
-        if bright_stone < max(24, int(32 * scale)) or dark_outline < max(24, int(32 * scale)):
+        if bright_stone < max(18, int(24 * scale)) or dark_outline < max(18, int(24 * scale)):
             return False
         return True
 
@@ -293,13 +294,21 @@ def detect_monolith(frame: np.ndarray, min_confidence: float = 0.48) -> Optional
                 continue
             st = cv2.resize(tmpl_g, (sw, sh))
             res = cv2.matchTemplate(small, st, cv2.TM_CCOEFF_NORMED)
-            _, max_val, _, max_loc = cv2.minMaxLoc(res)
-            if max_val > best_val and max_val >= min_confidence:
-                mcx = int((max_loc[0] + sw / 2) * 2)
-                mcy = int((max_loc[1] + sh / 2) * 2)
-                if _verify_monolith_at(mcx, mcy, scale):
-                    best_val = max_val
-                    best_pos = (mcx, mcy)
+            locs = np.where(res >= min_confidence)
+            if len(locs[0]) > 0:
+                vals = res[locs]
+                top_idx = np.argsort(vals)[::-1][:5]
+                for idx in top_idx:
+                    val = float(vals[idx])
+                    if val <= best_val:
+                        continue
+                    pt_y, pt_x = int(locs[0][idx]), int(locs[1][idx])
+                    mcx = int((pt_x + sw / 2) * 2)
+                    mcy = int((pt_y + sh / 2) * 2)
+                    if _verify_monolith_at(mcx, mcy, scale):
+                        best_val = val
+                        best_pos = (mcx, mcy)
+                        break
 
     if best_pos is not None:
         return best_pos
@@ -1036,8 +1045,8 @@ def choose_direction(
             mana_score = 0.0
         score += mana_score
 
-        # High priority for artifact chest / chest indicator:
-        if vision.chest and chest_dist > 4 and not boss_blocks_chest:
+        # High priority for artifact chest / chest indicator (DISABLED when a monolith is present):
+        if vision.chest and chest_dist > 4 and not boss_blocks_chest and not getattr(vision, "monolith", None):
             if chest_dot > -0.15:
                 base_weight = max(360.0 if is_charging_chest else (260.0 if allow_chest_approach else 180.0), getattr(vision, "chest_weight", 24.0) * (11.0 if is_charging_chest else (8.5 if allow_chest_approach else 6.5)))
                 eff_dot = max(0.18, chest_dot) ** 0.50
@@ -1052,7 +1061,7 @@ def choose_direction(
             if chest_dot < -0.10:
                 score -= 75.0 * (1.0 - chest_dot)
 
-        # High priority for wave-milestone monolith:
+        # Supreme priority for wave-milestone monolith (overrides all chests and mana orbs):
         if getattr(vision, "monolith", None) and monolith_dist > 4 and not boss_emergency:
             if monolith_dot > -0.20:
                 eff_m_dot = max(0.15, monolith_dot) ** 0.50
@@ -1063,10 +1072,10 @@ def choose_direction(
                         safe_m_corridor = 0.35
                     else:
                         safe_m_corridor = max(0.60, 1.0 - forward_danger * 0.40)
-                monolith_pull = 500.0 * eff_m_dot * safe_m_corridor / (0.15 + monolith_dist / (span * 1.5))
+                monolith_pull = 850.0 * eff_m_dot * safe_m_corridor / (0.15 + monolith_dist / (span * 1.5))
                 score += monolith_pull
             if monolith_dot < 0.0:
-                score -= 100.0 * (1.0 - monolith_dot)
+                score -= 180.0 * (1.0 - monolith_dot)
 
         # Suppress patrol when actively locked onto a safe mana orb, chest, or monolith
         patrol_weight = 0.0 if (vision.chest is not None or getattr(vision, "monolith", None) is not None) else (
