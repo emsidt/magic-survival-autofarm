@@ -1,63 +1,5 @@
 [
   {
-    "run_id": "run_20261111_175550_071628_fe8aaf62",
-    "survival_sec": 599.0,
-    "prev_avg_sec": 227.7,
-    "diff_sec": 371.3,
-    "kills": 0,
-    "reward": 1.5,
-    "skills": [
-      "cyclone",
-      "electric_shock",
-      "electric_zone",
-      "spirit"
-    ],
-    "combos": [],
-    "is_human": false
-  },
-  {
-    "run_id": "run_20261111_175929_018181_c03711bc",
-    "survival_sec": 294.0,
-    "prev_avg_sec": 599.0,
-    "diff_sec": -305.0,
-    "kills": 0,
-    "reward": -0.204,
-    "skills": [
-      "armageddon",
-      "blizzard",
-      "cloaking",
-      "cyclone",
-      "electric_shock",
-      "intelligence",
-      "magic_circle",
-      "spirit",
-      "telekinetic_sword",
-      "tsunami"
-    ],
-    "combos": [],
-    "is_human": false
-  },
-  {
-    "run_id": "run_20261111_180851_771659_2fb0c36a",
-    "survival_sec": 113.0,
-    "prev_avg_sec": 446.5,
-    "diff_sec": -333.5,
-    "kills": 0,
-    "reward": -0.299,
-    "skills": [
-      "arcane_ray",
-      "cloaking",
-      "cyclone",
-      "electric_shock",
-      "electric_zone",
-      "fast_casting",
-      "spirit",
-      "tsunami"
-    ],
-    "combos": [],
-    "is_human": false
-  },
-  {
     "run_id": "run_20261111_181630_797684_9f495f44",
     "survival_sec": 150.0,
     "prev_avg_sec": 335.3,
@@ -3406,6 +3348,146 @@
     "skill_deltas": {
       "cyclone": -0.029,
       "spirit": -0.029
+    },
+    "combos": [],
+    "is_human": false,
+    "skill_levels": {
+      "spirit": 3,
+      "cyclone": 1
+    }
+  },
+  {
+    "run_id": "run_20261113_135518_449331_7411adaf",
+    "survival_sec": 666.0,
+    "prev_avg_sec": 428.2,
+    "diff_sec": 237.8,
+    "kills": 3410,
+    "reward": 0.793,
+    "skills": [
+      "arcane_effuse",
+      "cyclone",
+      "electric_zone",
+      "enchant",
+      "fast_casting",
+      "flash_shock",
+      "frost_nova",
+      "intelligence",
+      "magic_circle",
+      "satellite",
+      "shield",
+      "spirit",
+      "tsunami"
+    ],
+    "skill_deltas": {
+      "arcane_effuse": 0.317,
+      "cyclone": 0.029,
+      "electric_zone": 0.0,
+      "enchant": 0.0,
+      "fast_casting": 0.317,
+      "flash_shock": 0.0,
+      "frost_nova": 0.0,
+      "intelligence": 0.317,
+      "magic_circle": 0.0,
+      "satellite": 0.0,
+      "shield": 0.0,
+      "spirit": 0.029,
+      "tsunami": 0.0
+    },
+    "combos": [],
+    "is_human": false,
+    "skill_levels": {
+      "spirit": 7,
+      "electric_zone": 7,
+      "fast_casting": 1,
+      "cyclone": 7,
+      "arcane_effuse": 1,
+      "shield": 7,
+      "magic_circle": 1,
+      "enchant": 1,
+      "intelligence": 1,
+      "satellite": 1,
+      "tsunami": 1,
+      "frost_nova": 1,
+      "flash_shock": 1
+    }
+  },
+  {
+    "run_id": "run_20261113_140825_292909_93cb019c",
+    "survival_sec": 300.0,
+    "prev_avg_sec": 446.5,
+    "diff_sec": -146.5,
+    "kills": 53451,
+    "reward": -0.131,
+    "skills": [
+      "arcane_effuse",
+      "blizzard",
+      "cyclone",
+      "electric_shock",
+      "electric_zone",
+      "enchant",
+      "fast_casting",
+      "frost_nova",
+      "guardian_angel",
+      "magic_circle",
+      "satellite",
+      "shield",
+      "spirit",
+      "telekinetic_sword",
+      "tsunami",
+      "vitality"
+    ],
+    "skill_deltas": {
+      "arcane_effuse": -0.016,
+      "blizzard": -0.016,
+      "cyclone": -0.016,
+      "electric_shock": -0.016,
+      "electric_zone": -0.016,
+      "enchant": -0.016,
+      "fast_casting": -0.016,
+      "frost_nova": -0.016,
+      "guardian_angel": -0.016,
+      "magic_circle": -0.016,
+      "satellite": -0.016,
+      "shield": -0.016,
+      "spirit": -0.016,
+      "telekinetic_sword": -0.016,
+      "tsunami": -0.016,
+      "vitality": -0.016
+    },
+    "combos": [],
+    "is_human": false,
+    "skill_levels": {
+      "spirit": 7,
+      "vitality": 1,
+      "magic_circle": 7,
+      "satellite": 7,
+      "electric_shock": 7,
+      "electric_zone": 7,
+      "cyclone": 7,
+      "shield": 7,
+      "guardian_angel": 1,
+      "blizzard": 1,
+      "fast_casting": 1,
+      "tsunami": 1,
+      "arcane_effuse": 1,
+      "enchant": 1,
+      "frost_nova": 1
+    }
+  },
+  {
+    "run_id": "unrecorded_7456365f1b9646b3bf7361606c77c951",
+    "survival_sec": 346.0,
+    "prev_avg_sec": 435.2,
+    "diff_sec": -89.2,
+    "kills": 0,
+    "reward": -0.082,
+    "skills": [
+      "cyclone",
+      "spirit"
+    ],
+    "skill_deltas": {
+      "cyclone": -0.01,
+      "spirit": -0.01
     },
     "combos": [],
     "is_human": false,

@@ -678,6 +678,36 @@ class VisionTests(unittest.TestCase):
                     detected.append(sk)
             self.assertIn("cyclone", detected, f"Failed to map variant {variant} to cyclone")
 
+        # Case 3: Cyclone Level 7 Trait Priority -> Void (1000) MUST beat Extreme Weather (350) & Electric Orb (500)
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+        line_void = SimpleNamespace(text="Void\nChanges Cyclone into a gravity void", words=[])
+        ocr_void = SimpleNamespace(recognize_pil=AsyncMock(return_value=SimpleNamespace(lines=[line_void])))
+        with patch.dict("sys.modules", {"winocr": ocr_void}):
+            score_v, tag_v, parent_v = evaluate_selected_attribute(frame)
+            self.assertEqual(score_v, 1000)
+            self.assertIn("Void", tag_v)
+            self.assertEqual(parent_v, "cyclone")
+
+        line_extreme = SimpleNamespace(text="Extreme Weather\nIncreases number of cyclones", words=[])
+        ocr_extreme = SimpleNamespace(recognize_pil=AsyncMock(return_value=SimpleNamespace(lines=[line_extreme])))
+        with patch.dict("sys.modules", {"winocr": ocr_extreme}):
+            score_e, tag_e, parent_e = evaluate_selected_attribute(frame)
+            self.assertEqual(score_e, 350)
+            self.assertLess(score_e, score_v, "Void must strictly beat Extreme Weather for Black Hole combination")
+
+        # Case 4: Card upgrade with Void trait card vs Hurricane card -> Void must win
+        cards_trait = {
+            1: CardSlotData(1, text_lines=["extreme weather", "cyclone trait"]),
+            2: CardSlotData(2, text_lines=["void", "gravity void for cyclone"]),
+            3: CardSlotData(3, text_lines=["vitality"], skills=["vitality"]),
+        }
+        with patch("botcore._detect_cards_ocr", return_value=cards_trait):
+            with patch("botcore._detect_skills_templates", return_value={1: [], 2: [], 3: []}):
+                choice_t = choose_best_artifact_or_card(frame)
+                self.assertEqual(choice_t.idx, 2, "Void trait must be picked over Extreme Weather")
+                self.assertIn("Void", choice_t.label)
+
 
     def test_telekinetic_sword_then_black_hole_priority(self):
         from unittest.mock import patch

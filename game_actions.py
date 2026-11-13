@@ -241,9 +241,9 @@ def select_attribute(controller, rect, capture, sleep=time.sleep):
         if (parent or label != "Nhánh Attribute") and (best is None or score > best[0]):
             best = (score, index, label, parent)
         last_index = index
-        # Once a top-priority Combination Trait (score >= 500, e.g. Magic Blade / Chain Lightning)
+        # Once a top-priority Mandatory Fusion Trait (score >= 1000, e.g. Void for Black Hole, Magic Blade, Chain Lightning)
         # is found, learn it immediately without wasting time clicking remaining circles!
-        if best is not None and best[0] >= 500 and last_index == best[1]:
+        if best is not None and best[0] >= 1000 and last_index == best[1]:
             break
     if best is None:
         return None

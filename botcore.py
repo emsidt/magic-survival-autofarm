@@ -3253,9 +3253,66 @@ def get_attribute_circle_targets() -> dict[int, tuple[float, float]]:
     }
 
 
+# Absolute Top-Tier Mandatory Fusion Prerequisites (Score 1000)
+# Cyclone -> MUST be Void for Black Hole (Cyclone + Satellite)
+# Spirit -> MUST be Magic Blade for Telekinetic Sword (Spirit + Electric Shock)
+# Electric Shock -> MUST be Chain Lightning for Telekinetic Sword
+# Satellite -> MUST be Anti-Gravity / Nuclear Fusion for Black Hole / Hyperion
+MANDATORY_FUSION_TRAITS: dict[str, tuple[str, list[str]]] = {
+    "void": ("cyclone", ["void", "v0id", "vold", "v oid"]),
+    "magic blade": ("spirit", ["magic blade", "magicblade", "magic biade", "magic-blade"]),
+    "chain lightning": ("electric_shock", ["chain lightning", "chainlightning", "chain iightning"]),
+    "anti-gravity": ("satellite", ["anti-gravity", "antigravity", "anti gravity", "nuclear fusion", "nuclear fission"]),
+}
+
+# Freeze traits for Blizzard, Frost Nova, Tsunami (Score 800 - Mandatory Crowd Control)
+FREEZE_TRAITS: list[str] = [
+    "sub-zero", "sub zero", "subzero",
+    "absolute zero", "absolute", "absolutezero",
+    "pole",
+    "cold wave", "coldwave",
+    "ice age", "iceage",
+]
+
+# Secondary / Alternative Major Fusion Traits (Score 500)
+SECONDARY_FUSION_TRAITS: list[str] = [
+    "electric orb", "superconductivity", "familiar",
+    "devil's nails", "devils nails", "raving", "ragnarok",
+    "unleash mana", "great magic circle", "magic release",
+    "emp", "fire aura", "fire breath",
+]
+
+# Intermediate / Minor Component Traits (Level 4 or Alternative Level 7) (Score 350)
+INTERMEDIATE_TRAITS: list[str] = [
+    "extreme weather", "hurricane", "climate change", "tornado", "deep breath",
+    "reaction", "high voltage", "static", "microburst",
+    "driving force", "avatar", "summoner", "earthquake", "ocean circulation",
+]
+
+# Meta Survival Support Traits (Shield, Cloaking, Armageddon) (Score 250)
+META_SUPPORT_TRAITS: list[str] = [
+    "barrier", "reconstruct", "mirage", "soul harvest", "apocalypse", "book of revelation",
+]
+
+# Comprehensive list of combination traits for backward-compatibility & card scanning
+COMBINATION_TRAITS: list[str] = [
+    "void", "magic blade", "chain lightning", "anti-gravity", "antigravity", "nuclear fusion", "nuclear fission",
+    "electric orb", "superconductivity", "familiar",
+    "extreme weather", "hurricane", "climate change", "tornado", "deep breath",
+    "unleash mana", "great magic circle", "devil's nails", "devils nails", "raving",
+    "emp", "fire aura", "static", "high voltage", "microburst",
+]
+
+
 def evaluate_selected_attribute(frame: np.ndarray) -> tuple[int, str, str]:
     """Evaluate the currently selected Level 7 trait attribute.
     Returns (score, readable_tag, parent_skill_key).
+    Tier 1: Mandatory Fusion Core Traits (Void, Magic Blade, Chain Lightning) -> 1000
+    Tier 2: Freeze Core Traits (Absolute Zero, Sub-Zero, Pole) -> 800
+    Tier 3: Secondary Major Fusion Traits (Electric Orb, Superconductivity) -> 500
+    Tier 4: Intermediate / Level 4 Traits (Extreme Weather, Hurricane, Reaction) -> 350
+    Tier 5: Meta Survival Support Traits (Barrier, Mirage, Apocalypse) -> 250
+    Default: 100
     """
     h, w = frame.shape[:2]
     title = "Attribute"
@@ -3265,8 +3322,8 @@ def evaluate_selected_attribute(frame: np.ndarray) -> tuple[int, str, str]:
         import winocr
         from PIL import Image
 
-        y_top = int(h * 0.52)
-        desc_crop = frame[y_top : int(h * 0.67), int(w * 0.05) : int(w * 0.95)]
+        y_top = int(h * 0.50)
+        desc_crop = frame[y_top : int(h * 0.80), int(w * 0.04) : int(w * 0.96)]
         pil_img = Image.fromarray(cv2.cvtColor(desc_crop, cv2.COLOR_BGR2RGB))
 
         async def _do():
@@ -3282,29 +3339,50 @@ def evaluate_selected_attribute(frame: np.ndarray) -> tuple[int, str, str]:
 
     score = 100
     tag = f"Nhánh {title}"
-    for ct in COMBINATION_TRAITS:
-        if ct in full_text:
-            score = 500
-            tag = f"Nhánh Hợp Thể ({ct.title()})"
+    parent_skill = ""
+
+    # 1. Tier 1: Mandatory Fusion Core Traits (Score 1000 - Absolute priority)
+    # Void for Black Hole (Cyclone + Satellite), Magic Blade / Chain Lightning for Telekinetic Sword
+    for trait_key, (skill_name, aliases) in MANDATORY_FUSION_TRAITS.items():
+        if any(_match_keyword(a, full_text) or a in full_text for a in aliases):
+            score = 1000
+            tag = f"Nhánh Hợp Thể Bắt Buộc ({trait_key.title()})"
+            parent_skill = skill_name
+            return score, tag, parent_skill
+
+    # 2. Tier 2: Freeze Core Traits (Score 800)
+    for ft in FREEZE_TRAITS:
+        if _match_keyword(ft, full_text) or ft in full_text:
+            score = 800
+            tag = f"Nhánh Đóng Băng ({ft.title()})"
             break
     else:
-        for ft in FREEZE_TRAITS:
-            if ft in full_text:
-                score = 400
-                tag = f"Nhánh Đóng Băng ({ft.title()})"
+        # 3. Tier 3: Secondary Major Fusion Traits (Score 500)
+        for sft in SECONDARY_FUSION_TRAITS:
+            if _match_keyword(sft, full_text) or sft in full_text:
+                score = 500
+                tag = f"Nhánh Hợp Thể Phụ ({sft.title()})"
                 break
         else:
-            for st in META_SUPPORT_TRAITS:
-                if st in full_text:
+            # 4. Tier 4: Intermediate / Level 4 Traits (Score 350)
+            for it in INTERMEDIATE_TRAITS:
+                if _match_keyword(it, full_text) or it in full_text:
                     score = 350
-                    tag = f"Nhánh Hỗ Trợ ({st.title()})"
+                    tag = f"Nhánh Bổ Trợ ({it.title()})"
                     break
+            else:
+                # 5. Tier 5: Meta Survival Support Traits (Score 250)
+                for st in META_SUPPORT_TRAITS:
+                    if _match_keyword(st, full_text) or st in full_text:
+                        score = 250
+                        tag = f"Nhánh Hỗ Trợ ({st.title()})"
+                        break
 
-    parent_skill = ""
-    for sk, aliases in SKILL_ALIASES.items():
-        if any(a in full_text for a in aliases):
-            parent_skill = sk
-            break
+    if not parent_skill:
+        for sk, aliases in SKILL_ALIASES.items():
+            if any(a in full_text for a in aliases):
+                parent_skill = sk
+                break
 
     return score, tag, parent_skill
 
@@ -3712,28 +3790,6 @@ SPECIAL_PASSIVE_SCORES: dict[str, float] = {
     "astronomy": 145.0,
 }
 
-# Freeze traits for Blizzard, Frost Nova, Tsunami (Absolute priority for ice spells)
-FREEZE_TRAITS: list[str] = [
-    "sub-zero", "sub zero", "subzero",
-    "absolute zero", "absolute", "absolutezero",
-    "pole",
-    "cold wave", "coldwave",
-    "ice age", "iceage",
-]
-
-# Combination traits for component magics (Spirit, Electric Shock, Cyclone, Satellite, Flash Shock, Magic Circle, Electric Zone)
-COMBINATION_TRAITS: list[str] = [
-    "magic blade", "chain lightning", "familiar", "superconductivity",
-    "void", "anti-gravity", "antigravity", "nuclear fission", "nuclear fusion", "electric orb",
-    "extreme weather", "hurricane", "climate change", "tornado", "deep breath",
-    "unleash mana", "great magic circle", "devil's nails", "devils nails", "raving",
-    "emp", "fire aura", "static", "high voltage", "microburst",
-]
-
-# Meta Survival Support Traits (Shield, Cloaking, Armageddon)
-META_SUPPORT_TRAITS: list[str] = [
-    "barrier", "reconstruct", "mirage", "soul harvest", "apocalypse", "book of revelation",
-]
 
 SKILL_TEMPLATE_FILES: dict[str, str] = {
     "spirit": "assets/skills/spirit_tight.png",
@@ -4467,7 +4523,14 @@ def choose_best_artifact_or_card(
             target = get_upgrade_target(idx, num_cards=num_cards)
             return make_choice(idx, target, "★ Cổ Vật Tuyệt Đối: Toy Castle (MagicToys)")
 
-    # 1. CHECK TRAIT CHOICES (FREEZE TRAITS -> COMBO TRAITS -> META SUPPORT TRAITS)
+    # 1. CHECK TRAIT CHOICES (MANDATORY FUSION TRAITS -> FREEZE TRAITS -> COMBO TRAITS -> META SUPPORT TRAITS)
+    for idx in all_indices:
+        card_txt = " ".join(ocr_cards[idx].text_lines).lower()
+        for m_trait, (_, m_aliases) in MANDATORY_FUSION_TRAITS.items():
+            if any(_match_keyword(a, card_txt) or a in card_txt for a in m_aliases):
+                target = get_upgrade_target(idx, num_cards=num_cards)
+                return make_choice(idx, target, f"★ Nhánh Hợp Thể Bắt Buộc: {m_trait.title()}", trait_key=m_trait)
+
     if prefer_freeze_traits:
         for idx in all_indices:
             if ocr_cards[idx].freeze_traits:
