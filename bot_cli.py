@@ -10,6 +10,7 @@ import math
 from pathlib import Path
 import sys
 import time
+from typing import Optional
 
 
 import botcore

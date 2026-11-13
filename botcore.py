@@ -10,7 +10,7 @@ import math
 from pathlib import Path
 import re
 import unicodedata
-from typing import Optional
+from typing import Optional, Union
 
 import cv2
 import numpy as np
