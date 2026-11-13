@@ -1076,7 +1076,7 @@ class FarmApp:
                                     controller.release()
                                     self.previous_direction = None
                                     match_running = False
-                                    if close_ad(controller, rect, capture) is None:
+                                    if close_ad(controller, rect, capture, target=close_pos) is None:
                                         continue
                                     now_tick = time.monotonic()
                                     last_ad_close_time = now_tick
@@ -1107,7 +1107,7 @@ class FarmApp:
                                 # 1. Tìm & bấm nút X / Close / Skip quảng cáo nếu đã phát hiện vị trí
                                 close_pos = detect_close_button(frame) if self.config.get("auto_close_ads", True) else None
                                 if close_pos and (now_tick - last_ad_close_time >= 1.2):
-                                    if close_ad(controller, rect, capture) is None:
+                                    if close_ad(controller, rect, capture, target=close_pos) is None:
                                         continue
                                     last_ad_close_time = now_tick
                                     last_auto_action_time = now_tick

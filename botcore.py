@@ -1372,6 +1372,71 @@ def detect_ad_close_text(frame: np.ndarray, gear_pos=None) -> Optional[tuple[flo
     return None
 
 
+_CACHED_CLOSE_BUTTON_TEMPLATES: list[np.ndarray] = []
+
+
+def _get_close_button_templates() -> list[np.ndarray]:
+    global _CACHED_CLOSE_BUTTON_TEMPLATES
+    if _CACHED_CLOSE_BUTTON_TEMPLATES:
+        return _CACHED_CLOSE_BUTTON_TEMPLATES
+
+    templates = []
+    # Priority 1: High-fidelity templates in both normal (white on dark) and inverted (black on white)
+    tmpl_x_path = _BASE_DIR / "assets" / "ad_close_x.png"
+    tmpl_x = get_cached_image(tmpl_x_path, cv2.IMREAD_GRAYSCALE)
+    if tmpl_x is not None:
+        for scale in (1.0, 1.5, 2.0, 2.5, 0.75, 1.25, 1.75, 2.25, 0.5):
+            sw, sh = int(tmpl_x.shape[1] * scale), int(tmpl_x.shape[0] * scale)
+            st = cv2.resize(tmpl_x, (sw, sh))
+            templates.append(cv2.bitwise_not(st))
+            templates.append(st)
+
+    # Priority 2: Circled X (white filled circle with black X - standard in Google AdMob, Candy Crush, AppLovin, Unity ads)
+    tmpl_circ_path = _BASE_DIR / "assets" / "ad_close_circle_x.png"
+    tmpl_c = get_cached_image(tmpl_circ_path, cv2.IMREAD_GRAYSCALE)
+    if tmpl_c is not None:
+        for scale in (1.0, 1.5, 2.0, 2.5, 0.75, 1.25, 1.75, 2.25, 0.60):
+            sw, sh = int(tmpl_c.shape[1] * scale), int(tmpl_c.shape[0] * scale)
+            st = cv2.resize(tmpl_c, (sw, sh))
+            templates.append(st)
+            templates.append(cv2.bitwise_not(st))
+
+    # Priority 3: Synthetic X crosses (both light-on-dark and dark-on-light, scales up to 58 for 1080p/1440p)
+    for sz in (20, 26, 32, 40, 50, 58):
+        t_w = np.zeros((sz, sz), dtype=np.uint8)
+        th = max(2, sz // 7)
+        cv2.line(t_w, (3, 3), (sz - 4, sz - 4), 255, th)
+        cv2.line(t_w, (sz - 4, 3), (3, sz - 4), 255, th)
+        templates.append(t_w)
+        templates.append(cv2.bitwise_not(t_w))
+
+    # Priority 4: Circled X synthetics (both light-on-dark and dark-on-light)
+    for sz in (22, 28, 36, 44, 54, 64):
+        t_circ = np.zeros((sz, sz), dtype=np.uint8)
+        r = sz // 2 - 2
+        cv2.circle(t_circ, (sz // 2, sz // 2), r, 255, 2)
+        pad = max(4, sz // 4)
+        cv2.line(t_circ, (pad, pad), (sz - pad, sz - pad), 255, 2)
+        cv2.line(t_circ, (sz - pad, pad), (pad, sz - pad), 255, 2)
+        templates.append(t_circ)
+        templates.append(cv2.bitwise_not(t_circ))
+
+    # Priority 5: Fast-Forward / Skip Arrow (>> or >)
+    for h_sz in (16, 20, 24, 28, 36):
+        w_sz = int(h_sz * 1.0)
+        t_skip = np.zeros((h_sz, w_sz), dtype=np.uint8)
+        mid_y = h_sz // 2
+        step = w_sz // 2
+        cv2.line(t_skip, (1, 1), (step - 1, mid_y), 255, 2)
+        cv2.line(t_skip, (step - 1, mid_y), (1, h_sz - 2), 255, 2)
+        cv2.line(t_skip, (step, 1), (w_sz - 2, mid_y), 255, 2)
+        cv2.line(t_skip, (w_sz - 2, mid_y), (step, h_sz - 2), 255, 2)
+        templates.append(t_skip)
+
+    _CACHED_CLOSE_BUTTON_TEMPLATES = templates
+    return _CACHED_CLOSE_BUTTON_TEMPLATES
+
+
 def detect_close_button(frame: np.ndarray, threshold: float = 0.62) -> Optional[tuple[float, float]]:
     """Find localized dismiss labels anywhere, then X/skip icons in the corners.
 
@@ -1413,59 +1478,7 @@ def detect_close_button(frame: np.ndarray, threshold: float = 0.62) -> Optional[
     best_coord = None
     best_score = 0.0
 
-    templates = []
-    tmpl_x_path = _BASE_DIR / "assets" / "ad_close_x.png"
-    tmpl_x = get_cached_image(tmpl_x_path, cv2.IMREAD_GRAYSCALE)
-    if tmpl_x is not None:
-        templates.append(tmpl_x)
-        for scale in (0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0):
-            sw, sh = int(tmpl_x.shape[1] * scale), int(tmpl_x.shape[0] * scale)
-            templates.append(cv2.resize(tmpl_x, (sw, sh)))
-
-    # Circled X (white filled circle with black X - standard in Google AdMob, Candy Crush, AppLovin, Unity ads)
-    tmpl_circ_path = _BASE_DIR / "assets" / "ad_close_circle_x.png"
-    tmpl_c = get_cached_image(tmpl_circ_path, cv2.IMREAD_GRAYSCALE)
-    if tmpl_c is not None:
-        templates.append(tmpl_c)
-        for scale in (0.60, 0.75, 1.0, 1.25, 1.5, 1.75, 1.95, 2.0, 2.2):
-            sw, sh = int(tmpl_c.shape[1] * scale), int(tmpl_c.shape[0] * scale)
-            templates.append(cv2.resize(tmpl_c, (sw, sh)))
-
-    # Synthetic X crosses (crisp white cross on black)
-    for sz in (20, 26, 32, 40):
-        t_w = np.zeros((sz, sz), dtype=np.uint8)
-        th = max(2, sz // 7)
-        cv2.line(t_w, (3, 3), (sz - 4, sz - 4), 255, th)
-        cv2.line(t_w, (sz - 4, 3), (3, sz - 4), 255, th)
-        templates.append(t_w)
-
-    # Circled X (white circle and cross on black - standard in Google/Unity/AppLovin ads)
-    for sz in (22, 28, 36, 44):
-        t_circ = np.zeros((sz, sz), dtype=np.uint8)
-        r = sz // 2 - 2
-        cv2.circle(t_circ, (sz // 2, sz // 2), r, 255, 2)
-        pad = max(4, sz // 4)
-        cv2.line(t_circ, (pad, pad), (sz - pad, sz - pad), 255, 2)
-        cv2.line(t_circ, (sz - pad, pad), (pad, sz - pad), 255, 2)
-        templates.append(t_circ)
-
-    # Invert real templates for dark crosses on light background ads
-    if tmpl_x is not None:
-        templates.append(cv2.bitwise_not(tmpl_x))
-    if tmpl_c is not None:
-        templates.append(cv2.bitwise_not(tmpl_c))
-
-    # Fast-Forward / Skip Arrow (>> or >)
-    for h_sz in (16, 20, 24, 28):
-        w_sz = int(h_sz * 1.0)
-        t_skip = np.zeros((h_sz, w_sz), dtype=np.uint8)
-        mid_y = h_sz // 2
-        step = w_sz // 2
-        cv2.line(t_skip, (1, 1), (step - 1, mid_y), 255, 2)
-        cv2.line(t_skip, (step - 1, mid_y), (1, h_sz - 2), 255, 2)
-        cv2.line(t_skip, (step, 1), (w_sz - 2, mid_y), 255, 2)
-        cv2.line(t_skip, (w_sz - 2, mid_y), (step, h_sz - 2), 255, 2)
-        templates.append(t_skip)
+    templates = _get_close_button_templates()
 
     for cl, ct, cr, cb in corners:
         roi = gray[ct:cb, cl:cr]

@@ -835,8 +835,9 @@ def run_cli_bot():
                     match_running = False
                     if now - last_auto_action_time >= 1.2:
                         last_auto_action_time = now
-                        if close_ad(controller, rect, capture) is not None:
-                            print("[Quảng cáo] Đã bấm nút đóng tìm được trên ảnh mới.")
+                        corner_side = "trên bên trái" if ad_x[0] < 0.5 else "trên bên phải"
+                        if close_ad(controller, rect, capture, target=ad_x) is not None:
+                            print(f"[Quảng cáo] Đã bấm nút 'X' góc {corner_side} tại {ad_x} để tắt quảng cáo.")
                         time.sleep(1.2)
                     continue
                 elif config.get("auto_close_ads", True) and botcore.is_ad_screen(frame):

@@ -104,10 +104,11 @@ def dismiss_death(controller, rect, capture, sleep=time.sleep):
     return False
 
 
-def close_ad(controller, rect, capture, sleep=time.sleep):
-    """Find a dismiss control on a fresh frame and send exactly one input."""
+def close_ad(controller, rect, capture, target=None, sleep=time.sleep):
+    """Find a dismiss control on a fresh frame (or use known target) and send exactly one input."""
     controller.release()
-    target = botcore.detect_close_button(capture())
+    if target is None:
+        target = botcore.detect_close_button(capture())
     if target is None:
         return None
     controller.tap(list(target), rect)

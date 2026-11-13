@@ -89,6 +89,22 @@ class VisionTests(unittest.TestCase):
             self.assertAlmostEqual(pos_crop[0], 0.0438, delta=0.03)
             self.assertAlmostEqual(pos_crop[1], 0.0184, delta=0.03)
 
+        # Real ad screenshot with top-left white circled X (media_1794537110169_ac1c11b0.jpg)
+        ad_topleft_path = r"C:/Users/User/.gemini/antigravity/brain/2dc840cb-72eb-45f9-92e9-a3fe999f18b4/.user_uploaded/media_1794537110169_ac1c11b0.jpg"
+        if os.path.isfile(ad_topleft_path):
+            img_topleft = cv2.imread(ad_topleft_path)
+            pos_tl = detect_close_button(img_topleft)
+            self.assertIsNotNone(pos_tl)
+            self.assertAlmostEqual(pos_tl[0], 0.087, delta=0.02)
+            self.assertAlmostEqual(pos_tl[1], 0.040, delta=0.02)
+
+            # Test 1080p LDPlayer upscale
+            img_1080 = cv2.resize(img_topleft, (1080, 1920))
+            pos_tl_1080 = detect_close_button(img_1080)
+            self.assertIsNotNone(pos_tl_1080)
+            self.assertAlmostEqual(pos_tl_1080[0], 0.087, delta=0.02)
+            self.assertAlmostEqual(pos_tl_1080[1], 0.040, delta=0.02)
+
     def test_title_screen_and_settings_gear_protection(self):
         title_img_path = r"C:/Users/User/.gemini/antigravity/brain/2dc840cb-72eb-45f9-92e9-a3fe999f18b4/.user_uploaded/media_1794199733548_2210d9ed.png"
         if os.path.isfile(title_img_path):
