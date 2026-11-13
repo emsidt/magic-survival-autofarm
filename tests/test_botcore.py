@@ -1518,6 +1518,22 @@ class VisionTests(unittest.TestCase):
         self.assertEqual(res.skill_key, "spirit")
         self.assertEqual(res.offered_level, 7)
 
+    def test_no_ads_tap_to_continue_screen(self):
+        import botcore
+
+        # Normal bright gameplay-like frame must never be treated as the No Ads screen
+        bright = np.full((1000, 560, 3), 120, dtype=np.uint8)
+        self.assertIsNone(botcore.detect_tap_to_continue(bright))
+        # Pure black frame has no text
+        self.assertIsNone(botcore.detect_tap_to_continue(np.zeros((1000, 560, 3), dtype=np.uint8)))
+
+        img_path = r"C:/Users/User/.gemini/antigravity/brain/2dc840cb-72eb-45f9-92e9-a3fe999f18b4/.user_uploaded/media_1794593246138_3fde6a84.png"
+        if os.path.isfile(img_path):
+            pos = botcore.detect_tap_to_continue(cv2.imread(img_path))
+            self.assertIsNotNone(pos)
+            self.assertAlmostEqual(pos[0], 0.48, delta=0.08)
+            self.assertAlmostEqual(pos[1], 0.87, delta=0.06)
+
     def test_empty_field_searches_for_monolith_with_expanding_sweep(self):
         import botcore
 

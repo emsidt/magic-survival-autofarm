@@ -1559,6 +1559,53 @@ def detect_close_button(frame: np.ndarray, threshold: float = 0.62) -> Optional[
     return None
 
 
+def detect_tap_to_continue(frame: np.ndarray) -> Optional[tuple[float, float]]:
+    """Detect the dark 'No Ads' / 'Tap to Continue' screen shown when no rewarded ad is available.
+
+    Returns the normalized (x, y) of the 'Tap to Continue' text, or None.
+    """
+    h, w = frame.shape[:2]
+    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+    # Mostly black screen with only a few bright text/icon pixels; skip OCR otherwise.
+    if float(np.mean(gray)) > 45.0:
+        return None
+    if float(np.mean(gray > 120)) > 0.08:
+        return None
+    try:
+        import asyncio
+        import winocr
+        from PIL import Image
+
+        roi_y0 = int(h * 0.15)
+        roi = frame[roi_y0:, :]
+        pil_img = Image.fromarray(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB))
+
+        async def _ocr_tap():
+            return await winocr.recognize_pil(pil_img, lang="en")
+
+        res = asyncio.run(_ocr_tap())
+        lines = list(res.lines)
+        full_text = " ".join(l.text for l in lines).lower()
+        compact = "".join(c for c in full_text if c.isalpha())
+        if "taptocontinue" not in compact and not ("tap" in full_text and "continue" in full_text):
+            return None
+        for line in lines:
+            low = line.text.lower()
+            if "continue" in low or "tap to" in low:
+                try:
+                    rects = [wd.bounding_rect for wd in line.words]
+                    x0 = min(r.x for r in rects)
+                    x1 = max(r.x + r.width for r in rects)
+                    y0 = min(r.y for r in rects)
+                    y1 = max(r.y + r.height for r in rects)
+                    return (((x0 + x1) / 2.0) / w, (roi_y0 + (y0 + y1) / 2.0) / h)
+                except Exception:
+                    break
+        return (0.50, 0.865)
+    except Exception:
+        return None
+
+
 def is_ad_screen(frame: np.ndarray) -> bool:
     """Return True if the current screen is displaying a third-party mobile ad (AdMob, Unity, Playable Ad)."""
     if detect_close_button(frame) is not None:

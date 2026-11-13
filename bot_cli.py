@@ -893,6 +893,18 @@ def run_cli_bot():
                         time.sleep(0.4)
                     continue
 
+                # 13b. MÀN HÌNH "NO ADS - TAP TO CONTINUE" (hết quảng cáo để xem) -> bấm Tap to Continue
+                tap_cont = botcore.detect_tap_to_continue(frame)
+                if tap_cont:
+                    controller.release()
+                    match_running = False
+                    if now - last_auto_action_time >= 1.5:
+                        last_auto_action_time = now
+                        controller.tap(list(tap_cont), rect)
+                        print("[Quảng cáo] Hết quảng cáo (No Ads) -> Đã bấm 'Tap to Continue'.")
+                        time.sleep(1.0)
+                    continue
+
                 # 14. PHÁT HIỆN QUẢNG CÁO NGOÀI TRẬN ĐẤU (Video, Playable ad, AdMob) -> Bấm X hoặc Close tắt
                 ad_x = botcore.detect_close_button(frame) if config.get("auto_close_ads", True) else None
                 if ad_x:
