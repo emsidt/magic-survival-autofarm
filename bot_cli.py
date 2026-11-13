@@ -191,6 +191,7 @@ def run_cli_bot():
     last_timer_scan_time = 0.0
     last_timer_advance_time = 0.0
     last_wave_clear_log_time = 0.0
+    no_enemy_since = 0.0
     rule_streak_name = ""
     rule_streak = 0
     last_rule_click = {}
@@ -792,6 +793,8 @@ def run_cli_bot():
                         last_logged_chest_pos = None
                         if is_wave_cleared and getattr(vision, "monolith", None) is None:
                             vision.gems = []
+                            vision.gold_gems = []
+                            vision.purple_gems = []
                             if now - last_wave_clear_log_time >= 15.0:
                                 print("🏛️ [Xong màn] Đã dọn xong đợt quái! Ngưng tìm rương, đang quét tìm Tháp để qua màn...")
                                 last_wave_clear_log_time = now
@@ -853,9 +856,17 @@ def run_cli_bot():
                     raw_amp = mv_policy.get("weave_amplitude", 0.28)
                     weave_freq = float(raw_freq) if isinstance(raw_freq, (int, float)) else 3.2
                     weave_amp = float(raw_amp) if isinstance(raw_amp, (int, float)) else 0.28
+                    # Đồng hồ game đứng yên khi xong màn -> dùng đồng hồ thực để quét tìm Tháp theo hình xoắn ốc mở rộng
+                    if is_wave_cleared and getattr(vision, "monolith", None) is None:
+                        if no_enemy_since == 0.0:
+                            no_enemy_since = now
+                        move_elapsed = now - no_enemy_since
+                    else:
+                        no_enemy_since = 0.0
+                        move_elapsed = last_known_game_timer_sec if last_known_game_timer_sec > 0.0 else ((now - match_start_time) * time_mult)
                     dir_x, dir_y = botcore.choose_direction(
                         vision,
-                        elapsed=last_known_game_timer_sec if last_known_game_timer_sec > 0.0 else ((now - match_start_time) * time_mult),
+                        elapsed=move_elapsed,
                         player=player_coords,
                         previous=previous_direction,
                         active_skills=active_skills,

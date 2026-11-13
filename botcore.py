@@ -214,7 +214,7 @@ def detect_chest(
     return None
 
 
-def detect_monolith(frame: np.ndarray, min_confidence: float = 0.48) -> Optional[tuple[int, int]]:
+def detect_monolith(frame: np.ndarray, min_confidence: float = 0.44) -> Optional[tuple[int, int]]:
     """Detect the post-wave milestone stone monolith / obelisk with vertical crimson rune glyphs.
 
     In Magic Survival, when a boss wave is cleared, a monolith tower spawns on the map.
@@ -239,14 +239,14 @@ def detect_monolith(frame: np.ndarray, min_confidence: float = 0.48) -> Optional
 
     small = cv2.resize(gray, (w // 2, h // 2))
     base_scale = max(0.55, w / 617.0)
-    scales = [base_scale * factor for factor in (0.78, 0.85, 0.92, 1.00, 1.08, 1.16, 1.25)]
+    scales = [base_scale * factor for factor in (0.68, 0.75, 0.82, 0.90, 0.98, 1.06, 1.15, 1.25, 1.35)]
 
     def _verify_monolith_at(mcx: int, mcy: int, scale: float = 1.0) -> bool:
         # Monolith tower is a physical ground obstacle inside the playable field:
-        # its center is NEVER on the 6% screen border, top status bar, or top-left/top-right HUD icons
-        if mcx < int(w * 0.06) or mcx > int(w * 0.94):
+        # its center is NEVER on the outer 3.5% border, top HUD bar, or top-left/top-right HUD icons
+        if mcx < int(w * 0.035) or mcx > int(w * 0.965):
             return False
-        if mcy < int(h * 0.14) or mcy > int(h * 0.92):
+        if mcy < int(h * 0.095) or mcy > int(h * 0.965):
             return False
         if mcx < int(w * 0.20) and mcy < int(h * 0.22):
             return False
@@ -262,9 +262,9 @@ def detect_monolith(frame: np.ndarray, min_confidence: float = 0.48) -> Optional
         if roi_H.size == 0:
             return False
         # Distinctive vertical crimson rune glyph in center of monolith
-        red_mask = ((roi_H <= 14) | (roi_H >= 166)) & (roi_S >= 50) & (roi_V >= 50)
+        red_mask = ((roi_H <= 15) | (roi_H >= 165)) & (roi_S >= 45) & (roi_V >= 45)
         red_count = int(np.sum(red_mask))
-        min_red = max(16, int(22 * scale))
+        min_red = max(12, int(18 * scale))
         red_frac = red_count / float(roi_H.size)
         # Reject round red monster cores that fill > 18% of the ROI
         if red_count < min_red or red_frac > 0.18:
@@ -274,13 +274,13 @@ def detect_monolith(frame: np.ndarray, min_confidence: float = 0.48) -> Optional
             return False
         red_h = int(ys.max() - ys.min()) + 1
         red_w = int(xs.max() - xs.min()) + 1
-        # Real monolith rune is a tall vertical fissure (height / width >= 1.30), not a circular blob
-        if red_h / max(1.0, float(red_w)) < 1.30 or red_h < max(20, int(26 * scale)):
+        # Real monolith rune is a tall vertical fissure (height / width >= 1.20), not a circular blob
+        if red_h / max(1.0, float(red_w)) < 1.20 or red_h < max(16, int(22 * scale)):
             return False
-        # Must have bright silver-gray stone highlights (S <= 48, V >= 125) AND dark rock outline (V <= 30)
-        bright_stone = int(np.sum((roi_S <= 48) & (roi_V >= 125) & (roi_V <= 235)))
-        dark_outline = int(np.sum(roi_V <= 30))
-        if bright_stone < max(18, int(24 * scale)) or dark_outline < max(18, int(24 * scale)):
+        # Must have bright silver-gray stone highlights (S <= 52, V >= 115) AND dark rock outline (V <= 35)
+        bright_stone = int(np.sum((roi_S <= 52) & (roi_V >= 115) & (roi_V <= 240)))
+        dark_outline = int(np.sum(roi_V <= 35))
+        if bright_stone < max(14, int(20 * scale)) or dark_outline < max(14, int(20 * scale)):
             return False
         return True
 
@@ -313,15 +313,15 @@ def detect_monolith(frame: np.ndarray, min_confidence: float = 0.48) -> Optional
     if best_pos is not None:
         return best_pos
 
-    # Direct vertical crimson rune + silver-gray stone spire detector (handles partial spell overlap)
-    red_full = (((H <= 14) | (H >= 166)) & (S >= 55) & (V >= 55)).astype(np.uint8) * 255
-    red_full[: int(h * 0.14)] = 0
-    red_full[int(h * 0.92) :] = 0
-    red_closed = cv2.morphologyEx(red_full, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (3, 9)))
+    # Direct vertical crimson rune + silver-gray stone spire detector (handles partial spell/orb overlap)
+    red_full = (((H <= 15) | (H >= 165)) & (S >= 48) & (V >= 48)).astype(np.uint8) * 255
+    red_full[: int(h * 0.095)] = 0
+    red_full[int(h * 0.965) :] = 0
+    red_closed = cv2.morphologyEx(red_full, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (5, 13)))
     cnt, _, stats, centroids = cv2.connectedComponentsWithStats(red_closed, 8)
     for i in range(1, cnt):
         rx, ry, rw, rh, _ = stats[i]
-        if max(26, int(span * 0.055)) <= rh <= int(span * 0.22) and (rh / max(1.0, float(rw))) >= 1.45:
+        if max(18, int(span * 0.040)) <= rh <= int(span * 0.25) and (rh / max(1.0, float(rw))) >= 1.20:
             mcx, mcy = int(round(centroids[i][0])), int(round(centroids[i][1]))
             if _verify_monolith_at(mcx, mcy, base_scale):
                 return (mcx, mcy)
@@ -748,6 +748,33 @@ def _approach_pickup(
     return direction
 
 
+def get_monolith_search_direction(elapsed: float) -> tuple[float, float]:
+    """Expanding Box Spiral Search to actively sweep outward across the map and locate an off-screen Monolith.
+
+    Instead of walking in a small closed circle around the same spot, marches in straight legs
+    with progressively longer durations (2.6s, 2.6s, 5.0s, 5.0s, 7.4s, 7.4s, 9.8s, 9.8s...)
+    turning 90 degrees after each leg to cover 1x, 2x, 3x, 4x screen radii around the wave clear point.
+    """
+    t = max(0.0, float(elapsed))
+    directions = [
+        (0.0, -1.0),                 # North
+        (1.0, 0.0),                  # East
+        (0.0, 1.0),                  # South
+        (-1.0, 0.0),                 # West
+        (0.70710678, -0.70710678),   # North-East
+        (0.70710678, 0.70710678),    # South-East
+        (-0.70710678, 0.70710678),   # South-West
+        (-0.70710678, -0.70710678),  # North-West
+    ]
+    leg_idx = 0
+    while True:
+        leg_duration = 2.6 + (leg_idx // 2) * 2.4
+        if t < leg_duration or leg_idx >= 24:
+            return directions[leg_idx % len(directions)]
+        t -= leg_duration
+        leg_idx += 1
+
+
 def choose_direction(
     vision: Vision,
     elapsed: float,
@@ -831,6 +858,18 @@ def choose_direction(
             if val > best_orb_val:
                 best_orb_val = val
                 best_orb = (gx, gy, bw, dist, gem_safety)
+
+    inner_enemy_mask = vision.enemy_mask[int(h * 0.14) : int(h * 0.86), int(w * 0.14) : int(w * 0.86)]
+    field_enemy_ratio = float(np.mean(inner_enemy_mask > 0)) if inner_enemy_mask.size > 0 else 0.0
+    is_searching_monolith = bool(
+        best_orb is None
+        and vision.chest is None
+        and getattr(vision, "monolith", None) is None
+        and field_enemy_ratio < 0.015
+        and not getattr(vision, "bosses", None)
+    )
+    if is_searching_monolith:
+        patrol = get_monolith_search_direction(elapsed)
 
     # Commit to one concrete pickup rather than blending several attraction vectors.
     # Monolith and Chest are top-priority pickups.
@@ -1079,7 +1118,7 @@ def choose_direction(
 
         # Suppress patrol when actively locked onto a safe mana orb, chest, or monolith
         patrol_weight = 0.0 if (vision.chest is not None or getattr(vision, "monolith", None) is not None) else (
-            0.15 if best_orb is not None else 1.80
+            0.15 if best_orb is not None else (18.0 if is_searching_monolith else 1.80)
         )
         score += patrol_weight * path_safe_factor * (direction[0] * patrol[0] + direction[1] * patrol[1])
         if previous:
@@ -1094,8 +1133,8 @@ def choose_direction(
             best_score = score
             best = direction
 
-    # Apply human weaving ("Lắc tay") micro-oscillation if enabled
-    if enable_weave and best != (0.0, 0.0) and not boss_emergency and (hazard is None or not np.any(hazard)):
+    # Apply human weaving ("Lắc tay") micro-oscillation if enabled (disabled when charging/searching monolith)
+    if enable_weave and not is_searching_monolith and getattr(vision, "monolith", None) is None and best != (0.0, 0.0) and not boss_emergency and (hazard is None or not np.any(hazard)):
         weaved = apply_human_weave(best, elapsed, frequency=weave_freq, amplitude=weave_amp)
         wx = int(px + weaved[0] * span * 0.05)
         wy = int(py + weaved[1] * span * 0.05)

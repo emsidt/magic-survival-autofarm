@@ -1518,6 +1518,24 @@ class VisionTests(unittest.TestCase):
         self.assertEqual(res.skill_key, "spirit")
         self.assertEqual(res.offered_level, 7)
 
+    def test_empty_field_searches_for_monolith_with_expanding_sweep(self):
+        import botcore
+
+        # Search legs must change heading over time (not stuck, not tiny circle)
+        d0 = botcore.get_monolith_search_direction(0.5)
+        d1 = botcore.get_monolith_search_direction(3.5)
+        d2 = botcore.get_monolith_search_direction(7.0)
+        self.assertNotEqual(d0, d1)
+        self.assertNotEqual(d1, d2)
+
+        # No enemies, no orbs, no chest, no monolith: bot must walk in a straight search leg
+        mask = np.zeros((1000, 600), dtype=np.uint8)
+        dist = cv2.distanceTransform(255 - mask, cv2.DIST_L2, 5)
+        v = botcore.Vision(mask, dist, [], True, 1.0)
+        dx, dy = botcore.choose_direction(v, elapsed=0.5, player=(0.5, 0.5))
+        self.assertAlmostEqual(dx, d0[0], delta=0.45)
+        self.assertAlmostEqual(dy, d0[1], delta=0.45)
+
     def test_monolith_strictly_overrides_chest_and_rejects_bush_false_positive(self):
         import botcore
         import os
