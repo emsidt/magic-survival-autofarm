@@ -993,6 +993,20 @@ class VisionTests(unittest.TestCase):
             self.assertAlmostEqual(m_pos_1080[0], 350, delta=50)
             self.assertAlmostEqual(m_pos_1080[1], 1300, delta=50)
 
+        # 4. Monolith on reddish-brown map with edge cutoff (media_1794641316919_39d72fce.png)
+        img_red_path = r"C:/Users/User/.gemini/antigravity/brain/2dc840cb-72eb-45f9-92e9-a3fe999f18b4/.user_uploaded/media_1794641316919_39d72fce.png"
+        if os.path.isfile(img_red_path):
+            img_red = cv2.imread(img_red_path)
+            m_pos_red = detect_monolith(img_red)
+            self.assertIsNotNone(m_pos_red, "Must detect monolith on reddish brown map even on left edge")
+            self.assertAlmostEqual(m_pos_red[0], 21, delta=15)
+            self.assertAlmostEqual(m_pos_red[1], 500, delta=30)
+
+            v_red = inspect_game(img_red)
+            self.assertIsNotNone(v_red.monolith)
+            dx_red, dy_red = choose_direction(v_red, elapsed=0.0)
+            self.assertLess(dx_red, -0.85, "Must charge West towards the monolith on the left edge")
+
     def test_chest_color_fallback_and_priority(self):
         from botcore import detect_chest, choose_direction
         import os

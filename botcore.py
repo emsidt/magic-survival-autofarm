@@ -243,44 +243,39 @@ def detect_monolith(frame: np.ndarray, min_confidence: float = 0.44) -> Optional
 
     def _verify_monolith_at(mcx: int, mcy: int, scale: float = 1.0) -> bool:
         # Monolith tower is a physical ground obstacle inside the playable field:
-        # its center is NEVER on the outer 3.5% border, top HUD bar, or top-left/top-right HUD icons
-        if mcx < int(w * 0.035) or mcx > int(w * 0.965):
+        # allow detection even when partially cut off near screen borders
+        if mcx < 6 or mcx > w - 16:
             return False
-        if mcy < int(h * 0.095) or mcy > int(h * 0.965):
+        if mcy < int(h * 0.08) or mcy > int(h * 0.975):
             return False
-        if mcx < int(w * 0.20) and mcy < int(h * 0.22):
-            return False
-        if mcx > int(w * 0.80) and mcy < int(h * 0.22):
+        if (mcx < int(w * 0.20) or mcx > int(w * 0.80)) and mcy < int(h * 0.22):
             return False
         box_w = max(24, int(36 * scale))
         box_h = max(36, int(56 * scale))
         y0, y1 = max(0, mcy - box_h), min(h, mcy + box_h)
         x0, x1 = max(0, mcx - box_w), min(w, mcx + box_w)
-        roi_H = H[y0:y1, x0:x1]
-        roi_S = S[y0:y1, x0:x1]
-        roi_V = V[y0:y1, x0:x1]
-        if roi_H.size == 0:
+        roi = frame[y0:y1, x0:x1]
+        if roi.size == 0:
             return False
+        rB = roi[:, :, 0].astype(int)
+        rG = roi[:, :, 1].astype(int)
+        rR = roi[:, :, 2].astype(int)
         # Distinctive vertical crimson rune glyph in center of monolith
-        red_mask = ((roi_H <= 15) | (roi_H >= 165)) & (roi_S >= 45) & (roi_V >= 45)
+        # (pure crimson R >= 80, G <= 75, B <= 75 is invariant to ground colors, even on orange/red maps)
+        red_mask = (rR >= 80) & (rG <= 75) & (rB <= 75)
         red_count = int(np.sum(red_mask))
-        min_red = max(12, int(18 * scale))
-        red_frac = red_count / float(roi_H.size)
-        # Reject round red monster cores that fill > 18% of the ROI
-        if red_count < min_red or red_frac > 0.18:
+        min_red = max(8, int(14 * scale))
+        if red_count < min_red:
             return False
         ys, xs = np.where(red_mask)
-        if len(ys) < min_red:
-            return False
         red_h = int(ys.max() - ys.min()) + 1
-        red_w = int(xs.max() - xs.min()) + 1
-        # Real monolith rune is a tall vertical fissure (height / width >= 1.20), not a circular blob
-        if red_h / max(1.0, float(red_w)) < 1.20 or red_h < max(16, int(22 * scale)):
+        # Real monolith rune is vertically elongated
+        if red_h < max(14, int(18 * scale)):
             return False
-        # Must have bright silver-gray stone highlights (S <= 52, V >= 115) AND dark rock outline (V <= 35)
-        bright_stone = int(np.sum((roi_S <= 52) & (roi_V >= 115) & (roi_V <= 240)))
-        dark_outline = int(np.sum(roi_V <= 35))
-        if bright_stone < max(14, int(20 * scale)) or dark_outline < max(14, int(20 * scale)):
+        # Must have neutral gray/silver stone highlights or dark rock outline
+        stone = (np.abs(rB - rG) <= 6) & ((rR >= 115) | (rB <= 35) | ((rB >= 45) & (rB <= 120)))
+        stone_count = int(np.sum(stone))
+        if stone_count < max(15, int(22 * scale)):
             return False
         return True
 
@@ -313,20 +308,28 @@ def detect_monolith(frame: np.ndarray, min_confidence: float = 0.44) -> Optional
     if best_pos is not None:
         return best_pos
 
-    # Direct vertical crimson rune + silver-gray stone spire detector (handles partial spell/orb overlap)
-    red_full = (((H <= 15) | (H >= 165)) & (S >= 48) & (V >= 48)).astype(np.uint8) * 255
-    red_full[: int(h * 0.095)] = 0
-    red_full[int(h * 0.965) :] = 0
-    red_closed = cv2.morphologyEx(red_full, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (5, 13)))
-    cnt, _, stats, centroids = cv2.connectedComponentsWithStats(red_closed, 8)
+    # Direct vertical crimson rune + stone spire detector (works across all map floor colors and edge cutoffs)
+    B = frame[:, :, 0].astype(int)
+    G = frame[:, :, 1].astype(int)
+    R = frame[:, :, 2].astype(int)
+    crimson = ((R >= 80) & (G <= 65) & (B <= 65)).astype(np.uint8) * 255
+    crimson[: int(h * 0.085), :] = 0
+    crimson[int(h * 0.97) :, :] = 0
+    closed = cv2.morphologyEx(crimson, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (7, 25)))
+    cnt, _, stats, centroids = cv2.connectedComponentsWithStats(closed, 8)
+    best_cand = None
+    best_score = 0.0
     for i in range(1, cnt):
-        rx, ry, rw, rh, _ = stats[i]
-        if max(18, int(span * 0.040)) <= rh <= int(span * 0.25) and (rh / max(1.0, float(rw))) >= 1.20:
-            mcx, mcy = int(round(centroids[i][0])), int(round(centroids[i][1]))
-            if _verify_monolith_at(mcx, mcy, base_scale):
-                return (mcx, mcy)
+        rx, ry, rw, rh, area = stats[i]
+        cx, cy = int(round(centroids[i][0])), int(round(centroids[i][1]))
+        if rh >= max(18, int(span * 0.035)) and area >= 25:
+            if _verify_monolith_at(cx, cy, base_scale):
+                score = float(area * min(rh, 200))
+                if score > best_score:
+                    best_score = score
+                    best_cand = (cx, cy)
 
-    return None
+    return best_cand
 
 
 @dataclass
