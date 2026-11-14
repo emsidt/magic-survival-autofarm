@@ -1,81 +1,75 @@
-# Kế hoạch chuyển bot sang AI học từ dữ liệu chơi
+# 🧠 Kế hoạch & Kiến trúc Hệ thống AI Học từ Dữ liệu Chơi
 
-## Mục tiêu và phạm vi
+Tài liệu này mô tả kiến trúc, lộ trình triển khai và trạng thái hoàn thiện của hệ thống **AI Học máy Thích ứng (Adaptive AI Learning)** tích hợp trong **Magic Survival AutoFarm**.
 
-Bot hiện chụp màn hình, nhận diện bằng OpenCV/OCR, chọn hành động theo luật trong `botcore.py`, rồi điều khiển game từ `main.py`. Bước đầu sẽ huấn luyện AI **chọn thẻ kỹ năng và combination**. Phần di chuyển và các màn hình xác nhận tiếp tục dùng bot hiện tại cho đến khi có đủ dữ liệu và cách đánh giá riêng.
+---
 
-Không thay trực tiếp toàn bộ bot bằng một mô hình chưa đo được chất lượng. Mỗi giai đoạn phải có cách so với bot hiện tại và có thể tắt AI bằng cấu hình.
+## 1. Mục tiêu và Phạm vi Kiến trúc
 
-## Bước 0 — Dọn và phân loại ảnh hiện có
+Hệ thống kết hợp hai tầng xử lý:
+1. **Tầng Thị giác & Điều khiển Thời gian thực ([`botcore.py`](botcore.py), [`game_actions.py`](game_actions.py), [`bot_cli.py`](bot_cli.py), [`main.py`](main.py))**:
+   * Nhận diện trạng thái màn hình bằng OpenCV & Windows OCR (`winocr`).
+   * Điều hướng né quái, thoát vùng tối sát thương, ưu tiên lao vào **Tháp qua màn (Monolith)** $\rightarrow$ **Rương cổ vật (Chest)** $\rightarrow$ **Hạt kinh nghiệm (Mana Orbs)**.
+2. **Tầng Học máy Thích ứng & Ghi nhận Tri thức ([`learning_engine.py`](learning_engine.py), [`data_recorder.py`](data_recorder.py), [`record_human_play.py`](record_human_play.py))**:
+   * Ghi nhận toàn bộ quyết định chọn kỹ năng, nhánh tiến hóa Lv.7, phép kết hợp (Combination) và cổ vật trong từng ván đấu.
+   * Tự động đánh giá hiệu quả sinh tồn sau mỗi ván và cập nhật bảng trọng số kỹ năng (`skill_weights`) cũng như điểm cộng hưởng cặp kỹ năng (`synergy_weights`).
 
-- [x] Chuyển toàn bộ ảnh `.png`/`.jpg` nằm ở thư mục gốc vào `captures/` để thư mục gốc chỉ còn mã nguồn, cấu hình và tài liệu.
-- [x] Xem lại từng ảnh trong `captures/`, gắn nhãn nguồn, kích thước vùng game, loại màn hình và trạng thái sao combination nếu thấy rõ (Đã hoàn thành qua `scripts/inspect_captures.py`, lưu tại `captures/manifest.json`).
-- [x] Giữ `assets/` cho mẫu nhận diện đang được code dùng và `rules/` cho ảnh quy tắc. Không chuyển hai nhóm này nếu chưa sửa đường dẫn liên quan.
+---
 
-## Bước 1 — Chốt bài toán và số đo gốc
+## 2. Trạng thái Triển khai theo Giai đoạn
 
-- [ ] Chạy bot luật hiện tại qua nhiều ván, ghi lại thời gian sống, cấp đạt được, số lần chọn thẻ, combination thành công, lỗi bấm nhầm và số lần phải can thiệp tay.
-- [ ] Định nghĩa hành động AI đầu tiên: chọn một trong các thẻ đang hiện, hoặc chọn combination hợp lệ. Khi thiếu thông tin, AI trả về `không chắc` để bot luật xử lý.
-- [ ] Chốt tiêu chí thử nghiệm trước khi huấn luyện: không tăng lỗi bấm nhầm; tỉ lệ chọn hợp lệ đạt mức chấp nhận; thời gian sống/cấp đạt được không kém mốc bot luật trên cùng điều kiện.
+### Bước 0 — Dọn dẹp và Chuẩn hóa Dữ liệu Ảnh Mẫu
+- [x] Chuyển toàn bộ ảnh chụp thử nghiệm vào `captures/` và phân loại tự động qua [`scripts/inspect_captures.py`](scripts/inspect_captures.py) (lưu tại `captures/manifest.json`).
+- [x] Chuẩn hóa thư mục `assets/` cho toàn bộ mẫu nhận diện cốt lõi (nhân vật, tháp Monolith, rương thường, rương Reliquary, rương Opulence, mũi tên chỉ hướng, nút đóng quảng cáo).
+- [x] Tách biệt thư mục `rules/` cho các quy tắc tùy chỉnh của người dùng.
 
-**Đầu ra:** bảng số đo gốc và tiêu chí đạt/rớt rõ ràng.
+### Bước 1 — Chốt Bài toán, Tri thức Gốc & Công thức Phép Kết hợp
+- [x] Xây dựng cơ sở dữ liệu tri thức toàn diện trong [`game_knowledge.json`](game_knowledge.json) bao gồm:
+  * Toàn bộ kỹ năng chủ động, kỹ năng bị động và nhánh tiến hóa cấp 7 (Mastery Level 7).
+  * Công thức ghép phép (**Magic Combination**):
+    * **Telekinetic Sword** = `Spirit (Magic Blade)` + `Electric Shock (Chain Lightning)`
+    * **Black Hole** = `Cyclone (Void)` + `Satellite (Antigravity)`
+    * Cùng các công thức cấp cao: *Superconductivity, Current Overload, Vortex, Neutron Generation, Perpetual Engine, Overmind, Demon Equation, Frenzy, Prism Spree...*
+  * Hệ thống chấm điểm cổ vật (**Artifact Scoring**) theo bậc hiếm (*Legendary, Special, Synergy, Rare, Common*) và từ khóa chỉ số (*Cooldown, Crit Rate, Crit Dmg, All Magic Damage...*).
 
-## Bước 2 — Thu dữ liệu có cấu trúc
+### Bước 2 — Thu thập Dữ liệu có Cấu trúc ([`data_recorder.py`](data_recorder.py))
+- [x] Triển khai `DataRecorder` ghi log tự động theo từng quyết định trong trận:
+  * Lưu ảnh chụp màn hình tại thời điểm quyết định (`step_XXXX_<screen_type>.png`).
+  * Ghi thông tin chi tiết vào `data/runs/<run_id>/decisions.jsonl` (bước, thời gian, loại màn hình, kỹ năng chọn, độ tin cậy, metadata).
+  * Tổng kết cuối trận vào `data/runs/<run_id>/summary.json` (thời gian sống, số kill, vàng nhận được, danh sách kỹ năng và cấp độ đạt được).
+- [x] Cơ chế tự động xoay vòng dữ liệu (`max_data_runs: 50`), tự động xóa các ván cũ nhất để không làm đầy ổ cứng.
 
-- [x] Thêm chế độ ghi log theo từng quyết định: ảnh vùng game, thời điểm, loại màn hình, danh sách thẻ OCR đọc được, cấp từng magic nếu nhận diện được, trạng thái sao combination, hành động bot chọn, mức tin cậy và kết quả sau khi bấm (Đã hoàn thành module `data_recorder.py` và tích hợp vào luồng game trong `main.py`).
-- [x] Gắn một `run_id` cho mỗi ván; lưu ảnh và log theo ván trong `data/runs/<run_id>/`, tự động dọn dẹp các ván cũ (giữ tối đa 50 ván gần nhất).
-- [ ] Thu cả các trường hợp khó: sao xám/đỏ, OCR sai, thẻ bị che, menu combination không có lựa chọn hợp lệ, độ phân giải khác nhau (Đang tự động thu thập trong quá trình bot chạy).
-- [ ] Cho phép gắn nhãn thủ công hành động đúng và đánh dấu ảnh không dùng được. Chỉ thu dữ liệu từ game và tài khoản do mình điều khiển.
+### Bước 3 — Học từ Chuyên gia Con người ([`record_human_play.py`](record_human_play.py))
+- [x] Xây dựng công cụ **Human Expert Demonstration Recorder** ([`record_human.bat`](record_human.bat)):
+  * Chạy ngầm quan sát người chơi thật điều khiển 100%.
+  * Tự động phát hiện thời điểm người chơi mở bảng chọn phép, chọn nhánh Lv.7, ghép Combination hoặc mở rương.
+  * Xác định chính xác lá bài người chơi vừa chọn và nạp trực tiếp trọng số ưu tiên cao vào não AI khi kết thúc ván chơi.
 
-**Đầu ra:** tập dữ liệu có ảnh, hành động và kết quả khớp nhau; có thể phát lại một quyết định để kiểm tra.
+### Bước 4 — Bộ máy Học Tăng cường Thích ứng ([`learning_engine.py`](learning_engine.py))
+- [x] Triển khai lớp `AdaptiveLearner` quản lý chính sách học tại [`data/learned_policy.json`](data/learned_policy.json) và lịch sử tại [`data/learning_history.json`](data/learning_history.json).
+- [x] **Hàm thưởng sinh tồn (Survival Reward Function)**:
+  * So sánh thời gian sống sót thực tế của ván đấu (`survival_seconds`) với mức trung bình lịch sử (`average_survival_sec`).
+  * **Ván vượt mốc trung bình hoặc ván chuyên gia ($\ge 20$ phút)**: Cộng điểm thưởng dương cho các kỹ năng đã học (ưu tiên kỹ năng đạt cấp 7 và kỹ năng trụ cột) cùng toàn bộ các cặp kỹ năng phối hợp (`synergy_weights`).
+  * **Ván dưới mức trung bình**: Điều chỉnh giảm nhẹ đối với các kỹ năng phụ, đồng thời bảo vệ các kỹ năng cốt lõi (Core Skills) không bị tụt điểm oan khi chết sớm do địa hình.
+- [x] Lưu trữ an toàn bằng cơ chế ghi nguyên tử ([`storage.py`](storage.py) - `write_json_atomic`) đảm bảo không bao giờ hỏng file JSON ngay cả khi mất điện hay tắt ngang.
 
-## Bước 3 — Làm bộ đánh giá offline
+### Bước 5 — Bộ Kiểm thử Offline & Chống Hồi quy (`tests/`)
+- [x] Xây dựng hơn **230 bài kiểm thử tự động** kiểm tra độc lập từng thành phần:
+  * [`tests/test_botcore.py`](tests/test_botcore.py): Kiểm thử nhận diện màn hình, chọn kỹ năng, nhánh Lv.7, nhận diện tháp Monolith trên mọi màu nền map và góc khuất mép màn hình.
+  * [`tests/test_pickup_movement.py`](tests/test_pickup_movement.py) & [`tests/test_combat_flow.py`](tests/test_combat_flow.py): Kiểm thử điều hướng né quái, nhặt rương, ưu tiên lao thẳng vào tháp và quét xoắn ốc mở rộng khi sạch quái.
+  * [`tests/test_ad_close_text.py`](tests/test_ad_close_text.py): Kiểm thử nhận diện mọi biến thể nút đóng quảng cáo (Đóng, Đóng | ✔, Skip, Bỏ qua, Hủy, X, mũi tên tua nhanh, No Ads - Tap to Continue).
+  * [`tests/test_learning_engine.py`](tests/test_learning_engine.py) & [`tests/test_data_recorder.py`](tests/test_data_recorder.py): Kiểm thử tính toàn vẹn của thuật toán học máy và bộ ghi dữ liệu.
 
-- [ ] Chia dữ liệu theo **ván chơi**, không chia ngẫu nhiên từng ảnh liên tiếp, để ảnh gần giống nhau không lọt sang cả tập huấn luyện và tập kiểm tra.
-- [ ] Tạo bộ tình huống cố định cho màn chọn thẻ, sao combination, màn khác dễ nhận nhầm và ảnh OCR lỗi.
-- [ ] Đo độ chính xác chọn hành động, tỉ lệ `không chắc`, tỉ lệ bấm sai và độ trễ mỗi quyết định. So với quyết định của bot luật trên đúng bộ ảnh đó.
+---
 
-**Đầu ra:** lệnh đánh giá lặp lại được và báo cáo lỗi theo từng loại màn hình.
+## 3. Cấu trúc Dữ liệu Lưu trữ (`data/`)
 
-## Bước 4 — Huấn luyện mô hình đầu tiên
-
-- [ ] Bắt đầu bằng học có giám sát từ các quyết định đã gắn nhãn. Đầu vào nên là dữ liệu đã đọc từ màn hình (tên thẻ, cấp, build hiện tại, combination hợp lệ); chỉ dùng ảnh trực tiếp nếu OCR/nhận diện không đủ tin cậy.
-- [ ] Mô hình phải xuất lựa chọn, điểm tin cậy và lý do ngắn có thể ghi log. Lưu phiên bản mô hình cùng phiên bản dữ liệu.
-- [ ] Điều chỉnh trên tập huấn luyện/validation; chỉ công bố kết quả một lần trên tập kiểm tra giữ riêng. Xem các lỗi bấm sai trước khi chạy trong game.
-
-**Đầu ra:** mô hình có thể dự đoán offline và vượt tiêu chí ở Bước 1.
-
-## Bước 5 — Chạy thử không điều khiển
-
-- [ ] Chạy AI song song khi bot luật chơi: AI chỉ ghi đề xuất, không gửi phím/chuột.
-- [ ] So từng đề xuất với hành động thật và kết quả sau đó; bổ sung nhãn cho các trường hợp bất đồng.
-- [ ] Đo độ trễ trên máy đang chạy game và kiểm tra việc ghi dữ liệu không làm giảm tốc độ bot.
-
-**Đầu ra:** báo cáo chạy thử qua nhiều ván, chỉ rõ khi nào AI tốt hơn hoặc kém hơn luật.
-
-## Bước 6 — Bật AI có kiểm soát
-
-- [ ] Thêm công tắc AI trong cấu hình; mặc định tắt. Chỉ cho AI chọn ở loại màn hình đã đạt tiêu chí.
-- [ ] Trước khi bấm vẫn xác thực loại màn hình, vị trí thẻ và điều kiện sao combination đỏ. Nếu AI thiếu chắc chắn, OCR mâu thuẫn hoặc không có combination hợp lệ, trả quyền quyết định cho bot luật hoặc bỏ qua.
-- [ ] Giữ F9 để dừng ngay. Ghi lại mọi quyết định AI, hành động thực tế và kết quả để phát hiện hồi quy.
-- [ ] Thử số ván nhỏ trước, rồi tăng dần nếu số đo thực tế đạt tiêu chí ở Bước 1.
-
-**Đầu ra:** AI chỉ điều khiển phần chọn kỹ năng đã kiểm chứng; có thể quay lại bot luật ngay.
-
-## Bước 7 — Tự cải thiện và mở rộng
-
-- [x] Đã triển khai module học thích ứng sau mỗi ván ([`learning_engine.py`](file:///d:/magic-survival-autofarm/learning_engine.py)): Đánh giá thời gian sống sót của ván chơi và cập nhật bảng trọng số kỹ năng/synergy thích ứng (`data/learned_policy.json`). Các kỹ năng mang lại chiến thắng/thời gian sống lâu tự động được cộng điểm ưu tiên trong các ván tiếp theo.
-- [ ] Dùng các ván mới để tìm tình huống AI sai hoặc thiếu chắc chắn, gắn nhãn rồi huấn luyện lại theo phiên bản. Không tự cập nhật mô hình đang chạy giữa ván.
-- [ ] Khi dữ liệu đủ tốt, thử mô hình chọn hướng di chuyển riêng. Số đo cho phần này gồm thời gian sống, lượng sát thương nhận, kinh nghiệm nhặt được và độ ổn định điều khiển.
-- [ ] Chỉ cân nhắc reinforcement learning sau khi có môi trường thử nhanh hoặc khả năng phát lại, hàm thưởng rõ ràng và bộ kiểm tra tránh hành động sai. Chạy thử và so với mô hình học có giám sát trước khi thay thế.
-
-## Nguyên tắc dữ liệu và thư mục dự kiến
-
-- `captures/`: ảnh thử nghiệm hiện có, dùng để xem và tuyển chọn thủ công.
-- `assets/`: ảnh mẫu mà mã nguồn đang sử dụng; không coi là tập huấn luyện.
-- `rules/`: ảnh quy tắc do người dùng tạo.
-- `data/runs/<run_id>/`: ảnh và log quyết định theo ván, sẽ tạo ở Bước 2.
-- `data/labels/`: nhãn đã kiểm tra, sẽ tạo ở Bước 2.
-- `models/`: mô hình đã huấn luyện kèm metadata phiên bản, sẽ tạo ở Bước 4.
-
-Các thư mục `data/` và `models/` chưa cần tạo cho đến khi có chức năng tương ứng. Trước khi thu dữ liệu lâu dài, cần quyết định dung lượng tối đa và thời gian giữ ảnh để ổ đĩa không đầy.
+* [`data/learned_policy.json`](data/learned_policy.json):
+  * `total_runs_analyzed`: Tổng số ván đấu AI đã phân tích.
+  * `average_survival_sec`: Thời gian sống trung bình động (EMA) tính bằng giây.
+  * `skill_weights`: Điểm thưởng ưu tiên của từng kỹ năng (trong khoảng `[-5.0, +8.0]`).
+  * `synergy_weights`: Điểm cộng hưởng giữa các cặp kỹ năng `"skill_a+skill_b"` (trong khoảng `[-2.5, +5.0]`).
+* [`data/learning_history.json`](data/learning_history.json):
+  * Lưu 100 bản ghi kết quả ván đấu gần nhất (mã ván, thời gian sống, số mạng hạ gục, phần thưởng AI, kỹ năng và cấp độ đạt được).
+* `data/runs/<run_id>/`:
+  * Chứa toàn bộ ảnh chụp từng bước quyết định và file `decisions.jsonl` + `summary.json` của 50 ván gần nhất.
