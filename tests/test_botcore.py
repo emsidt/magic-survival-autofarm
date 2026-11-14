@@ -281,6 +281,25 @@ class VisionTests(unittest.TestCase):
         res_enemy = detect_chest(frame_enemy, player=(0.5, 0.5))
         self.assertIsNone(res_enemy, "Shadow enemy blobs on dirt ground must never be detected as chests")
 
+        # 5. Summoner spirit stars at (296, 468) / (296, 472) on 540x960 frame (~28px from player (270, 480)):
+        tchest_img = cv2.imread("assets/chests/treasure_chest.png")
+        if tchest_img is not None:
+            th, tw = tchest_img.shape[:2]
+            frame_540 = np.full((960, 540, 3), 115, dtype=np.uint8)
+            frame_540[470 - th // 2 : 470 - th // 2 + th, 296 - tw // 2 : 296 - tw // 2 + tw] = tchest_img
+            self.assertIsNone(
+                detect_chest(frame_540, player=(0.5, 0.5)),
+                "Must reject false chest candidates at (296, 470) within Summoner spirit orbit radius",
+            )
+
+        # 6. Early-game 00:32 screenshot with no chests (media_1794649444402_51637745.jpg):
+        import os
+        p_0032 = r"C:/Users/User/.gemini/antigravity/brain/2dc840cb-72eb-45f9-92e9-a3fe999f18b4/.user_uploaded/media_1794649444402_51637745.jpg"
+        if os.path.isfile(p_0032):
+            im_0032 = cv2.imread(p_0032)
+            canvas_0032 = cv2.resize(im_0032[25:600, 72:395], (540, 960))
+            self.assertIsNone(detect_chest(canvas_0032), "Must not report false chest on 00:32 early gameplay screen")
+
     def test_multi_chest_priority_and_dark_zone(self):
         # 1. Black Box priority over Treasure Chest
         field = np.full((800, 500, 3), [70, 110, 110], dtype=np.uint8)

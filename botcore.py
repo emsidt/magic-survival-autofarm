@@ -97,7 +97,11 @@ def _get_fast_chest_templates() -> list[tuple[str, np.ndarray, float, int, int, 
     return _CACHED_SMALL_CHEST_TEMPLATES
 
 
-def _verify_chest_color(roi_bgr: np.ndarray, chest_type: str = "treasure_chest") -> bool:
+def _verify_chest_color(
+    roi_bgr: np.ndarray,
+    chest_type: str = "treasure_chest",
+    is_indicator: bool = False,
+) -> bool:
     """Ensure detected region has genuine chest colors rather than olive ground, enemy pixels, or gold mana."""
     if roi_bgr.size == 0:
         return False
@@ -106,19 +110,26 @@ def _verify_chest_color(roi_bgr: np.ndarray, chest_type: str = "treasure_chest")
     total_px = roi_bgr.shape[0] * roi_bgr.shape[1]
 
     if chest_type == "treasure_chest":
-        # Rich amber/brown wood (H 5..28, S>=35, V>=25), or cream/white indicator badge (S<=45, V>=175)
+        # Rich amber/brown wood (H 5..28, S>=35, V>=25), or cream/white indicator badge (S<=75, V>=180)
         wood = (H >= 5) & (H <= 28) & (S >= 35) & (V >= 25)
-        badge = (S <= 45) & (V >= 175)
+        badge = (S <= 75) & (V >= 180)
         # CRITICAL: Reject regions that are purely glowing Gold/Yellow Mana orbs!
         # Gold mana orbs have bright neon yellow (H 18..36, S >= 80, V >= 185) with NO dark pixels!
         bright_gold = (H >= 16) & (H <= 36) & (S >= 80) & (V >= 185)
         dark_pixels = (V <= 50)
-        if np.sum(bright_gold) / total_px > 0.35 and np.sum(dark_pixels) / total_px < 0.04:
+        wood_frac = float(np.sum(wood)) / total_px
+        dark_frac = float(np.sum(dark_pixels)) / total_px
+        badge_frac = float(np.sum(badge)) / total_px
+        if np.sum(bright_gold) / total_px > 0.35 and dark_frac < 0.04:
             return False
-        # Genuine chests have substantial wood planks (>=10%) AND dark iron bands/outline (>=8%).
-        # Real indicators have white/cream badge body (>=8%) or dimmed modal background (dark >= 55%).
-        has_wood_chest = (np.sum(wood) / total_px >= 0.10) and (np.sum(dark_pixels) / total_px >= 0.08)
-        has_badge = (np.sum(badge) / total_px >= 0.08) or (np.sum(dark_pixels) / total_px >= 0.55)
+        # Every genuine wooden chest AND every genuine chest indicator bubble contains brown wood planks (>= 10%)
+        # and is never a pitch-black monster swarm or white spirit orb with 0% wood.
+        if wood_frac < 0.10 or dark_frac > 0.65:
+            return False
+        if is_indicator:
+            return bool(wood_frac >= 0.10 and badge_frac >= 0.08 and dark_frac <= 0.45)
+        has_wood_chest = (wood_frac >= 0.10) and (dark_frac >= 0.08)
+        has_badge = (wood_frac >= 0.10) and (badge_frac >= 0.08)
         return bool(has_wood_chest or has_badge)
     elif chest_type == "reliquary":
         red = ((H <= 16) | (H >= 164)) & (S >= 45) & (V >= 45)
@@ -130,10 +141,15 @@ def _verify_chest_color(roi_bgr: np.ndarray, chest_type: str = "treasure_chest")
             and (np.sum(dark_stone) / total_px >= 0.06)
         )
     elif chest_type == "black_box":
-        # Charcoal gray stone (V 28..110, low S), NOT pitch-black enemy core (V < 20)
+        # Charcoal gray stone (V 28..110, low S), NOT pitch-black enemy core (V <= 20)
         dark_stone = (S < 42) & (V >= 28) & (V <= 110)
         highlight = (S < 50) & (V >= 120)
-        return bool((np.sum(dark_stone) / total_px >= 0.20) and (np.sum(highlight) / total_px >= 0.005))
+        pitch_black = (V <= 20)
+        return bool(
+            (np.sum(dark_stone) / total_px >= 0.20)
+            and (np.sum(highlight) / total_px >= 0.005)
+            and (np.sum(pitch_black) / total_px <= 0.45)
+        )
     return False
 
 
@@ -158,7 +174,7 @@ def detect_chest(
     small = cv2.resize(gray, (fw // 2, fh // 2))
 
     px, py = int(fw * player[0]), int(fh * player[1])
-    min_player_dist = max(14, int(span * 0.025))
+    min_player_dist = max(36, int(span * 0.066))
     top_hud_y = int(fh * 0.045)
 
     candidates = []
@@ -184,7 +200,7 @@ def detect_chest(
                 if cx > int(fw * 0.88) and cy < int(fh * 0.095):
                     continue
                 dist_to_player = math.hypot(cx - px, cy - py)
-                # Protect immediate player sprite center pixel core
+                # Protect immediate player sprite center + orbiting spirit stars
                 if dist_to_player < min_player_dist:
                     continue
                 # Off-screen indicators ONLY exist along the HUD perimeter, NEVER in the middle of battle
@@ -195,7 +211,7 @@ def detect_chest(
                         continue
                 if all(math.hypot(cx - ox, cy - oy) > 30 for ox, oy in all_positions):
                     roi = frame[max(0, cy - 25) : min(fh, cy + 25), max(0, cx - 25) : min(fw, cx + 25)]
-                    if _verify_chest_color(roi, ctype):
+                    if _verify_chest_color(roi, ctype, is_indicator=is_indicator):
                         candidates.append((weight, val, ctype, (cx, cy)))
                         all_positions.append((cx, cy))
 
