@@ -164,3 +164,15 @@ class AdCloseTextTests(unittest.TestCase):
             with self.subTest(text=text), patch("winocr.recognize_pil", new=AsyncMock(return_value=self.recognize(text, 50))):
                 pt = botcore.detect_ad_close_text(frame)
                 self.assertIsNotNone(pt)
+
+    def test_bottom_left_dong_pill_button_on_real_image(self):
+        import cv2
+        import os
+        img_path = r"C:/Users/User/.gemini/antigravity/brain/2dc840cb-72eb-45f9-92e9-a3fe999f18b4/.user_uploaded/media_1794625355688_5b129cd1.jpg"
+        if os.path.isfile(img_path):
+            img = cv2.imread(img_path)
+            btn = botcore.detect_close_button(img)
+            self.assertIsNotNone(btn)
+            # Must detect bottom-left 'Đóng | ✔' button (x ~ 0.26, y ~ 0.95), NOT the emulator title bar
+            self.assertAlmostEqual(btn[0], 0.26, delta=0.06)
+            self.assertAlmostEqual(btn[1], 0.95, delta=0.04)

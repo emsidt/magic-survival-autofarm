@@ -1358,8 +1358,8 @@ def detect_ad_close_text(frame: np.ndarray, gear_pos=None) -> Optional[tuple[flo
         image = frame
         h, w = image.shape[:2]
 
-        async def recognize():
-            return await winocr.recognize_pil(Image.fromarray(cv2.cvtColor(image, cv2.COLOR_BGR2RGB)), lang="en")
+        async def recognize_roi(roi_img):
+            return await winocr.recognize_pil(Image.fromarray(cv2.cvtColor(roi_img, cv2.COLOR_BGR2RGB)), lang="en")
 
         def normalize(text):
             text = text.lower().replace("đ", "d")
@@ -1391,53 +1391,85 @@ def detect_ad_close_text(frame: np.ndarray, gear_pos=None) -> Optional[tuple[flo
                 return True
             if re.match(r"^(06|o6|0o|oo|d0|do|d6)[\s]*ng[\s]+(video|quang cao|app)$", lbl):
                 return True
+            # Strip trailing single-character icon artifacts (e.g. 'dong i e' from 'Đóng | ✔' or 'skip >')
+            parts = lbl.split()
+            if len(parts) >= 2 and parts[0] in {"dong", "close", "skip", "thoat", "quit", "bo"}:
+                if all(len(p) <= 2 for p in parts[1:]):
+                    return True
             return False
 
-        lines = asyncio.run(recognize()).lines
-
-        # 1. Primary pass: locate explicit dismissal words, buttons, and phrases (Đóng, Close, Skip, Bỏ qua, etc.)
-        for line in lines:
-            # Questions and dialog headings with '?' (e.g. "Đóng quảng cáo?", "Close ad?") are prompts, not buttons.
-            if "?" in line.text or any("?" in w.text for w in line.words):
-                continue
-            groups = []
-            for word in sorted(line.words, key=lambda item: item.bounding_rect.x):
-                box = word.bounding_rect
-                if groups:
-                    previous = groups[-1][-1].bounding_rect
-                    if box.x - previous.x - previous.width <= max(20, 2 * max(box.height, previous.height)):
-                        groups[-1].append(word)
-                        continue
-                groups.append([word])
-            for group in groups:
-                label = normalize(" ".join(word.text for word in group))
-                if not is_valid_label(label):
+        def _extract_target(lines, x_off=0, y_off=0, scale=1.0):
+            # 1. Primary pass: locate explicit dismissal words & phrases
+            for line in lines:
+                if "?" in line.text or any("?" in w.text for w in line.words):
                     continue
-                if (label.startswith("skip") or label.startswith("bo qua")) and re.search(r"\d", line.text):
-                    continue  # A countdown is not an enabled skip button.
-                boxes = [word.bounding_rect for word in group]
-                left, right = min(b.x for b in boxes), max(b.x + b.width for b in boxes)
-                top, bottom = min(b.y for b in boxes), max(b.y + b.height for b in boxes)
-                point = ((left + right) / (2 * w), (top + bottom) / (2 * h))
-                if gear_pos and math.dist(point, gear_pos) < 0.09:
-                    continue
-                return point
-
-        # 2. Secondary pass: check for standalone single-character dismissal icons ('X', '✕', '>', '<') recognized in outer corners
-        for line in lines:
-            if "?" in line.text or re.search(r"\d", line.text):
-                continue
-            for word in line.words:
-                raw = word.text.strip().lower()
-                if raw in {"x", "✕", "✖", "×", ">", ">>", "<", "<<"}:
+                groups = []
+                for word in sorted(line.words, key=lambda item: item.bounding_rect.x):
                     box = word.bounding_rect
-                    cx = (box.x + box.width / 2.0) / w
-                    cy = (box.y + box.height / 2.0) / h
-                    # In outer corners, avoiding extreme top emulator bar (cy < 0.025)
-                    if (cx <= 0.28 or cx >= 0.72) and ((0.025 <= cy <= 0.20) or (0.80 <= cy <= 0.97)):
-                        if gear_pos and math.hypot(cx - gear_pos[0], cy - gear_pos[1]) < 0.09:
+                    if groups:
+                        previous = groups[-1][-1].bounding_rect
+                        if box.x - previous.x - previous.width <= max(20, 2 * max(box.height, previous.height)):
+                            groups[-1].append(word)
                             continue
-                        return (round(cx, 4), round(cy, 4))
+                    groups.append([word])
+                for group in groups:
+                    label = normalize(" ".join(word.text for word in group))
+                    if not is_valid_label(label):
+                        continue
+                    if (label.startswith("skip") or label.startswith("bo qua")) and re.search(r"\d", line.text):
+                        continue  # A countdown is not an enabled skip button.
+                    boxes = [word.bounding_rect for word in group]
+                    left, right = min(b.x for b in boxes), max(b.x + b.width for b in boxes)
+                    top, bottom = min(b.y for b in boxes), max(b.y + b.height for b in boxes)
+                    cx = (x_off + (left + right) / (2.0 * scale)) / w
+                    cy = (y_off + (top + bottom) / (2.0 * scale)) / h
+                    point = (cx, cy)
+                    if gear_pos and math.dist(point, gear_pos) < 0.09:
+                        continue
+                    return point
+
+            # 2. Secondary pass: check for standalone single-character dismissal icons ('X', '✕', '>', '<')
+            for line in lines:
+                if "?" in line.text or re.search(r"\d", line.text):
+                    continue
+                for word in line.words:
+                    raw = word.text.strip().lower()
+                    if raw in {"x", "✕", "✖", "×", ">", ">>", "<", "<<"}:
+                        box = word.bounding_rect
+                        cx = (x_off + (box.x + box.width / 2.0) / scale) / w
+                        cy = (y_off + (box.y + box.height / 2.0) / scale) / h
+                        if (cx <= 0.28 or cx >= 0.72) and ((0.025 <= cy <= 0.20) or (0.80 <= cy <= 0.97)):
+                            if gear_pos and math.hypot(cx - gear_pos[0], cy - gear_pos[1]) < 0.09:
+                                continue
+                            return (cx, cy)
+            return None
+
+        # Pass 1: Full frame OCR
+        lines_full = asyncio.run(recognize_roi(image)).lines
+        target = _extract_target(lines_full)
+        if target is not None:
+            return target
+
+        # Pass 2: High-resolution bottom action bar (detects small/faint 'Đóng', 'Close', 'Skip' pill buttons)
+        y0 = int(h * 0.82)
+        bot_crop = image[y0:, :]
+        if bot_crop.shape[0] >= 20 and bot_crop.shape[1] >= 40:
+            bot_scaled = cv2.resize(bot_crop, (int(w * 1.5), int((h - y0) * 1.5)), interpolation=cv2.INTER_CUBIC)
+            lines_bot = asyncio.run(recognize_roi(bot_scaled)).lines
+            target = _extract_target(lines_bot, x_off=0, y_off=y0, scale=1.5)
+            if target is not None:
+                return target
+
+        # Pass 3: High-resolution top action bar (detects small top-corner skip/close buttons)
+        y1 = int(h * 0.18)
+        top_crop = image[:y1, :]
+        if top_crop.shape[0] >= 20 and top_crop.shape[1] >= 40:
+            top_scaled = cv2.resize(top_crop, (int(w * 1.5), int(y1 * 1.5)), interpolation=cv2.INTER_CUBIC)
+            lines_top = asyncio.run(recognize_roi(top_scaled)).lines
+            target = _extract_target(lines_top, x_off=0, y_off=0, scale=1.5)
+            if target is not None:
+                return target
+
     except Exception:
         pass
     return None
@@ -1585,42 +1617,9 @@ def detect_close_button(frame: np.ndarray, threshold: float = 0.62) -> Optional[
                 cy = ct + max_loc[1] + th_sz // 2
                 norm_x = round(cx / w, 4)
                 norm_y = round(cy / h, 4)
-                # NEVER accept coordinates near the Settings Gear icon
-                if gear_pos and math.hypot(norm_x - gear_pos[0], norm_y - gear_pos[1]) < 0.09:
+                # NEVER accept coordinates in the extreme desktop window title bar (e.g. Windows exit button at top-right)
+                if (norm_x >= 0.94 and norm_y <= 0.02) or norm_y > 0.985:
                     continue
-                best_score = max_val
-                best_coord = (norm_x, norm_y)
-
-    if best_score >= threshold and best_coord is not None:
-        return best_coord
-
-    return None
-
-    best_coord = None
-    best_score = 0.0
-
-    templates = _get_close_button_templates()
-
-    for cl, ct, cr, cb in corners:
-        roi = gray[ct:cb, cl:cr]
-        if roi.shape[0] < 12 or roi.shape[1] < 12:
-            continue
-        for tmpl in templates:
-            th_sz, tw_sz = tmpl.shape
-            if roi.shape[0] < th_sz or roi.shape[1] < tw_sz:
-                continue
-            res = cv2.matchTemplate(roi, tmpl, cv2.TM_CCOEFF_NORMED)
-            _, max_val, _, max_loc = cv2.minMaxLoc(res)
-            if max_val > best_score:
-                patch = roi[max_loc[1]:max_loc[1] + th_sz, max_loc[0]:max_loc[0] + tw_sz]
-                # Reject completely flat uniform patches without contrast
-                if (int(patch.max()) - int(patch.min())) < 35:
-                    continue
-                cx = cl + max_loc[0] + tw_sz // 2
-                cy = ct + max_loc[1] + th_sz // 2
-                norm_x = round(cx / w, 4)
-                norm_y = round(cy / h, 4)
-                # NEVER accept coordinates near the Settings Gear icon
                 if gear_pos and math.hypot(norm_x - gear_pos[0], norm_y - gear_pos[1]) < 0.09:
                     continue
                 best_score = max_val
