@@ -243,15 +243,15 @@ def detect_monolith(frame: np.ndarray, min_confidence: float = 0.44) -> Optional
 
     def _verify_monolith_at(mcx: int, mcy: int, scale: float = 1.0) -> bool:
         # Monolith tower is a physical ground obstacle inside the playable field:
-        # allow detection even when partially cut off near screen borders
+        # allow detection even when partially cut off near screen borders, while excluding top HUD / Chest Indicator band
         if mcx < 6 or mcx > w - 16:
             return False
-        if mcy < int(h * 0.08) or mcy > int(h * 0.975):
+        if mcy < int(h * 0.12) or mcy > int(h * 0.96):
             return False
         if (mcx < int(w * 0.20) or mcx > int(w * 0.80)) and mcy < int(h * 0.22):
             return False
-        box_w = max(24, int(36 * scale))
-        box_h = max(36, int(56 * scale))
+        box_w = max(24, int(34 * scale))
+        box_h = max(36, int(52 * scale))
         y0, y1 = max(0, mcy - box_h), min(h, mcy + box_h)
         x0, x1 = max(0, mcx - box_w), min(w, mcx + box_w)
         roi = frame[y0:y1, x0:x1]
@@ -260,22 +260,44 @@ def detect_monolith(frame: np.ndarray, min_confidence: float = 0.44) -> Optional
         rB = roi[:, :, 0].astype(int)
         rG = roi[:, :, 1].astype(int)
         rR = roi[:, :, 2].astype(int)
-        # Distinctive vertical crimson rune glyph in center of monolith
-        # (pure crimson R >= 80, G <= 75, B <= 75 is invariant to ground colors, even on orange/red maps)
-        red_mask = (rR >= 80) & (rG <= 75) & (rB <= 75)
-        red_count = int(np.sum(red_mask))
-        min_red = max(8, int(14 * scale))
-        if red_count < min_red:
+
+        # 1. Reject Chest Indicator bubbles (bright cream/beige circular background)
+        beige = (rR >= 210) & (rG >= 195) & (rB >= 150) & (rR - rB >= 20)
+        if int(np.sum(beige)) >= max(20, int(30 * scale)):
             return False
-        ys, xs = np.where(red_mask)
-        red_h = int(ys.max() - ys.min()) + 1
-        # Real monolith rune is vertically elongated
-        if red_h < max(14, int(18 * scale)):
+
+        # 2. Reject pitch-black monster swarms and dark UI modal panels
+        pitch_black_frac = float(np.mean((rB <= 24) & (rG <= 24) & (rR <= 24)))
+        if pitch_black_frac > 0.30:
             return False
-        # Must have neutral gray/silver stone highlights or dark rock outline
-        stone = (np.abs(rB - rG) <= 6) & ((rR >= 115) | (rB <= 35) | ((rB >= 45) & (rB <= 120)))
-        stone_count = int(np.sum(stone))
-        if stone_count < max(15, int(22 * scale)):
+
+        # 3. Distinctive vertical glowing crimson rune glyph in center of monolith
+        # Pure crimson (R >= 115, G <= 52, B <= 52, R - G >= 68) excludes wooden brown chests (G >= 47, R - G <= 55)
+        red_mask = ((rR >= 115) & (rG <= 52) & (rB <= 52) & (rR - rG >= 68)).astype(np.uint8) * 255
+        red_count = int(np.sum(red_mask > 0))
+        if red_count < max(12, int(16 * scale)):
+            return False
+
+        # Verify a single tall vertical crimson rune fissure (rejects circular red monster cores)
+        r_closed = cv2.morphologyEx(red_mask, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (5, 13)))
+        rcnt, _, rstats, _ = cv2.connectedComponentsWithStats(r_closed, 8)
+        tall_rune = False
+        min_rh = max(15, int(19 * scale))
+        for ri in range(1, rcnt):
+            rw_i = rstats[ri, cv2.CC_STAT_WIDTH]
+            rh_i = rstats[ri, cv2.CC_STAT_HEIGHT]
+            if rh_i >= min_rh and (rh_i / max(1.0, float(rw_i))) >= 1.35:
+                tall_rune = True
+                break
+        if not tall_rune:
+            return False
+
+        # 4. Must have BOTH bright neutral silver-gray stone facet highlights AND dark rock outline
+        stone_hi = (rB >= 122) & (rG >= 122) & (np.abs(rB - rG) <= 6) & (rR >= rG - 4)
+        stone_dark = (rB <= 42) & (rG <= 42) & (rR <= 68) & (np.abs(rB - rG) <= 8)
+        if int(np.sum(stone_hi)) < max(20, int(32 * scale)):
+            return False
+        if int(np.sum(stone_dark)) < max(16, int(24 * scale)):
             return False
         return True
 
@@ -312,17 +334,17 @@ def detect_monolith(frame: np.ndarray, min_confidence: float = 0.44) -> Optional
     B = frame[:, :, 0].astype(int)
     G = frame[:, :, 1].astype(int)
     R = frame[:, :, 2].astype(int)
-    crimson = ((R >= 80) & (G <= 65) & (B <= 65)).astype(np.uint8) * 255
-    crimson[: int(h * 0.085), :] = 0
-    crimson[int(h * 0.97) :, :] = 0
-    closed = cv2.morphologyEx(crimson, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (7, 25)))
+    crimson = ((R >= 115) & (G <= 52) & (B <= 52) & (R - G >= 68)).astype(np.uint8) * 255
+    crimson[: int(h * 0.12), :] = 0
+    crimson[int(h * 0.96) :, :] = 0
+    closed = cv2.morphologyEx(crimson, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (5, 13)))
     cnt, _, stats, centroids = cv2.connectedComponentsWithStats(closed, 8)
     best_cand = None
     best_score = 0.0
     for i in range(1, cnt):
         rx, ry, rw, rh, area = stats[i]
         cx, cy = int(round(centroids[i][0])), int(round(centroids[i][1]))
-        if rh >= max(18, int(span * 0.035)) and area >= 25:
+        if rh >= max(18, int(span * 0.035)) and (rh / max(1.0, float(rw))) >= 1.35 and area >= 20:
             if _verify_monolith_at(cx, cy, base_scale):
                 score = float(area * min(rh, 200))
                 if score > best_score:
@@ -493,6 +515,12 @@ def inspect_game(
     chest_type = getattr(chest_target, "chest_type", "treasure_chest")
     chest_weight = getattr(chest_target, "weight", 24.0)
     raw_monolith = detect_monolith(frame) if gameplay else None
+    if raw_monolith is not None and chest_target is not None:
+        all_chests = getattr(chest_target, "all_positions", None) or ([chest_pos] if chest_pos else [])
+        for cx_c, cy_c in all_chests:
+            if math.hypot(raw_monolith[0] - cx_c, raw_monolith[1] - cy_c) < max(55.0, span * 0.11):
+                raw_monolith = None
+                break
     monolith_detected = raw_monolith is not None
     monolith_pos = raw_monolith
     if monolith_pos is None and gameplay and known_monolith is not None:
@@ -2481,18 +2509,11 @@ def detect_obtain_button(frame: np.ndarray, min_confidence: float = 0.68) -> Opt
     if best_score >= min_confidence and best_match:
         return (round(best_match[0] / w, 4), round(best_match[1] / h, 4))
 
-    # Fallback via Windows OCR: Look for 'obtain'
+    # Fallback via Windows OCR: Look for 'obtain' only when ROI looks like a dark modal button bar with bright text
+    if float(np.mean(gray_roi <= 65)) < 0.35 or float(np.mean(gray_roi >= 165)) < 0.004:
+        return None
     try:
-        import asyncio
-        import winocr
-        from PIL import Image
-
-        pil_roi = Image.fromarray(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB))
-
-        async def _ocr_obtain():
-            return await winocr.recognize_pil(pil_roi, lang="en")
-
-        ocr_res = asyncio.run(_ocr_obtain())
+        ocr_res = asyncio.run(recognize_roi(roi))
         for line in ocr_res.lines:
             if "obtain" in line.text.lower():
                 if line.words:

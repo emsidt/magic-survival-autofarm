@@ -1007,6 +1007,17 @@ class VisionTests(unittest.TestCase):
             dx_red, dy_red = choose_direction(v_red, elapsed=0.0)
             self.assertLess(dx_red, -0.85, "Must charge West towards the monolith on the left edge")
 
+        # 5. Must NEVER confuse Chest Indicators or Red-Core Monsters for a Monolith (media_1794649337118_27faeff0.png)
+        img_false_path = r"C:/Users/User/.gemini/antigravity/brain/2dc840cb-72eb-45f9-92e9-a3fe999f18b4/.user_uploaded/media_1794649337118_27faeff0.png"
+        if os.path.isfile(img_false_path):
+            img_false_desktop = cv2.imread(img_false_path)
+            # Crop the LDPlayer game canvas from the desktop screenshot
+            canvas_false = cv2.resize(img_false_desktop[24:598, 66:390], (540, 960))
+            self.assertIsNone(detect_monolith(canvas_false), "Must not mistake Chest Indicator or red-core monsters for Monolith")
+            v_false = inspect_game(canvas_false)
+            self.assertIsNone(v_false.monolith)
+            self.assertIsNotNone(v_false.chest, "Must still detect the Chest Indicator as a chest")
+
     def test_chest_color_fallback_and_priority(self):
         from botcore import detect_chest, choose_direction
         import os
