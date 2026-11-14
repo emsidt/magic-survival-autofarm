@@ -197,8 +197,8 @@ def run_cli_bot():
     last_rule_click = {}
     last_boss_alert_time = 0.0
     last_focus_warning = 0.0
-    last_lobby_gold: Optional[int] = None
-    last_lobby_gems: Optional[int] = None
+    last_lobby_gold: int | None = None
+    last_lobby_gems: int | None = None
 
     try:
         while True:
@@ -905,22 +905,27 @@ def run_cli_bot():
                         time.sleep(1.0)
                     continue
 
-                # 14. PHÁT HIỆN QUẢNG CÁO NGOÀI TRẬN ĐẤU (Video, Playable ad, AdMob) -> Bấm X hoặc Close tắt
+                # 14. PHÁT HIỆN QUẢNG CÁO NGOÀI TRẬN ĐẤU (Video, Playable ad, AdMob) -> Bấm X / Skip / Đóng tắt
                 ad_x = botcore.detect_close_button(frame) if config.get("auto_close_ads", True) else None
                 if ad_x:
                     controller.release()
                     match_running = False
                     if now - last_auto_action_time >= 1.2:
                         last_auto_action_time = now
-                        corner_side = "trên bên trái" if ad_x[0] < 0.5 else "trên bên phải"
+                        if ad_x[1] > 0.25 and ad_x[1] < 0.75:
+                            loc_desc = "hộp thoại giữa màn hình"
+                        else:
+                            pos_y = "trên" if ad_x[1] < 0.5 else "dưới"
+                            pos_x = "trái" if ad_x[0] < 0.5 else "phải"
+                            loc_desc = f"góc {pos_y} {pos_x}"
                         if close_ad(controller, rect, capture, target=ad_x) is not None:
-                            print(f"[Quảng cáo] Đã bấm nút 'X' góc {corner_side} tại {ad_x} để tắt quảng cáo.")
+                            print(f"[Quảng cáo] Đã bấm nút đóng/bỏ qua ({loc_desc}) tại ({ad_x[0]:.2f}, {ad_x[1]:.2f}) để tắt quảng cáo.")
                         time.sleep(1.2)
                     continue
                 elif config.get("auto_close_ads", True) and botcore.is_ad_screen(frame):
                     controller.release()
                     match_running = False
-                    if now - last_auto_action_time >= 3.0:
+                    if now - last_auto_action_time >= 2.0:
                         last_auto_action_time = now
                         if back_from_ad(controller, rect, capture):
                             print("[Quảng cáo] Đã xác nhận còn quảng cáo trên ảnh mới rồi bấm Back.")

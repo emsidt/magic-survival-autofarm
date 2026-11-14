@@ -137,3 +137,30 @@ class AdCloseTextTests(unittest.TestCase):
         self.assertFalse(vis.gameplay)
         self.assertTrue(vis.modal)
         self.assertTrue(botcore.is_ad_screen(frame))
+
+    def test_single_character_cross_in_corner_detected(self):
+        frame = np.zeros((900, 500, 3), np.uint8)
+        for char in ("x", "X", "✕", "✖", "×"):
+            with self.subTest(char=char):
+                word = Mock(text=char, bounding_rect=Mock(x=450, y=30, width=20, height=20))
+                mock_res = Mock(lines=[Mock(text=char, words=[word])])
+                with patch("winocr.recognize_pil", new=AsyncMock(return_value=mock_res)):
+                    pt = botcore.detect_ad_close_text(frame)
+                    self.assertIsNotNone(pt)
+                    self.assertAlmostEqual(pt[0], 460 / 500, delta=0.02)
+                    self.assertAlmostEqual(pt[1], 40 / 900, delta=0.02)
+
+    def test_single_character_cross_in_center_rejected(self):
+        # A cross or 'x' in the center of the screen (e.g. gameplay or dialog body) must not be clicked
+        frame = np.zeros((900, 500, 3), np.uint8)
+        word = Mock(text="x", bounding_rect=Mock(x=240, y=450, width=20, height=20))
+        mock_res = Mock(lines=[Mock(text="x", words=[word])])
+        with patch("winocr.recognize_pil", new=AsyncMock(return_value=mock_res)):
+            self.assertIsNone(botcore.detect_ad_close_text(frame))
+
+    def test_extended_dismissal_labels(self):
+        frame = np.zeros((900, 500, 3), np.uint8)
+        for text in ("Skip reward", "Tap to skip", "Chạm để bỏ qua", "Thoát video", "Hủy", "Cancel", "Claim", "Nhận thưởng", "Quay lại"):
+            with self.subTest(text=text), patch("winocr.recognize_pil", new=AsyncMock(return_value=self.recognize(text, 50))):
+                pt = botcore.detect_ad_close_text(frame)
+                self.assertIsNotNone(pt)

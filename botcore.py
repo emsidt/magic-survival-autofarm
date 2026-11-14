@@ -54,10 +54,10 @@ CHEST_SPECS = [
 ]
 
 _CACHED_SMALL_CHEST_TEMPLATES: list[tuple[str, np.ndarray, float, int, int, bool]] = []
-_IMAGE_CACHE: dict[tuple[str, int], Optional[np.ndarray]] = {}
+_IMAGE_CACHE: dict[tuple[str, int], np.ndarray | None] = {}
 
 
-def get_cached_image(path: Union[str, Path], flags: int = cv2.IMREAD_COLOR) -> Optional[np.ndarray]:
+def get_cached_image(path: str | Path, flags: int = cv2.IMREAD_COLOR) -> np.ndarray | None:
     """Read image from disk once and cache in memory to eliminate repeated disk I/O."""
     p_str = str(path)
     key = (p_str, flags)
@@ -1350,7 +1350,7 @@ def detect_pause_button(frame: np.ndarray, threshold: float = 0.70) -> Optional[
 
 
 def detect_ad_close_text(frame: np.ndarray, gear_pos=None) -> Optional[tuple[float, float]]:
-    """Locate complete dismiss labels, including Vietnamese OCR without accents."""
+    """Locate complete dismiss labels, skip buttons, and corner dismissal icons."""
     try:
         import asyncio
         import winocr
@@ -1373,9 +1373,12 @@ def detect_ad_close_text(frame: np.ndarray, gear_pos=None) -> Optional[tuple[flo
             "close", "close ad", "close video", "dismiss",
             "dong", "dong lai", "dong quang cao", "dong video", "dong app", "dong cua so",
             "thoat", "thoat quang cao", "thoat video", "quit", "quit ad", "quit video", "discard", "leave", "roi khoi",
-            "skip", "skip ad", "skip video", "bo qua", "bo qua quang cao", "bo qua video",
-            "no thanks", "not now", "khong cam on", "de sau",
-            "quay lai game", "tro ve game", "continue to game",
+            "skip", "skip ad", "skip video", "skip reward", "tap to skip", "bo qua", "bo qua quang cao", "bo qua video", "cham de bo qua",
+            "no thanks", "not now", "khong cam on", "de sau", "later",
+            "quay lai game", "tro ve game", "continue to game", "quay lai", "tro ve", "back",
+            "continue", "tiep tuc", "tiep theo", "next", "resume",
+            "cancel", "huy", "huy bo",
+            "claim", "nhan", "nhan thuong", "nhan phan thuong", "collect",
             # Common OCR misreads of small 'Đóng' without accents
             "06 ng", "o6 ng", "oong", "0ong", "d0ng", "d6ng", "06ng", "o6ng", "d6 ng",
             "d6ng video", "d0ng video", "06ng video", "06 ng video",
@@ -1389,7 +1392,11 @@ def detect_ad_close_text(frame: np.ndarray, gear_pos=None) -> Optional[tuple[flo
             if re.match(r"^(06|o6|0o|oo|d0|do|d6)[\s]*ng[\s]+(video|quang cao|app)$", lbl):
                 return True
             return False
-        for line in asyncio.run(recognize()).lines:
+
+        lines = asyncio.run(recognize()).lines
+
+        # 1. Primary pass: locate explicit dismissal words, buttons, and phrases (Đóng, Close, Skip, Bỏ qua, etc.)
+        for line in lines:
             # Questions and dialog headings with '?' (e.g. "Đóng quảng cáo?", "Close ad?") are prompts, not buttons.
             if "?" in line.text or any("?" in w.text for w in line.words):
                 continue
@@ -1415,6 +1422,22 @@ def detect_ad_close_text(frame: np.ndarray, gear_pos=None) -> Optional[tuple[flo
                 if gear_pos and math.dist(point, gear_pos) < 0.09:
                     continue
                 return point
+
+        # 2. Secondary pass: check for standalone single-character dismissal icons ('X', '✕', '>', '<') recognized in outer corners
+        for line in lines:
+            if "?" in line.text or re.search(r"\d", line.text):
+                continue
+            for word in line.words:
+                raw = word.text.strip().lower()
+                if raw in {"x", "✕", "✖", "×", ">", ">>", "<", "<<"}:
+                    box = word.bounding_rect
+                    cx = (box.x + box.width / 2.0) / w
+                    cy = (box.y + box.height / 2.0) / h
+                    # In outer corners, avoiding extreme top emulator bar (cy < 0.025)
+                    if (cx <= 0.28 or cx >= 0.72) and ((0.025 <= cy <= 0.20) or (0.80 <= cy <= 0.97)):
+                        if gear_pos and math.hypot(cx - gear_pos[0], cy - gear_pos[1]) < 0.09:
+                            continue
+                        return (round(cx, 4), round(cy, 4))
     except Exception:
         pass
     return None
@@ -1469,7 +1492,7 @@ def _get_close_button_templates() -> list[np.ndarray]:
         templates.append(t_circ)
         templates.append(cv2.bitwise_not(t_circ))
 
-    # Priority 5: Fast-Forward / Skip Arrow (>> or >)
+    # Priority 5: Fast-Forward / Skip Arrow (>> or > or < or <<)
     for h_sz in (16, 20, 24, 28, 36):
         w_sz = int(h_sz * 1.0)
         t_skip = np.zeros((h_sz, w_sz), dtype=np.uint8)
@@ -1480,6 +1503,21 @@ def _get_close_button_templates() -> list[np.ndarray]:
         cv2.line(t_skip, (step, 1), (w_sz - 2, mid_y), 255, 2)
         cv2.line(t_skip, (w_sz - 2, mid_y), (step, h_sz - 2), 255, 2)
         templates.append(t_skip)
+        templates.append(cv2.bitwise_not(t_skip))
+
+        t_gt = np.zeros((h_sz, max(8, int(w_sz * 0.6))), dtype=np.uint8)
+        cv2.line(t_gt, (2, 1), (t_gt.shape[1] - 2, mid_y), 255, 2)
+        cv2.line(t_gt, (t_gt.shape[1] - 2, mid_y), (2, h_sz - 2), 255, 2)
+        templates.append(t_gt)
+        templates.append(cv2.bitwise_not(t_gt))
+
+        t_lt = cv2.flip(t_gt, 1)
+        templates.append(t_lt)
+        templates.append(cv2.bitwise_not(t_lt))
+
+        t_lt2 = cv2.flip(t_skip, 1)
+        templates.append(t_lt2)
+        templates.append(cv2.bitwise_not(t_lt2))
 
     _CACHED_CLOSE_BUTTON_TEMPLATES = templates
     return _CACHED_CLOSE_BUTTON_TEMPLATES
@@ -1514,7 +1552,7 @@ def detect_close_button(frame: np.ndarray, threshold: float = 0.62) -> Optional[
     h, w = frame.shape[:2]
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-    # Ad close buttons appear strictly in the outer corners (top 9.5% of screen, max 180px)
+    # Ad close buttons appear strictly in the outer top corners (top 9.5% of screen, max 180px)
     corner_h = min(int(h * 0.095), 180)
     corners = [
         # Top-right corner (standard position for Google AdMob, Unity, AppLovin mobile ads)
@@ -1522,6 +1560,41 @@ def detect_close_button(frame: np.ndarray, threshold: float = 0.62) -> Optional[
         # Top-left corner (position in Google Play Games portrait ads)
         (0, 0, int(w * 0.30), corner_h),
     ]
+
+    best_coord = None
+    best_score = 0.0
+
+    templates = _get_close_button_templates()
+
+    for cl, ct, cr, cb in corners:
+        roi = gray[ct:cb, cl:cr]
+        if roi.shape[0] < 12 or roi.shape[1] < 12:
+            continue
+        for tmpl in templates:
+            th_sz, tw_sz = tmpl.shape
+            if roi.shape[0] < th_sz or roi.shape[1] < tw_sz:
+                continue
+            res = cv2.matchTemplate(roi, tmpl, cv2.TM_CCOEFF_NORMED)
+            _, max_val, _, max_loc = cv2.minMaxLoc(res)
+            if max_val > best_score:
+                patch = roi[max_loc[1]:max_loc[1] + th_sz, max_loc[0]:max_loc[0] + tw_sz]
+                # Reject completely flat uniform patches without contrast
+                if (int(patch.max()) - int(patch.min())) < 35:
+                    continue
+                cx = cl + max_loc[0] + tw_sz // 2
+                cy = ct + max_loc[1] + th_sz // 2
+                norm_x = round(cx / w, 4)
+                norm_y = round(cy / h, 4)
+                # NEVER accept coordinates near the Settings Gear icon
+                if gear_pos and math.hypot(norm_x - gear_pos[0], norm_y - gear_pos[1]) < 0.09:
+                    continue
+                best_score = max_val
+                best_coord = (norm_x, norm_y)
+
+    if best_score >= threshold and best_coord is not None:
+        return best_coord
+
+    return None
 
     best_coord = None
     best_score = 0.0

@@ -1079,6 +1079,20 @@ class FarmApp:
                                 match_running = True
                                 ad_wait_start_time = 0.0
                             if self.config.get("auto_close_ads", True):
+                                tap_cont = botcore.detect_tap_to_continue(frame)
+                                if tap_cont and (start_tick - last_ad_close_time >= 1.0):
+                                    controller.release()
+                                    self.previous_direction = None
+                                    match_running = False
+                                    controller.tap(list(tap_cont), rect)
+                                    now_tick = time.monotonic()
+                                    last_ad_close_time = now_tick
+                                    last_auto_action_time = now_tick
+                                    self._push("status", "[Quảng cáo] Hết quảng cáo (No Ads) -> Đã bấm 'Tap to Continue'.")
+                                    auto_action_done = True
+                                    time.sleep(0.8)
+                                    continue
+
                                 close_pos = detect_close_button(frame)
                                 if close_pos and (start_tick - last_ad_close_time >= 1.0):
                                     controller.release()
