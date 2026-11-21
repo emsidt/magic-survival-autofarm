@@ -543,7 +543,7 @@ class FarmApp:
         self.auto_chest = tk.BooleanVar(value=bool(self.config.get("auto_chest", True)))
         self.recorder = DataRecorder(
             enabled=bool(self.config.get("record_gameplay_data", True)),
-            max_runs=int(self.config.get("max_data_runs", 50)),
+            max_runs=int(self.config.get("max_data_runs", 0)),
         )
         self.learner = get_adaptive_learner()
         self.status = tk.StringVar(value="Sẵn sàng. F8 bắt đầu / tạm dừng; F9 dừng.")

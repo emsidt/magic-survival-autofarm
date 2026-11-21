@@ -11,9 +11,12 @@ from pathlib import Path
 import re
 import unicodedata
 from typing import Optional, Union
+import copy
 
 import cv2
 import numpy as np
+
+import knowledge
 
 _BASE_DIR = Path(__file__).resolve().parent
 
@@ -46,6 +49,8 @@ class ChestTarget(tuple):
 
 
 CHEST_SPECS = [
+    ("special_chest", "assets/chests/special_chest_icon.png", 38.0, True),
+    ("special_chest", "assets/chests/special_chest_1x.png", 38.0, True),
     ("black_box", "assets/chests/black_box.png", 36.0, False),
     ("reliquary", "assets/chests/reliquary.png", 30.0, False),
     ("treasure_chest", "assets/chests/treasure_chest.png", 24.0, False),
@@ -86,12 +91,12 @@ def _get_fast_chest_templates() -> list[tuple[str, np.ndarray, float, int, int, 
             continue
         bh, bw = base_tmpl.shape[:2]
         # Multi-scale templates on 2x downsampled image (matching 0.70x to 2.0x raw screens, including 1080p LDPlayer)
-        for scale in (0.35, 0.45, 0.55, 0.70, 0.85, 1.00):
+        for scale in (0.35, 0.45, 0.50, 0.55, 0.70, 0.85, 1.00):
             tw = max(14, int(round(bw * scale)))
             th = max(12, int(round(bh * scale)))
             st = cv2.resize(base_tmpl, (tw, th))
             res.append((chest_type, st, weight, tw, th, is_indicator))
-            if "indicator" in rel_path:
+            if "indicator" in rel_path or "icon" in rel_path:
                 res.append((chest_type, cv2.flip(st, 1), weight, tw, th, is_indicator))
     _CACHED_SMALL_CHEST_TEMPLATES = res
     return _CACHED_SMALL_CHEST_TEMPLATES
@@ -109,7 +114,22 @@ def _verify_chest_color(
     H, S, V = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
     total_px = roi_bgr.shape[0] * roi_bgr.shape[1]
 
-    if chest_type == "treasure_chest":
+    if chest_type == "special_chest":
+        # Pure crimson horizontal line/mouth in center of special chest (R >= 125, G <= 50, B <= 50, R - G >= 70)
+        B, G, R = roi_bgr[:, :, 0].astype(int), roi_bgr[:, :, 1].astype(int), roi_bgr[:, :, 2].astype(int)
+        crimson = (R >= 125) & (G <= 50) & (B <= 50) & (R - G >= 70)
+        dark_lines = (V <= 65)
+        badge = (S <= 75) & (V >= 180)
+        crimson_frac = float(np.sum(crimson)) / total_px
+        dark_frac = float(np.sum(dark_lines)) / total_px
+        badge_frac = float(np.sum(badge)) / total_px
+        # Genuine special chest indicator must contain the distinctive crimson mouth, dark outlines, and circular cream badge
+        return bool(
+            crimson_frac >= 0.008
+            and dark_frac >= 0.05
+            and (is_indicator is False or badge_frac >= 0.15)
+        )
+    elif chest_type == "treasure_chest":
         # Rich amber/brown wood (H 5..28, S>=35, V>=25), or cream/white indicator badge (S<=75, V>=180)
         wood = (H >= 5) & (H <= 28) & (S >= 35) & (V >= 25)
         badge = (S <= 75) & (V >= 180)
@@ -153,6 +173,40 @@ def _verify_chest_color(
     return False
 
 
+def _detect_chests_by_color(frame: np.ndarray) -> list[tuple[int, int, float]]:
+    """Find wooden treasure chests (on-field AND edge indicator bubbles) by their saturated orange planks.
+
+    Template matching on grayscale fails on real 1080x1920 frames (score 0.45-0.57 for genuine field
+    chests), whereas the plank colour (H 5..22, S>=150, V>=140) is unique against brick/stone ground,
+    mana orbs (tiny) and monsters. Returns [(cx, cy, quality 0..1)] in frame pixels.
+    """
+    fh, fw = frame.shape[:2]
+    k = fw / 1080.0
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    mask = ((hsv[:, :, 0] >= 5) & (hsv[:, :, 0] <= 22) & (hsv[:, :, 1] >= 150) & (hsv[:, :, 2] >= 140)).astype(np.uint8)
+    ksz = max(3, int(round(9 * k)) | 1)
+    mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, np.ones((ksz, ksz), np.uint8))
+    n, _, stats, cents = cv2.connectedComponentsWithStats(mask)
+    exp_w, exp_h = 57.0 * k, 44.0 * k
+    out: list[tuple[int, int, float]] = []
+    for i in range(1, n):
+        x, y, w, h, area = (int(v) for v in stats[i])
+        if not (0.65 * exp_w <= w <= 1.45 * exp_w and 0.65 * exp_h <= h <= 1.45 * exp_h):
+            continue
+        fill = area / float(max(1, w * h))
+        if not (0.45 <= fill <= 0.95) or not (1.0 <= w / float(h) <= 1.8):
+            continue
+        # Genuine chests have a dark outline / lock; flat orange effects and fire do not.
+        pad = max(2, int(3 * k))
+        ring = hsv[max(0, y - pad) : y + h + pad, max(0, x - pad) : x + w + pad, 2]
+        dark = float(np.mean(ring <= 70)) if ring.size else 0.0
+        if dark < 0.03:
+            continue
+        quality = min(1.0, 0.6 + 0.4 * min(1.0, fill / 0.7))
+        out.append((int(cents[i][0]), int(cents[i][1]), quality))
+    return out
+
+
 def detect_chest(
     frame: np.ndarray,
     min_confidence: float = 0.55,
@@ -187,6 +241,10 @@ def detect_chest(
                 continue
             res = cv2.matchTemplate(small, tmpl, cv2.TM_CCOEFF_NORMED)
             eff_conf = max(min_confidence, 0.62) if is_indicator else min_confidence
+            # Rare grayscale shapes (reliquary / black box) are easily mimicked by skill swirls and
+            # brick texture; demand a much stronger template match than for plain chests.
+            if ctype in ("reliquary", "black_box") and not is_indicator:
+                eff_conf = max(eff_conf, 0.72)
             locs = np.where(res >= eff_conf)
             for pt_y, pt_x in zip(*locs):
                 val = float(res[pt_y, pt_x])
@@ -215,19 +273,73 @@ def detect_chest(
                         candidates.append((weight, val, ctype, (cx, cy)))
                         all_positions.append((cx, cy))
 
+    # Colour-based wooden chests (on-field + edge bubbles): reliable where template matching is not
+    for ccx, ccy, quality in _detect_chests_by_color(frame):
+        if ccy < top_hud_y:
+            continue
+        if (ccx < int(fw * 0.12) and ccy < int(fh * 0.095)) or (ccx > int(fw * 0.88) and ccy < int(fh * 0.095)):
+            continue
+        if math.hypot(ccx - px, ccy - py) < min_player_dist:
+            continue
+        if any(math.hypot(ccx - ox, ccy - oy) <= 30 for ox, oy in all_positions):
+            # Already found by template: keep that entry but add colour confidence below
+            for idx_c, (cw, cv_, ct_, cp_) in enumerate(candidates):
+                if ct_ == "treasure_chest" and math.hypot(ccx - cp_[0], ccy - cp_[1]) <= 30 and cv_ < quality:
+                    candidates[idx_c] = (cw, quality, ct_, cp_)
+            continue
+        candidates.append((24.0, quality, "treasure_chest", (ccx, ccy)))
+        all_positions.append((ccx, ccy))
+
     if candidates:
-        # Prioritize closer chests to the player character so the bot gathers them efficiently
+        # Prioritize closer chests to the player character so the bot gathers them efficiently.
+        # Confidence is part of the score so a weak, heavier-weighted false positive cannot beat a
+        # strong genuine chest that is close by.
         def _sort_key(item):
             w_val, conf, ctype, pt = item
             dist = math.hypot(pt[0] - px, pt[1] - py)
             proximity = 1.0 / (0.40 + dist / span)
-            return (proximity * w_val, conf)
+            return (proximity * w_val * (conf ** 3), conf)
 
         candidates.sort(key=_sort_key, reverse=True)
         best = candidates[0]
         return ChestTarget(best[3], best[2], best[0], all_positions)
 
     return None
+
+
+def monolith_is_chest_misdetection(
+    monolith: tuple[int, int],
+    chest_positions: list[tuple[int, int]],
+    span: float,
+) -> bool:
+    """A 'monolith' is only a chest/indicator misdetection when it sits on the SAME spot as a chest.
+
+    The old rule dropped any monolith within 0.11*span (~119px at 1080) of a chest, which discarded the REAL tower
+    whenever a chest dropped next to it (seen live: bot stood beside the tower and never entered it). The tower
+    (~180x166px) and a chest are separate objects a normal distance apart; only a near-identical centre is a mismatch.
+    """
+    limit = max(32.0, span * 0.035)
+    return any(math.hypot(monolith[0] - cx, monolith[1] - cy) < limit for cx, cy in chest_positions)
+
+
+def detect_wave_active(frame: np.ndarray) -> bool:
+    """True while a boss/skull wave is running: the HUD timer turns saturated orange (white otherwise).
+
+    Measured on live 1080x1920 frames: wave -> ~1200-1350 orange px / 0 white px in the timer ROI;
+    normal play -> 0 orange / ~1100 white. When this flips back to False the wave is cleared and the
+    Monolith spawns next to the player after ~1.5-2s.
+    """
+    if frame is None or frame.size == 0:
+        return False
+    h, w = frame.shape[:2]
+    roi = frame[int(h * 0.015) : int(h * 0.06), int(w * 0.38) : int(w * 0.62)]
+    if roi.size == 0:
+        return False
+    hsv = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
+    area_scale = (w / 1080.0) ** 2
+    orange = int(np.sum((hsv[:, :, 0] >= 5) & (hsv[:, :, 0] <= 20) & (hsv[:, :, 1] >= 150) & (hsv[:, :, 2] >= 180)))
+    white = int(np.sum((hsv[:, :, 1] <= 40) & (hsv[:, :, 2] >= 200)))
+    return bool(orange >= 350 * area_scale and orange > white)
 
 
 def detect_monolith(frame: np.ndarray, min_confidence: float = 0.44) -> Optional[tuple[int, int]]:
@@ -262,7 +374,7 @@ def detect_monolith(frame: np.ndarray, min_confidence: float = 0.44) -> Optional
         # allow detection even when partially cut off near screen borders, while excluding top HUD / Chest Indicator band
         if mcx < 6 or mcx > w - 16:
             return False
-        if mcy < int(h * 0.12) or mcy > int(h * 0.96):
+        if mcy < int(h * 0.16) or mcy > int(h * 0.96):
             return False
         if (mcx < int(w * 0.20) or mcx > int(w * 0.80)) and mcy < int(h * 0.22):
             return False
@@ -533,10 +645,8 @@ def inspect_game(
     raw_monolith = detect_monolith(frame) if gameplay else None
     if raw_monolith is not None and chest_target is not None:
         all_chests = getattr(chest_target, "all_positions", None) or ([chest_pos] if chest_pos else [])
-        for cx_c, cy_c in all_chests:
-            if math.hypot(raw_monolith[0] - cx_c, raw_monolith[1] - cy_c) < max(55.0, span * 0.11):
-                raw_monolith = None
-                break
+        if monolith_is_chest_misdetection(raw_monolith, all_chests, span):
+            raw_monolith = None
     monolith_detected = raw_monolith is not None
     monolith_pos = raw_monolith
     if monolith_pos is None and gameplay and known_monolith is not None:
@@ -571,6 +681,17 @@ def inspect_game(
     bosses = detect_boss_monsters(frame) if gameplay else []
     for bcx, bcy, br in bosses:
         cv2.circle(dark, (bcx, bcy), int(br * 1.50), 255, -1)
+
+    # Strict Magic Survival game logic:
+    # While active enemies/bosses are on the map, a milestone monolith CANNOT spawn!
+    inner_mask = np.zeros((h, w), dtype=bool)
+    inner_mask[int(h * 0.14) : int(h * 0.86), int(w * 0.10) : int(w * 0.82)] = True
+    active_combat_enemies = int(np.sum((enemy_mask > 0) & inner_mask))
+    has_active_threats = bool(bosses or active_combat_enemies > max(800, int(w * h * 0.003)))
+    if has_active_threats:
+        raw_monolith = None
+        monolith_pos = None
+        monolith_detected = False
     # Crucial: mask out the player's own dark character sprite at center so
     # distanceTransform measures distance to real enemies, not the player itself!
     # Clears both circular base and vertical humanoid/robe ellipse.
@@ -1964,6 +2085,21 @@ def detect_results_survival_time(frame: np.ndarray) -> Optional[tuple[int, int, 
     return None
 
 
+def reconcile_results_time(results_sec: Optional[float], last_hud_sec: float, tolerance: float = 45.0) -> tuple[float, bool]:
+    """Pick the survival time from the results-screen OCR vs the last HUD timer reading.
+
+    The last HUD reading is a LOWER BOUND of the real survival time (the run cannot be shorter than what the HUD
+    already showed). The results OCR sometimes drops the minute digits ('11:06' read as '00:06' -> 6s on a run with
+    13,000+ kills), which poisoned the learner. Returns (seconds, ocr_rejected).
+    """
+    last_hud_sec = max(0.0, float(last_hud_sec or 0.0))
+    if results_sec is None or results_sec <= 0:
+        return last_hud_sec, False
+    if last_hud_sec >= 60.0 and results_sec + tolerance < last_hud_sec:
+        return last_hud_sec, True
+    return float(results_sec), False
+
+
 def detect_results_stats(frame: np.ndarray) -> dict[str, int]:
     """Detect kills, gold, and gems on the 'Experiment Failed' / Results screen.
     Returns {'kills': int, 'gold': int, 'gems': int}.
@@ -2222,6 +2358,44 @@ def detect_character_option(frame: np.ndarray, character: str = "summoner") -> O
             best_score = score
             best = ((loc[0] + sw / 2) / w, (top + loc[1] + sh / 2) / h)
     return best if best_score >= 0.78 else None
+
+
+def character_has_template(character: str) -> bool:
+    """True when assets/characters/<character>.png exists (icon-based lookup is possible)."""
+    if not isinstance(character, str) or not re.fullmatch(r"[a-z_]+", character):
+        return False
+    return (_BASE_DIR / "assets" / "characters" / f"{character}.png").is_file()
+
+
+# Character roster grid (24 icons) measured on the 558x990 canvas: 4 full rows of 5 + a last row of 4.
+_ROSTER_COLS_5 = (110, 195, 278, 365, 455)
+_ROSTER_COLS_4 = (140, 238, 335, 425)
+_ROSTER_ROWS = (395, 492, 590, 690, 800)
+_ROSTER_REF = (558.0, 990.0)
+_ROSTER_ANCHOR_REF = (195.0 / 558.0, 492.0 / 990.0)  # the Summoner icon (row 2, col 2)
+# Known roster cells (0-based, row-major). Always verified by reading the name header before confirming.
+CHARACTER_ROSTER_CELLS: dict[str, int] = {
+    "summoner": 6,        # row 2, col 2
+    "electromancer": 15,  # row 4, col 1
+}
+
+
+def get_character_grid_cells(frame: np.ndarray) -> list[tuple[float, float]]:
+    """Return the 24 roster icon centres as normalised (x, y), row-major.
+
+    The grid is anchored on the Summoner icon (found by template) so a vertical scroll/offset of the
+    roster does not matter; without an anchor the canvas reference positions are used.
+    """
+    dy = 0.0
+    anchor = detect_character_option(frame, "summoner")
+    if anchor is not None:
+        dy = anchor[1] - _ROSTER_ANCHOR_REF[1]
+    cells: list[tuple[float, float]] = []
+    for r, ry in enumerate(_ROSTER_ROWS):
+        cols = _ROSTER_COLS_4 if r == len(_ROSTER_ROWS) - 1 else _ROSTER_COLS_5
+        for cx in cols:
+            cells.append((round(cx / _ROSTER_REF[0], 4), round(ry / _ROSTER_REF[1] + dy, 4)))
+    return cells
 
 
 def is_character_selected(frame: np.ndarray, character: str = "summoner") -> bool:
@@ -2607,7 +2781,7 @@ def is_three_card_chest(frame: np.ndarray, obtain_x: float = 0.50) -> bool:
 SKILL_SYNERGY_KEYWORDS: dict[str, list[str]] = {
     "spirit": [
         "spirit", "blade", "sword of devil", "ether blade", "wand", "silver bullet",
-        "projectile", "number of projectiles", "projectile speed",
+        "projectile", "number of projectiles", "projectile speed", "shuriken", "mirror",
     ],
     "electric_shock": [
         "electric shock", "electric", "shock", "lightning", "lightning rod", "thunderbolt",
@@ -2673,6 +2847,7 @@ SKILL_SYNERGY_KEYWORDS: dict[str, list[str]] = {
 # Mapping combination skills to their component skills
 COMBINATION_COMPONENTS: dict[str, list[str]] = {
     "telekinetic_sword": ["spirit", "electric_shock"],
+    "aura_blade": ["spirit", "electric_shock"],
     "superconductivity": ["electric_shock", "spirit"],
     "current_overload": ["electric_shock", "spirit"],
     "vortex": ["cyclone", "satellite"],
@@ -2680,6 +2855,7 @@ COMBINATION_COMPONENTS: dict[str, list[str]] = {
     "neutron_generation": ["satellite", "cyclone"],
     "perpetual_engine": ["magic_circle", "arcane_ray"],
     "overmind": ["magic_circle"],
+    "deus_ex_machina": ["overmind"],
     "demon_equation": ["fireball", "energy_bolt"],
     "frenzy": ["flash_shock", "spirit"],
     "prism_spree": ["arcane_ray", "spirit"],
@@ -2736,17 +2912,17 @@ SPECIFIC_MAGIC_IDENTIFIERS: dict[str, list[str]] = {
     "blizzard": ["blizzard", "sub-zero", "sub zero"],
     "cyclone": ["cyclone", "weather vane"],
     "tsunami": ["tsunami", "wave-calming flute", "wave calming flute"],
-    "satellite": ["satellite", "astrolabe"],
-    "spirit": ["spirit", "sword of devil", "ether blade"],
+    "satellite": ["satellite", "astrolabe", "glass orb", "glass marble"],
+    "spirit": ["spirit", "sword of devil", "ether blade", "shuriken", "mirror"],
     "electric_zone": ["electric zone"],
     "frost_nova": ["frost nova"],
-    "arcane_ray": ["arcane ray"],
+    "arcane_ray": ["arcane ray", "laser pointer", "crystal prism"],
     "flash_shock": ["flash shock"],
-    "fireball": ["fireball", "phoenix bow"],
-    "incineration": ["incineration", "cerberus"],
-    "energy_bolt": ["energy bolt", "charged bolt"],
-    "lava_zone": ["lava zone"],
-    "magic_bolt": ["magic bolt"],
+    "fireball": ["fireball", "phoenix bow", "candle", "firecracker"],
+    "incineration": ["incineration", "cerberus", "flamethrower"],
+    "energy_bolt": ["energy bolt", "energybolt", "charged bolt", "magitech module", "mechanical arm", "split into 2"],
+    "lava_zone": ["lava zone", "melting", "magma"],
+    "magic_bolt": ["magic bolt", "magic bullet", "doppelganger", "continuous casting"],
     "electric_shock": ["electric shock", "lightning rod"],
     "shield": ["organic shield"],
     "magic_circle": ["magic circle", "magic grimoire"],
@@ -2757,9 +2933,9 @@ SPECIFIC_MAGIC_IDENTIFIERS: dict[str, list[str]] = {
 
 def check_unlearned_magic_target(full_text: str, active_skills: Optional[set[str]] = None) -> Optional[str]:
     """Check if the artifact description specifically targets a magic skill that the player DOES NOT have.
-    Returns the name of the unlearned magic (e.g. 'meteor') if mismatched, or None if acceptable.
+    Returns the name of the unlearned magic (e.g. 'energy_bolt') if mismatched, or None if acceptable.
     """
-    if not active_skills:
+    if active_skills is None:
         return None
     text_lower = full_text.lower()
     expanded_skills = set(active_skills)
@@ -2806,6 +2982,16 @@ def is_toy_castle_artifact(text: str) -> bool:
     return False
 
 
+def is_dragon_tongue_artifact(text: str) -> bool:
+    """Check if the text refers to Dragon's Tongue (God-tier SSS Magic Combination & Amplification artifact)."""
+    t = text.lower().strip()
+    if any(k in t for k in ("dragon's tongue", "dragons tongue", "dragon tongue", "dragontongue", "dragon'stongue")):
+        return True
+    if "dragon" in t and "tongue" in t:
+        return True
+    return False
+
+
 # Special Grade Artifacts (Red Rarity / Unique Game-Changers) in Magic Survival
 SPECIAL_ARTIFACT_NAMES: set[str] = {
     "toy castle", "toycastle", "magic toys", "magictoys", "magic toy", "toy kingdom",
@@ -2819,7 +3005,7 @@ SPECIAL_ARTIFACT_NAMES: set[str] = {
     "peace treaty",
     "assassination",
     "werewolf",
-    "dragon tongue", "dragontongue",
+    "dragon tongue", "dragontongue", "dragon's tongue", "dragons tongue",
     "cyborg",
     "jet engine", "jetengine",
     "space-time circuit", "space time circuit", "time circuit",
@@ -2971,11 +3157,15 @@ def evaluate_selected_chest_artifact(
     bonus = 0
     tags: list[str] = [tier_names[tier]]
 
-    # Toy Castle (MagicToys) has absolute top priority over any artifact in the game!
+    # Toy Castle (MagicToys) and Dragon's Tongue have absolute top priority over any artifact in the game!
     if is_toy_castle_artifact(full_text):
         bonus += 50000
         tags.append("★ Ưu Tiên Tuyệt Đối: Toy Castle / MagicToys")
+    elif is_dragon_tongue_artifact(full_text):
+        bonus += 35000
+        tags.append("★ Thần Khí Meta: Dragon's Tongue (Lưỡi Rồng)")
     elif tier == 4 or is_special_artifact(full_text):
+        bonus += 3000
         tags.append("★ Trang Bị Special (Ưu Tiên)")
 
     if has_s_tier:
@@ -2998,6 +3188,12 @@ def evaluate_selected_chest_artifact(
     if syn_matched:
         bonus += syn_bonus
         tags.append(f"Build: {'+'.join(syn_matched)}")
+
+    # Artifact-set synergy (35 unique synergies): reward artifacts that complete / progress a set
+    set_bonus, set_tag = knowledge.artifact_synergy_bonus(artifact_name)
+    if set_bonus:
+        bonus += set_bonus
+        tags.append(set_tag)
 
     # Anti-synergy: Penalty if the artifact specifically buffs a skill not in the player's build
     unlearned_magic = check_unlearned_magic_target(full_text, active_skills)
@@ -3265,11 +3461,15 @@ def evaluate_selected_shop_artifact(
     bonus = 0
     tags: list[str] = [tier_names[tier]]
 
-    # Toy Castle (MagicToys) has absolute top priority over any artifact in the game!
+    # Toy Castle (MagicToys) and Dragon's Tongue have absolute top priority over any artifact in the game!
     if is_toy_castle_artifact(full_text):
         bonus += 50000
         tags.append("★ Ưu Tiên Tuyệt Đối: Toy Castle / MagicToys")
+    elif is_dragon_tongue_artifact(full_text):
+        bonus += 35000
+        tags.append("★ Thần Khí Meta: Dragon's Tongue (Lưỡi Rồng)")
     elif tier == 4 or is_special_artifact(full_text):
+        bonus += 3000
         tags.append("★ Trang Bị Special (Ưu Tiên)")
 
     if has_s_tier:
@@ -3292,6 +3492,12 @@ def evaluate_selected_shop_artifact(
     if syn_matched:
         bonus += syn_bonus
         tags.append(f"Build: {'+'.join(syn_matched)}")
+
+    # Artifact-set synergy (35 unique synergies): reward artifacts that complete / progress a set
+    set_bonus, set_tag = knowledge.artifact_synergy_bonus(artifact_name)
+    if set_bonus:
+        bonus += set_bonus
+        tags.append(set_tag)
 
     # Anti-synergy: Penalty if the artifact specifically buffs a skill not in the player's build
     unlearned_magic = check_unlearned_magic_target(full_text, active_skills)
@@ -3407,15 +3613,63 @@ STRENGTHEN_MAGIC_GRID: list[tuple[str, str, tuple[float, float]]] = [
 ]
 
 
+def _strengthen_base_skill(skill_key: str) -> Optional[str]:
+    """Map a build key to the grid spell that Enchant should buff.
+
+    A plain spell maps to itself; a fusion (black_hole, telekinetic_sword, super_cyclone...) maps to its PRIMARY
+    spell (the one that is enhanced by the combination). Passives / unknown keys map to None.
+    """
+    grid_keys = {item[0] for item in STRENGTHEN_MAGIC_GRID}
+    if skill_key in grid_keys:
+        return skill_key
+    fusion = knowledge.fusion_by_name(skill_key)
+    if fusion:
+        base = re.sub(r"[^a-z0-9]+", "_", fusion["primary"]["skill"].lower()).strip("_")
+        return base if base in grid_keys else None
+    return None
+
+
+def build_strengthen_preference(
+    character: Optional[str],
+    skill_priority: Optional[list[str]] = None,
+    active_skills: Optional[set[str]] = None,
+) -> list[str]:
+    """Ordered spell keys to Enchant: the class' own spell first (Electromancer -> Electric Zone, Summoner -> Spirit),
+    then the build's spells (owned ones before not-yet-owned), following the build's skill_priority order."""
+    owned = set(active_skills or ())
+    order: list[str] = []
+
+    def add(key: Optional[str]) -> None:
+        if key and key not in order:
+            order.append(key)
+
+    start = CHARACTER_STARTING_SKILLS.get(str(character or "").lower().strip())
+    add(_strengthen_base_skill(start) if start else None)
+    keyed = [(k, _strengthen_base_skill(k)) for k in (skill_priority or [])]
+    for key, base in keyed:
+        if base and (key in owned or base in owned):
+            add(base)
+    for _, base in keyed:
+        add(base)
+    return order
+
+
 def get_strengthen_magic_targets(
     strengthened_skills: Optional[set[str]] = None,
+    preferred_skills: Optional[list[str]] = None,
 ) -> list[tuple[str, str, tuple[float, float]]]:
     """Return ordered (skill_key, label, (rel_x, rel_y)) candidates for 'Choose the Magic to strengthen'.
-    Prioritizes Spirit (Row 1, Col 3) first; if Spirit was already strengthened, picks Cyclone (Row 3, Col 2).
+
+    `preferred_skills` (see build_strengthen_preference) goes first in that order; without it the legacy grid order
+    is used. Spells already strengthened this run are moved to the end.
     """
     used = set(strengthened_skills or ())
-    available = [item for item in STRENGTHEN_MAGIC_GRID if item[0] not in used]
-    already_used = [item for item in STRENGTHEN_MAGIC_GRID if item[0] in used]
+    grid = list(STRENGTHEN_MAGIC_GRID)
+    if preferred_skills:
+        rank = {k: i for i, k in enumerate(preferred_skills)}
+        grid.sort(key=lambda item: rank.get(item[0], len(rank)))  # stable: unlisted keep grid order
+    available = [item for item in grid if item[0] not in used]
+    already_used = [item for item in grid if item[0] in used]
     return available + already_used
 
 
@@ -3462,14 +3716,17 @@ def get_attribute_circle_targets() -> dict[int, tuple[float, float]]:
 
 # Absolute Top-Tier Mandatory Fusion Prerequisites (Score 1000)
 # Cyclone -> MUST be Void for Black Hole (Cyclone + Satellite)
+# Satellite -> MUST be Nuclear Fission (or Anti-Gravity) for Black Hole / Vortex
 # Spirit -> MUST be Magic Blade for Telekinetic Sword (Spirit + Electric Shock)
 # Electric Shock -> MUST be Chain Lightning for Telekinetic Sword
-# Satellite -> MUST be Anti-Gravity / Nuclear Fusion for Black Hole / Hyperion
 MANDATORY_FUSION_TRAITS: dict[str, tuple[str, list[str]]] = {
-    "void": ("cyclone", ["void", "v0id", "vold", "v oid"]),
+    "void": ("cyclone", ["void", "v0id", "vold", "v oid", "the void", "void-", "v o i d"]),
+    "nuclear fission": ("satellite", ["nuclear fission", "nuclearfission", "nuclear-fission", "fission"]),
+    "anti-gravity": ("satellite", ["anti-gravity", "antigravity", "anti gravity"]),
     "magic blade": ("spirit", ["magic blade", "magicblade", "magic biade", "magic-blade"]),
     "chain lightning": ("electric_shock", ["chain lightning", "chainlightning", "chain iightning"]),
-    "anti-gravity": ("satellite", ["anti-gravity", "antigravity", "anti gravity", "nuclear fusion", "nuclear fission"]),
+    "superconductivity": ("electric_shock", ["superconductivity", "super conductivity", "super-conductivity", "chain lightning", "chainlightning"]),
+    "arcane release": ("magic_circle", ["arcane release", "arcanerelease", "unleash mana", "unleashmana", "great magic circle", "magic release"]),
 }
 
 # Freeze traits for Blizzard, Frost Nova, Tsunami (Score 800 - Mandatory Crowd Control)
@@ -3482,8 +3739,9 @@ FREEZE_TRAITS: list[str] = [
 ]
 
 # Secondary / Alternative Major Fusion Traits (Score 500)
+# NOTE: Electric Orb removed to strictly avoid locking into Neutron Generation instead of Black Hole!
 SECONDARY_FUSION_TRAITS: list[str] = [
-    "electric orb", "superconductivity", "familiar",
+    "superconductivity", "familiar",
     "devil's nails", "devils nails", "raving", "ragnarok",
     "unleash mana", "great magic circle", "magic release",
     "emp", "fire aura", "fire breath",
@@ -3503,8 +3761,8 @@ META_SUPPORT_TRAITS: list[str] = [
 
 # Comprehensive list of combination traits for backward-compatibility & card scanning
 COMBINATION_TRAITS: list[str] = [
-    "void", "magic blade", "chain lightning", "anti-gravity", "antigravity", "nuclear fusion", "nuclear fission",
-    "electric orb", "superconductivity", "familiar",
+    "void", "magic blade", "chain lightning", "anti-gravity", "antigravity", "nuclear fission", "nuclear fusion",
+    "superconductivity", "familiar",
     "extreme weather", "hurricane", "climate change", "tornado", "deep breath",
     "unleash mana", "great magic circle", "devil's nails", "devils nails", "raving",
     "emp", "fire aura", "static", "high voltage", "microburst",
@@ -3514,11 +3772,12 @@ COMBINATION_TRAITS: list[str] = [
 def evaluate_selected_attribute(frame: np.ndarray) -> tuple[int, str, str]:
     """Evaluate the currently selected Level 7 trait attribute.
     Returns (score, readable_tag, parent_skill_key).
-    Tier 1: Mandatory Fusion Core Traits (Void, Magic Blade, Chain Lightning) -> 1000
+    Tier 1: Mandatory Fusion Core Traits (Void, Nuclear Fission, Magic Blade, Chain Lightning) -> 1000
     Tier 2: Freeze Core Traits (Absolute Zero, Sub-Zero, Pole) -> 800
-    Tier 3: Secondary Major Fusion Traits (Electric Orb, Superconductivity) -> 500
+    Tier 3: Secondary Major Fusion Traits (Superconductivity) -> 500
     Tier 4: Intermediate / Level 4 Traits (Extreme Weather, Hurricane, Reaction) -> 350
     Tier 5: Meta Survival Support Traits (Barrier, Mirage, Apocalypse) -> 250
+    Negative/Avoid: Electric Orb (Score 50 - Avoid Neutron Generation when targeting Black Hole)
     Default: 100
     """
     h, w = frame.shape[:2]
@@ -3529,8 +3788,8 @@ def evaluate_selected_attribute(frame: np.ndarray) -> tuple[int, str, str]:
         import winocr
         from PIL import Image
 
-        y_top = int(h * 0.50)
-        desc_crop = frame[y_top : int(h * 0.80), int(w * 0.04) : int(w * 0.96)]
+        y_top = int(h * 0.46)
+        desc_crop = frame[y_top : int(h * 0.82), int(w * 0.04) : int(w * 0.96)]
         pil_img = Image.fromarray(cv2.cvtColor(desc_crop, cv2.COLOR_BGR2RGB))
 
         async def _do():
@@ -3547,6 +3806,10 @@ def evaluate_selected_attribute(frame: np.ndarray) -> tuple[int, str, str]:
     score = 100
     tag = f"Nhánh {title}"
     parent_skill = ""
+
+    # Disqualify Electric Orb if user is targeting Black Hole (strictly avoid Neutron Generation)
+    if _match_keyword("electric orb", full_text) or "electric orb" in full_text:
+        return 50, "Nhánh Bỏ Qua (Electric Orb - Tránh Neutron Gen)", "cyclone"
 
     # 1. Tier 1: Mandatory Fusion Core Traits (Score 1000 - Absolute priority)
     # Void for Black Hole (Cyclone + Satellite), Magic Blade / Chain Lightning for Telekinetic Sword
@@ -3635,7 +3898,6 @@ DEFAULT_SKILL_PRIORITY = [
     "superconductivity",
     "current_overload",
     "vortex",
-    "neutron_generation",
     # 4. Ice / Freeze Magics (with Freeze traits - Mandatory Crowd Control)
     "blizzard",
     "frost_nova",
@@ -3666,11 +3928,121 @@ DEFAULT_SKILL_PRIORITY = [
     "explorer",
 ]
 
+BUILD_PRESETS: dict[str, dict] = {
+    "aura_blade": {
+        "name": "Aura Blade – Deus Ex Machina (DEM)",
+        "character": "summoner",
+        "description": "Summoner: Telekinetic Sword (Magic Blade + Superconductivity) -> Overmind -> DEM (Full Passives)",
+        "skill_priority": [
+            "telekinetic_sword",
+            "spirit",
+            "electric_shock",
+            "overmind",
+            "magic_circle",
+            "intelligence",
+            "deus_ex_machina",
+            "electric_zone",
+            "snipe",
+            "fast_casting",
+            "haste",
+            "vitality",
+            "arcane_effuse",
+            "concentration",
+            "explorer",
+            "shield",
+            "cloaking",
+            "armageddon",
+            "blizzard",
+            "frost_nova",
+            "tsunami",
+        ],
+        "early_priority_skills": {
+            "electric_zone": {"target_level": 4, "max_player_level": 10},
+        },
+        "nearest_target_skills": ["telekinetic_sword"],
+        "prefer_crit_and_cooldown": True,
+        "prefer_freeze_traits": True,
+    },
+    "vortex": {
+        "name": "Vortex & Black Hole (Cyclone + Satellite)",
+        "character": "electromancer",
+        "description": "Electromancer: Electric Zone (Lv4 sớm) + Cyclone + Satellite -> Vortex / Black Hole + Freeze crowd control",
+        "skill_priority": [
+            "black_hole",
+            "cyclone",
+            "satellite",
+            "vortex",
+            "electric_zone",
+            "blizzard",
+            "frost_nova",
+            "tsunami",
+            "perpetual_engine",
+            "magic_circle",
+            "arcane_ray",
+            "shield",
+            "cloaking",
+            "armageddon",
+            "fast_casting",
+            "haste",
+            "snipe",
+            "vitality",
+            "intelligence",
+            "arcane_effuse",
+            "concentration",
+            "explorer",
+        ],
+        "early_priority_skills": {
+            "electric_zone": {"target_level": 4, "max_player_level": 10},
+        },
+        "nearest_target_skills": ["black_hole", "vortex"],
+        "prefer_crit_and_cooldown": True,
+        "prefer_freeze_traits": True,
+    },
+    "ai": {
+        "name": "Kaggle AI (Neural Skill Value + Vision AI)",
+        "character": "summoner",
+        "description": "Tự động chọn phép bằng mạng Neural train từ Kaggle (ai_models/skill_value_net.json) kết hợp Adaptive Learner",
+        "skill_priority": [],
+        "early_priority_skills": {
+            "electric_zone": {"target_level": 4, "max_player_level": 10},
+        },
+        "nearest_target_skills": ["telekinetic_sword", "black_hole", "vortex"],
+        "prefer_crit_and_cooldown": True,
+        "prefer_freeze_traits": True,
+        "use_kaggle_ai": True,
+    },
+}
+
+
+def apply_build_preset(config: dict, preset_name: Optional[str] = None) -> dict:
+    """Apply a named build preset (e.g. 'aura_blade', 'vortex', 'ai') onto the config dict."""
+    if not preset_name:
+        preset_name = config.get("build_mode", "vortex")
+    key = str(preset_name).lower().strip().replace("-", "_").replace(" ", "_")
+    if key in ("aura_blade", "aurablade", "aura", "dem", "deus_ex_machina", "aura_blade_dem"):
+        target_key = "aura_blade"
+    elif key in ("vortex", "black_hole", "cyclone", "classic", "default"):
+        target_key = "vortex"
+    elif key in ("ai", "ai_train", "kaggle", "neural", "ml"):
+        target_key = "ai"
+    else:
+        target_key = key
+
+    if target_key in BUILD_PRESETS:
+        preset = BUILD_PRESETS[target_key]
+        for k, v in preset.items():
+            if k in ("name", "description"):
+                continue
+            config[k] = copy.deepcopy(v)
+        config["build_mode"] = target_key
+    return config
+
 SKILL_ALIASES: dict[str, list[str]] = {
     # Combinations: Spirit + Electric Shock
     "telekinetic_sword": [
         "telekinetic sword", "telekinetic", "telekineticsword",
         "teiekinetic sword", "telekinetlc sword", "telekinetic swords", "teleklnctic sword",
+        "aura blade", "aura_blade", "aurablade", "aura-blade", "aurablades", "aura blades",
     ],
     "superconductivity": ["superconductivity", "super conductivity"],
     "current_overload": ["current overload", "currentoverload", "overload"],
@@ -3692,7 +4064,9 @@ SKILL_ALIASES: dict[str, list[str]] = {
     "hyperion": ["hyperion"],
     "great_rift": ["great rift", "greatrift"],
     "bloody_sacrament": ["bloody sacrament", "bloodysacrament"],
-    "deus_ex_machina": ["deus ex machina", "deus ex"],
+    "deus_ex_machina": [
+        "deus ex machina", "deus ex", "deusexmachina", "deus_ex_machina", "deus-ex-machina", "dem",
+    ],
     "breath_of_fire": ["breath of fire", "breathoffire"],
     "winter_storm": ["winter storm", "winterstorm"],
     "flying_swords": ["flying swords", "flyingswords"],
@@ -3735,7 +4109,11 @@ SKILL_ALIASES: dict[str, list[str]] = {
     "shield": ["shield"],
     "cloaking": ["cloaking", "cloak"],
     "armageddon": ["armageddon", "a eddo n", "remove all enemies"],
-    "electric_zone": ["electric zone", "electriczone", "electrick zone", "electric_zone"],
+    "electric_zone": [
+        "electric zone", "electriczone", "electrick zone", "electric_zone",
+        "eiectric zone", "electic zone", "electric z0ne", "electrlc zone",
+        "electric zone lv", "electric_zone lv", "electnc zone",
+    ],
     "arcane_ray": ["arcane ray", "arcaneray"],
     "fireball": ["fireball", "fire ball"],
     "meteor": ["meteor", "meteors"],
@@ -4007,6 +4385,7 @@ SKILL_TEMPLATE_FILES: dict[str, str] = {
     "frost_nova": "assets/skills/frostnova_tight.png",
     "tsunami": "assets/skills/tsunami_tight.png",
     "flash_shock": "assets/skills/flash_shock_tight.png",
+    "electric_zone": "assets/skills/cell_r1_c2.png",
 }
 
 # God-Tier S+ Meta Artifacts from Wiki & Reddit r/magic_survival Tier Lists
@@ -4015,9 +4394,11 @@ META_S_TIER_ARTIFACTS: set[str] = {
     "holy chest", "ouroboros", "creation", "ballista", "executioner's ax",
     "executioner's axe", "executioners ax", "joker", "widowmaker", "eclipse",
     "hydra", "space-time circuit", "space time circuit", "roster", "golden roulette",
-    "peace treaty", "toy castle", "assassination", "death's bell", "deaths bell",
+    "peace treaty", "toy castle", "assassination", "dragon's tongue", "dragons tongue", "dragon tongue", "dragontongue",
     "magic seal", "longinus' spear", "longinus spear", "magnum opus", "treasure map",
     "opulence", "cyberspace", "evil sword", "genome map",
+    "starlight", "crown", "shuriken", "mirror", "mutagen", "mandrake",
+    "heartbreaker", "butcher", "rose", "golem core", "organic shield", "meat",
 }
 
 CRIT_ARTIFACT_NAMES: set[str] = {
@@ -4025,10 +4406,11 @@ CRIT_ARTIFACT_NAMES: set[str] = {
     "joker", "assassination", "werewolf", "oculus", "carnival", "watcher's eye", "watchers eye",
     "siege hammer", "four-leaf clover", "four leaf clover", "clover", "radar",
     "masked ball", "shuriken", "target", "rainbow", "crow", "shadow cape", "rose",
+    "heartbreaker", "butcher",
 }
 
 COOLDOWN_ARTIFACT_NAMES: set[str] = {
-    "creation", "accelerator", "holy chest", "ouroboros", "death's bell", "deaths bell",
+    "creation", "accelerator", "holy chest", "ouroboros",
     "ai magic", "longinus' spear", "longinus spear", "matrix", "diamond", "gravity orb",
     "world tree leaf", "pandora's box", "pandoras box", "clockwork", "ether arrow",
     "black cat", "otherworldly tentacles", "dimensional gate", "wave-calming flute",
@@ -4527,6 +4909,7 @@ def detect_combination_star(frame: np.ndarray, threshold: float = 0.65) -> Optio
 def find_best_combination_option(
     frame: np.ndarray,
     skill_priority: Optional[list[str]] = None,
+    active_skills: Optional[set[str]] = None,
 ) -> Optional[tuple[tuple[float, float], str, str]]:
     """Scan the Magic Combinations menu for prioritized fusions (Telekinetic Sword -> Black Hole -> etc.).
     Returns ((rel_x, rel_y), display_label, combo_key) if a matching fusion option is found.
@@ -4569,6 +4952,8 @@ def find_best_combination_option(
             "pandemonium", "deluge", "war_climate", "meissner_effect", "genesis",
         }
 
+        current_skills = set(active_skills or ())
+
         for line in res.lines:
             line_text = line.text.lower().replace("—", "-").replace("–", "-")
             if not line.words:
@@ -4583,6 +4968,25 @@ def find_best_combination_option(
             for std_key, aliases in SKILL_ALIASES.items():
                 if any(_match_keyword(a, line_text) for a in aliases):
                     if std_key in known_combos:
+                        # Already learned fusions cannot be learned twice
+                        if std_key in current_skills:
+                            continue
+
+                        if std_key == "neutron_generation" and "neutron_generation" not in normalized_priority:
+                            continue
+
+                        # Strict build sequencing safeguards:
+                        # 1. Overmind locks out regular active magic combinations permanently!
+                        #    Therefore, if telekinetic_sword / aura_blade is in priority, it MUST be formed first.
+                        if std_key in ("overmind", "deus_ex_machina"):
+                            if "telekinetic_sword" in normalized_priority or "aura_blade" in normalized_priority:
+                                if "telekinetic_sword" not in current_skills and "aura_blade" not in current_skills:
+                                    continue
+                        # 2. Deus Ex Machina (DEM) requires Overmind first
+                        if std_key == "deus_ex_machina":
+                            if "overmind" not in current_skills:
+                                continue
+
                         rank = len(normalized_priority)
                         if std_key in normalized_priority:
                             rank = normalized_priority.index(std_key)
@@ -4667,18 +5071,32 @@ def choose_best_artifact_or_card(
     def make_choice(idx, target, label="", skill_key="", trait_key=""):
         result = CardChoice(idx, target, label, skill_key, trait_key)
         result.offered_level = ocr_cards[idx].offered_level
+        result.offered_cards = {str(k): list(v) for k, v in slot_skills.items()}
         return result
 
     # Evaluate candidate skills per slot:
     # If OCR recognized a skill or special passive on this slot, DO NOT let template matching inject false skills!
     # If OCR detected readable text lines on the card, never guess an unrelated skill via low-confidence template matching.
+    ai_vision_preds: dict[int, tuple[str, float]] = {}
+    try:
+        from ai_inference import get_ai_engine
+        ai_eng = get_ai_engine()
+        if ai_eng.has_card_vision and any(not ocr_cards[i].skills and not ocr_cards[i].text_lines for i in all_indices):
+            ai_vision_preds = ai_eng.predict_card_skills(frame, num_cards=num_cards)
+    except Exception:
+        ai_vision_preds = {}
+
     slot_skills: dict[int, list[str]] = {}
     for idx in all_indices:
         if ocr_cards[idx].skills or ocr_cards[idx].is_special_passive:
             cand = [s for s in ocr_cards[idx].skills if not maxed_skills or s not in maxed_skills]
         elif not ocr_cards[idx].text_lines:
-            # Fallback to visual template match ONLY when OCR found absolutely no readable text (pure glyph)
+            # Fallback to visual template match or Kaggle Card Vision CNN ONLY when OCR found no readable text
             cand = [s for s in tmpl_matches.get(idx, []) if not maxed_skills or s not in maxed_skills]
+            if not cand and idx in ai_vision_preds:
+                pred_sk = ai_vision_preds[idx][0]
+                if not maxed_skills or pred_sk not in maxed_skills:
+                    cand = [pred_sk]
         else:
             cand = []
         slot_skills[idx] = cand
@@ -4760,10 +5178,15 @@ def choose_best_artifact_or_card(
             target = get_upgrade_target(idx, num_cards=num_cards)
             return make_choice(idx, target, f"Nhánh Hỗ Trợ Meta: {trait_name}", trait_key=s_trait)
 
-    priority_order = list(skill_priority) if skill_priority is not None else list(DEFAULT_SKILL_PRIORITY)
+    is_ai_free_mode = bool(skill_priority is not None and len(skill_priority) == 0)
+    priority_order = list(skill_priority) if (skill_priority is not None and not is_ai_free_mode) else list(DEFAULT_SKILL_PRIORITY)
     for fallback_skill in DEFAULT_SKILL_PRIORITY:
         if fallback_skill not in priority_order:
             priority_order.append(fallback_skill)
+    if is_ai_free_mode:
+        for extra_sk in SKILL_ALIASES.keys():
+            if extra_sk not in priority_order:
+                priority_order.append(extra_sk)
 
     normalized_priority: list[str] = []
     for item in priority_order:
@@ -4809,33 +5232,32 @@ def choose_best_artifact_or_card(
         for early_skill, early_cfg in effective_early_skills.items():
             max_pl = early_cfg.get("max_player_level", 10)
             target_lvl = early_cfg.get("target_level", 4)
-            if level_count <= max_pl:
-                curr_sk_lvl = (skill_levels or {}).get(
-                    early_skill,
-                    1 if (active_skills and early_skill in active_skills) else 0,
-                )
-                if curr_sk_lvl < target_lvl:
-                    for idx in all_indices:
-                        if ocr_cards[idx].is_maxed or (maxed_skills and early_skill in maxed_skills):
+            curr_sk_lvl = (skill_levels or {}).get(
+                early_skill,
+                1 if (active_skills and early_skill in active_skills) else 0,
+            )
+            if curr_sk_lvl < target_lvl and level_count <= max_pl:
+                for idx in all_indices:
+                    if ocr_cards[idx].is_maxed or (maxed_skills and early_skill in maxed_skills):
+                        continue
+                    c_skills = slot_skills.get(idx, [])
+                    c_full_text = " ".join(ocr_cards[idx].text_lines).lower()
+                    is_match = (early_skill in c_skills) or any(
+                        _match_keyword(a, c_full_text) for a in SKILL_ALIASES.get(early_skill, [early_skill])
+                    )
+                    if is_match:
+                        offered_lvl = ocr_cards[idx].offered_level
+                        if offered_lvl is not None and offered_lvl > target_lvl and curr_sk_lvl > 0:
                             continue
-                        c_skills = slot_skills.get(idx, [])
-                        c_full_text = " ".join(ocr_cards[idx].text_lines).lower()
-                        is_match = (early_skill in c_skills) or any(
-                            _match_keyword(a, c_full_text) for a in SKILL_ALIASES.get(early_skill, [early_skill])
+                        next_lvl = offered_lvl or (curr_sk_lvl + 1)
+                        target = get_upgrade_target(idx, num_cards=num_cards)
+                        display_name = early_skill.replace("_", " ").title()
+                        return make_choice(
+                            idx,
+                            target,
+                            f"★ Ưu tiên đầu trận (Lv {next_lvl}): {display_name}",
+                            skill_key=early_skill,
                         )
-                        if is_match:
-                            offered_lvl = ocr_cards[idx].offered_level
-                            if offered_lvl is not None and offered_lvl > target_lvl:
-                                continue
-                            next_lvl = offered_lvl or (curr_sk_lvl + 1)
-                            target = get_upgrade_target(idx, num_cards=num_cards)
-                            display_name = early_skill.replace("_", " ").title()
-                            return make_choice(
-                                idx,
-                                target,
-                                f"★ Ưu tiên đầu trận (Lv {next_lvl}): {display_name}",
-                                skill_key=early_skill,
-                            )
 
     # 2. CHECK SPECIAL PASSIVES ("KỸ NĂNG CÓ DẤU *" / RED STAR PASSIVES)
     best_sp_card_idx = None
@@ -4872,7 +5294,11 @@ def choose_best_artifact_or_card(
             if maxed_skills and skill in maxed_skills:
                 continue
             if skill in normalized_priority:
-                rank = (total_priority_count - normalized_priority.index(skill)) * 25.0
+                if is_ai_free_mode:
+                    # Pure AI mode: equal base score, let Kaggle Neural Value Net + AdaptiveLearner decide!
+                    rank = 100.0
+                else:
+                    rank = (total_priority_count - normalized_priority.index(skill)) * 25.0
                 if ocr_cards[idx].offered_level == 7:
                     rank += 500.0
                 # If card is starred or fusion component, give it a major priority boost
@@ -4881,8 +5307,29 @@ def choose_best_artifact_or_card(
                 try:
                     from learning_engine import get_adaptive_learner
                     learned_bonus = (learner or get_adaptive_learner()).get_skill_bonus(skill, active_skills)
-                    # Cap learned_bonus tie-breaker so it never overrides explicit skill_priority order
-                    rank += min(12.0, max(-12.0, learned_bonus * 0.5))
+                    if is_ai_free_mode:
+                        rank += learned_bonus * 2.5
+                    else:
+                        # Cap learned_bonus tie-breaker so it never overrides explicit skill_priority order
+                        rank += min(12.0, max(-12.0, learned_bonus * 0.5))
+                except Exception:
+                    pass
+                try:
+                    from ai_inference import get_ai_engine
+                    ai_eng = get_ai_engine()
+                    if ai_eng.has_skill_model:
+                        ai_val = ai_eng.score_skill_candidate(
+                            skill,
+                            active_skills=active_skills,
+                            skill_levels=skill_levels,
+                            level_count=level_count,
+                            offered_level=ocr_cards[idx].offered_level,
+                            has_asterisk=ocr_cards[idx].has_asterisk,
+                        )
+                        if is_ai_free_mode:
+                            rank += ai_val * 25.0
+                        else:
+                            rank += min(10.0, max(-10.0, ai_val * 4.0))
                 except Exception:
                     pass
                 if rank > best_priority_rank:

@@ -41,6 +41,43 @@ from botcore import (
 )
 
 
+class TestResultsTimeReconcile(unittest.TestCase):
+    def test_minute_digit_misread_is_rejected(self):
+        # '11:06' (666s on the HUD) read as '00:06' on the results screen
+        self.assertEqual(botcore.reconcile_results_time(6.0, 662.0), (662.0, True))
+        self.assertEqual(botcore.reconcile_results_time(8.0, 790.0), (790.0, True))
+
+    def test_consistent_or_longer_results_time_is_trusted(self):
+        self.assertEqual(botcore.reconcile_results_time(666.0, 662.0), (666.0, False))
+        self.assertEqual(botcore.reconcile_results_time(700.0, 640.0), (700.0, False))   # HUD was a bit stale
+        self.assertEqual(botcore.reconcile_results_time(640.0, 662.0), (640.0, False))   # within tolerance
+
+    def test_no_hud_reference_means_trust_the_ocr_and_missing_ocr_uses_hud(self):
+        self.assertEqual(botcore.reconcile_results_time(6.0, 0.0), (6.0, False))
+        self.assertEqual(botcore.reconcile_results_time(6.0, 30.0), (6.0, False))   # run genuinely short
+        self.assertEqual(botcore.reconcile_results_time(None, 500.0), (500.0, False))
+
+
+class TestMonolithChestOverlap(unittest.TestCase):
+    def test_tower_next_to_a_chest_is_kept(self):
+        # Seen live: chest ~100px from the tower on a 1080-wide frame must NOT delete the tower
+        self.assertFalse(botcore.monolith_is_chest_misdetection((500, 900), [(580, 840)], 1080))
+        self.assertFalse(botcore.monolith_is_chest_misdetection((500, 900), [(540, 860), (700, 400)], 1080))
+
+    def test_same_spot_is_still_treated_as_misdetection(self):
+        self.assertTrue(botcore.monolith_is_chest_misdetection((500, 900), [(510, 910)], 1080))
+        self.assertTrue(botcore.monolith_is_chest_misdetection((270, 480), [(280, 470)], 540))
+        self.assertFalse(botcore.monolith_is_chest_misdetection((500, 900), [], 1080))
+
+    def test_user_screenshot_tower_beside_chest_is_detected(self):
+        img = cv2.imread(str(Path(__file__).resolve().parent / "fixtures" / "tower_beside_chest.png"))
+        self.assertIsNotNone(img)
+        pos = botcore.detect_monolith(img)
+        self.assertIsNotNone(pos)
+        self.assertAlmostEqual(pos[0], 143, delta=20)
+        self.assertAlmostEqual(pos[1], 277, delta=25)
+
+
 class VisionTests(unittest.TestCase):
     def test_enemy_and_blue_orb(self):
         frame = np.full((500, 300, 3), 125, dtype=np.uint8)
@@ -769,6 +806,22 @@ class VisionTests(unittest.TestCase):
                 self.assertEqual(c3.idx, 2, "Black Hole must win over Blizzard/Shield")
                 self.assertIn("Black Hole", c3.label)
 
+        # Case 4: Electric Orb trait disqualified (score 50) and Nuclear Fission scores 1000
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+        line_orb = SimpleNamespace(text="Electric Orb\nChanges Cyclone into an electric orb", words=[])
+        ocr_orb = SimpleNamespace(recognize_pil=AsyncMock(return_value=SimpleNamespace(lines=[line_orb])))
+        with patch.dict("sys.modules", {"winocr": ocr_orb}):
+            score_o, tag_o, _ = evaluate_selected_attribute(frame)
+            self.assertEqual(score_o, 50, "Electric Orb must be penalized/disqualified to avoid Neutron Generation")
+
+        line_fiss = SimpleNamespace(text="Nuclear Fission\nIncreases number of satellites", words=[])
+        ocr_fiss = SimpleNamespace(recognize_pil=AsyncMock(return_value=SimpleNamespace(lines=[line_fiss])))
+        with patch.dict("sys.modules", {"winocr": ocr_fiss}):
+            score_f, tag_f, parent_f = evaluate_selected_attribute(frame)
+            self.assertEqual(score_f, 1000, "Nuclear Fission must be tier 1 mandatory trait for Black Hole")
+            self.assertEqual(parent_f, "satellite")
+
 
     def test_detect_confirm_button_and_ad_close(self):
         # Blank screen has no confirm button
@@ -1037,6 +1090,14 @@ class VisionTests(unittest.TestCase):
             self.assertIsNone(v_false.monolith)
             self.assertIsNotNone(v_false.chest, "Must still detect the Chest Indicator as a chest")
 
+        # 6. Strict Game Logic: If bosses or active enemy swarms are present, Monolith MUST be suppressed!
+        if os.path.isfile(img_path):
+            from unittest.mock import patch
+            with patch("botcore.detect_boss_monsters", return_value=[(300, 400, 30)]):
+                v_boss = inspect_game(img_m)
+                self.assertIsNone(v_boss.monolith, "Monolith must be suppressed while a boss is present")
+                self.assertFalse(v_boss.monolith_detected)
+
     def test_chest_color_fallback_and_priority(self):
         from botcore import detect_chest, choose_direction
         import os
@@ -1048,6 +1109,18 @@ class VisionTests(unittest.TestCase):
             self.assertIsNotNone(c_target)
             # Must detect both chests/indicators
             self.assertGreaterEqual(len(c_target.all_positions), 2)
+
+        # Test Special Artifact Chest indicator detection
+        special_path = r"d:\magic-survival-autofarm\assets\chests\special_chest_1x.png"
+        if os.path.isfile(special_path):
+            test_f = np.full((960, 540, 3), 110, dtype=np.uint8)
+            sc_icon = cv2.imread(special_path)
+            s_h, s_w = sc_icon.shape[:2]
+            test_f[200:200+s_h, 40:40+s_w] = sc_icon
+            sc_target = detect_chest(test_f)
+            self.assertIsNotNone(sc_target)
+            self.assertEqual(sc_target.chest_type, "special_chest")
+            self.assertEqual(sc_target.weight, 38.0)
 
     def test_ad_screen_and_keyword_boundaries(self):
         from botcore import is_level_up_screen, _match_keyword, detect_close_button
@@ -1623,6 +1696,73 @@ class VisionTests(unittest.TestCase):
         if os.path.isfile(bush_path):
             img_bush = cv2.imread(bush_path)
             self.assertIsNone(botcore.detect_chest(img_bush), "Bush on brown dirt ground must not be detected as chest")
+
+
+    def test_aura_blade_dem_build_and_sequencing(self):
+        import botcore
+        from unittest.mock import patch, MagicMock, AsyncMock
+
+        # 1. Alias mapping checks
+        self.assertIn("aura blade", botcore.SKILL_ALIASES["telekinetic_sword"])
+        self.assertIn("aura_blade", botcore.SKILL_ALIASES["telekinetic_sword"])
+        self.assertIn("dem", botcore.SKILL_ALIASES["deus_ex_machina"])
+
+        # 2. Key artifacts added
+        for art in ("shuriken", "mirror", "starlight", "crown", "mutagen", "mandrake", "heartbreaker", "butcher"):
+            self.assertIn(art, botcore.META_S_TIER_ARTIFACTS)
+        for art in ("shuriken", "heartbreaker", "butcher"):
+            self.assertIn(art, botcore.CRIT_ARTIFACT_NAMES)
+        for art in ("shuriken", "mirror"):
+            self.assertIn(art, botcore.SPECIFIC_MAGIC_IDENTIFIERS["spirit"])
+
+        # 3. Sequencing safeguard test
+        # Create a mock OCR result showing Magic Combination menu with Overmind and Deus Ex Machina
+        mock_line_header = MagicMock(text="Magic Combinations", words=[MagicMock(bounding_rect=MagicMock(x=100, y=50, width=50, height=20))])
+        mock_line_overmind = MagicMock(text="Overmind", words=[MagicMock(bounding_rect=MagicMock(x=200, y=300, width=80, height=30))])
+        mock_line_dem = MagicMock(text="Deus Ex Machina", words=[MagicMock(bounding_rect=MagicMock(x=200, y=500, width=120, height=30))])
+        mock_ocr = MagicMock(lines=[mock_line_header, mock_line_overmind, mock_line_dem])
+
+        dummy_frame = np.zeros((1000, 600, 3), dtype=np.uint8)
+        priority = ["telekinetic_sword", "overmind", "deus_ex_machina"]
+
+        with patch("winocr.recognize_pil", new_callable=AsyncMock) as mock_ocr_call:
+            mock_ocr_call.return_value = mock_ocr
+
+            # A) Before telekinetic_sword is formed: Overmind and DEM must BOTH be blocked
+            res_none = botcore.find_best_combination_option(dummy_frame, skill_priority=priority, active_skills=set())
+            self.assertIsNone(res_none, "Overmind and DEM must not be picked before Telekinetic Sword")
+
+            # B) After telekinetic_sword is formed: Overmind can be picked, but DEM is still blocked
+            res_sword = botcore.find_best_combination_option(dummy_frame, skill_priority=priority, active_skills={"telekinetic_sword"})
+            self.assertIsNotNone(res_sword)
+            self.assertEqual(res_sword[2], "overmind")
+
+            # C) After both sword and overmind are formed: DEM can be picked
+            res_dem = botcore.find_best_combination_option(dummy_frame, skill_priority=priority, active_skills={"telekinetic_sword", "overmind"})
+            self.assertIsNotNone(res_dem)
+            self.assertEqual(res_dem[2], "deus_ex_machina")
+
+        # 4. Build Preset Mode testing
+        self.assertIn("aura_blade", botcore.BUILD_PRESETS)
+        self.assertIn("vortex", botcore.BUILD_PRESETS)
+        test_cfg = {}
+        botcore.apply_build_preset(test_cfg, "aura_blade")
+        self.assertEqual(test_cfg["character"], "summoner")
+        self.assertEqual(test_cfg["build_mode"], "aura_blade")
+        self.assertEqual(test_cfg["skill_priority"][0], "telekinetic_sword")
+        self.assertEqual(test_cfg["skill_priority"][3], "overmind")
+        self.assertEqual(test_cfg["skill_priority"][6], "deus_ex_machina")
+
+        test_cfg_vortex = {}
+        botcore.apply_build_preset(test_cfg_vortex, "vortex")
+        self.assertEqual(test_cfg_vortex["character"], "electromancer")
+        self.assertEqual(test_cfg_vortex["build_mode"], "vortex")
+        self.assertEqual(test_cfg_vortex["skill_priority"][0], "black_hole")
+
+        # 5. Electric Zone template and alias checks
+        self.assertIn("electric_zone", botcore.SKILL_TEMPLATE_FILES)
+        self.assertIn("electric zone", botcore.SKILL_ALIASES["electric_zone"])
+        self.assertIn("eiectric zone", botcore.SKILL_ALIASES["electric_zone"])
 
 
 if __name__ == "__main__":

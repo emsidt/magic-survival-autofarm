@@ -82,7 +82,16 @@ class TestDataRecorder(unittest.TestCase):
 
     def test_invalid_retention_is_rejected(self):
         with self.assertRaises(ValueError):
-            DataRecorder(max_runs=0)
+            DataRecorder(max_runs=-1)
+
+    def test_unlimited_retention_never_deletes_old_runs(self):
+        recorder = DataRecorder(max_runs=0)
+        first = recorder.start_new_run()
+        recorder.finish_run()
+        second = recorder.start_new_run()
+        recorder.finish_run()
+        self.assertTrue((self.test_dir / first).exists())
+        self.assertTrue((self.test_dir / second).exists())
 
 
 if __name__ == "__main__":

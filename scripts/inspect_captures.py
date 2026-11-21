@@ -1,4 +1,4 @@
-"""Script to inspect, classify, and label all images in captures/ according to Step 0 of KE_HOACH_AI.md."""
+"""Script to inspect, classify, and label all images in captures/ according to Step 0."""
 
 from __future__ import annotations
 

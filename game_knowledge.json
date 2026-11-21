@@ -1,7 +1,10 @@
 {
   "source_urls": [
+    "https://magic-survival-rpg.fandom.com/wiki/Artifact",
     "https://magic-survival-rpg.fandom.com/wiki/Item",
-    "https://magic-survival-rpg.fandom.com/wiki/Artifact"
+    "https://magic-survival-rpg.fandom.com/wiki/Magic_Combination",
+    "https://magic-survival-rpg.fandom.com/wiki/Subject",
+    "https://magic-survival-rpg.fandom.com/wiki/Synergy"
   ],
   "items": [
     {
@@ -845,5 +848,1311 @@
         "effect": "Increase Critical Multiplier by Critical Rate Increase Critical Rate by 10%"
       }
     ]
+  },
+  "stat_mechanics": {
+    "damage_formula": "Spell base damage x ATK x ATK Amplify x All Magic Damage x Critical (4 separate multiplicative groups: raise ALL four evenly rather than stacking one)",
+    "groups": {
+      "atk": "Base damage stat (default 100). All % ATK sources (Intelligence passive, Ruby...) are ADDITIVE with each other, then multiply spell damage. Titan's Power multiplies all bonus ATK by 1.5.",
+      "atk_amplify": "Independent multiplier applied on total ATK. High ATK + high Amplify = burst. Dragon's Heart multiplies Amplify by 1.3.",
+      "all_magic_damage": "Separate multiplier, but ADDITIVE with per-spell damage bonuses (class level / artifacts) so it is slightly weaker than ATK Amplify late game.",
+      "critical": "Crit Rate (% chance) and Crit Multiplier (200% = double damage)."
+    },
+    "cast_stats": {
+      "magic_cooldown": "CDR stacks multiplicatively (diminishing returns). Still the #1 priority stat in almost every build.",
+      "magic_size": "Radius/width/blast area (Tsunami, Cyclone, Satellite...). Bigger = better crowd clear and damage stacking.",
+      "magic_duration": "Lifetime of field spells (Blizzard, Frost Nova, Electric Zone, Cloaking). With enough Duration new casts land before old ones vanish.",
+      "number_of_magic": "Projectile/object count (Magic Bolt, Spirit, Satellite). Mostly from per-spell level and special artifacts."
+    },
+    "survival_stats": {
+      "max_hp": "Higher survivability.",
+      "hp_recovery": "HP regen per second AND the HP gained from Life Orbs.",
+      "damage_reduction": "Reduces damage taken; sources multiply (diminishing returns).",
+      "evasion": "% chance to fully dodge a hit.",
+      "movement_speed": "Escape encirclement late game and slip through gaps.",
+      "item_pickup_range": "Magnet radius for Mana Orbs, hearts and Runes."
+    },
+    "priority_order": [
+      "magic_cooldown",
+      "atk_amplify",
+      "atk",
+      "all_magic_damage",
+      "critical",
+      "magic_size",
+      "magic_duration",
+      "max_hp",
+      "damage_reduction"
+    ],
+    "keywords": {
+      "magic_cooldown": [
+        "cooldown"
+      ],
+      "atk_amplify": [
+        "amplify"
+      ],
+      "atk": [
+        "increase atk",
+        "atk by"
+      ],
+      "all_magic_damage": [
+        "all magic damage"
+      ],
+      "critical": [
+        "critical strike",
+        "crit"
+      ],
+      "magic_size": [
+        "magic size"
+      ],
+      "magic_duration": [
+        "magic duration"
+      ]
+    }
+  },
+  "magic_combination_rules": {
+    "chances": "Combination option appears on character Level 25, 50 and 75 (3 chances; Gate of Creation gives +2 more).",
+    "mechanics": "Two MAX-LEVEL spells merge. The Primary is enhanced, the Secondary is LOST and cannot be used or combined again. The specific Level-7 attribute (trait) of each spell decides which fusion is possible.",
+    "total_fusions": 60,
+    "wiki_version": "v0.956",
+    "final_fusion": "Deus Ex Machina = Overmind + all passive spells; only available as the 3rd combination; afterwards no more combinations, Max Level +10."
+  },
+  "magic_combinations": [
+    {
+      "name": "Avatar",
+      "primary": {
+        "skill": "Magic Bolt",
+        "trait": "Doppelganger"
+      },
+      "secondary": {
+        "skill": "Spirit",
+        "trait": "Magic Missile"
+      },
+      "note": "3 extra Mirages fire Magic Bolts; Magic Bolt damage x9.99"
+    },
+    {
+      "name": "Pyrotechnics",
+      "primary": {
+        "skill": "Magic Bolt",
+        "trait": "Firecracker"
+      },
+      "secondary": {
+        "skill": "Energy Bolt",
+        "trait": "Flare"
+      },
+      "note": "Magic Bolt explodes at random spots; damage x5"
+    },
+    {
+      "name": "Blaster",
+      "primary": {
+        "skill": "Magic Bolt",
+        "trait": "Magic Arrow"
+      },
+      "secondary": {
+        "skill": "Flash Shock",
+        "trait": "Wipeout"
+      },
+      "note": "Every 6th bolt has 7x power"
+    },
+    {
+      "name": "Prism Spray",
+      "primary": {
+        "skill": "Arcane Ray",
+        "trait": "Reflect"
+      },
+      "secondary": {
+        "skill": "Magic Bolt",
+        "trait": "Fire at Will"
+      },
+      "note": "Rays in random directions 5x in a row; damage x7"
+    },
+    {
+      "name": "Ruler of Storms",
+      "primary": {
+        "skill": "Cyclone",
+        "trait": "Extreme Weather"
+      },
+      "secondary": {
+        "skill": "Magic Bolt",
+        "trait": "Fire at Will"
+      },
+      "note": "3 Cyclones in a row; damage x10"
+    },
+    {
+      "name": "Black Death",
+      "primary": {
+        "skill": "Fireball",
+        "trait": "Toxic Gas"
+      },
+      "secondary": {
+        "skill": "Magic Bolt",
+        "trait": "Fire at Will"
+      },
+      "note": "Fireballs explode instantly; damage x20"
+    },
+    {
+      "name": "Frenzy",
+      "primary": {
+        "skill": "Flash Shock",
+        "trait": "Satan's Nails"
+      },
+      "secondary": {
+        "skill": "Magic Bolt",
+        "trait": "Fire at Will"
+      },
+      "note": "Faster/farther Flash Shock; damage x7"
+    },
+    {
+      "name": "Supernova",
+      "primary": {
+        "skill": "Spirit",
+        "trait": "Familiar"
+      },
+      "secondary": {
+        "skill": "Energy Bolt",
+        "trait": "Flare"
+      },
+      "note": "Spirit damage x24, launch number -75%"
+    },
+    {
+      "name": "Telekinetic Sword",
+      "primary": {
+        "skill": "Spirit",
+        "trait": "Magic Blade"
+      },
+      "secondary": {
+        "skill": "Electric Shock",
+        "trait": "Chain Lightning"
+      },
+      "note": "Spirit cuts faster, longer; +1 damage mult & count per 0.15s cooldown cut; damage x3"
+    },
+    {
+      "name": "Mana Spear",
+      "primary": {
+        "skill": "Spirit",
+        "trait": "Magic Missile"
+      },
+      "secondary": {
+        "skill": "Flash Shock",
+        "trait": "Extermination"
+      },
+      "note": "Spirit damage x10, size +200%"
+    },
+    {
+      "name": "Genocide",
+      "primary": {
+        "skill": "Arcane Ray",
+        "trait": "Disintegration Ray"
+      },
+      "secondary": {
+        "skill": "Spirit",
+        "trait": "Familiar"
+      },
+      "note": "Rays unified into one, spins faster"
+    },
+    {
+      "name": "Current Overload",
+      "primary": {
+        "skill": "Electric Shock",
+        "trait": "Chain Lightning"
+      },
+      "secondary": {
+        "skill": "Spirit",
+        "trait": "Familiar"
+      },
+      "note": "Shock created 3-7x in a row; damage x8"
+    },
+    {
+      "name": "Crazed Spray",
+      "primary": {
+        "skill": "Energy Bolt",
+        "trait": "Charged Particles"
+      },
+      "secondary": {
+        "skill": "Spirit",
+        "trait": "Familiar"
+      },
+      "note": "Bolts split in 4; damage x10"
+    },
+    {
+      "name": "Brandish",
+      "primary": {
+        "skill": "Flash Shock",
+        "trait": "Wipeout"
+      },
+      "secondary": {
+        "skill": "Spirit",
+        "trait": "Magic Blade"
+      },
+      "note": "Flash Shock 7x in all directions"
+    },
+    {
+      "name": "Gate",
+      "primary": {
+        "skill": "Flash Shock",
+        "trait": "Ragnarok"
+      },
+      "secondary": {
+        "skill": "Spirit",
+        "trait": "Magic Missile"
+      },
+      "note": "Size converted to damage; damage x12, number x6"
+    },
+    {
+      "name": "Energy Bombardment",
+      "primary": {
+        "skill": "Arcane Ray",
+        "trait": "Disintegration Ray"
+      },
+      "secondary": {
+        "skill": "Flash Shock",
+        "trait": "Ragnarok"
+      },
+      "note": "Many rays at once, no rotation; damage x20"
+    },
+    {
+      "name": "Plasma Ray",
+      "primary": {
+        "skill": "Arcane Ray",
+        "trait": "Disintegration Ray"
+      },
+      "secondary": {
+        "skill": "Satellite",
+        "trait": "Nuclear Fusion"
+      },
+      "note": "4 permanent rays; size/duration -> damage"
+    },
+    {
+      "name": "Terra Current",
+      "primary": {
+        "skill": "Arcane Ray",
+        "trait": "Electromagnetic Burst"
+      },
+      "secondary": {
+        "skill": "Electric Shock",
+        "trait": "Superconductivity"
+      },
+      "note": "Wider range, switches direction; cooldown -50%"
+    },
+    {
+      "name": "Breath of Fire",
+      "primary": {
+        "skill": "Incineration",
+        "trait": "Cerberus Flame"
+      },
+      "secondary": {
+        "skill": "Arcane Ray",
+        "trait": "Reflect"
+      },
+      "note": "Incineration in 5 directions; damage x6"
+    },
+    {
+      "name": "Exidium",
+      "primary": {
+        "skill": "Flash Shock",
+        "trait": "Wipeout"
+      },
+      "secondary": {
+        "skill": "Armageddon",
+        "trait": "Rapture"
+      },
+      "note": "Bigger core; damage x7, size +100%"
+    },
+    {
+      "name": "Inferno",
+      "primary": {
+        "skill": "Incineration",
+        "trait": "Flamestrike"
+      },
+      "secondary": {
+        "skill": "Lava Zone",
+        "trait": "Melt"
+      },
+      "note": "Max multiplier damage x30, size x2"
+    },
+    {
+      "name": "Hellfire",
+      "primary": {
+        "skill": "Incineration",
+        "trait": "Pyromaniac"
+      },
+      "secondary": {
+        "skill": "Blizzard",
+        "trait": "Conflagration"
+      },
+      "note": "Incineration 2x, explodes 2-3 times; damage x12"
+    },
+    {
+      "name": "Ether Blaze",
+      "primary": {
+        "skill": "Blizzard",
+        "trait": "Conflagration"
+      },
+      "secondary": {
+        "skill": "Incineration",
+        "trait": "Flamestrike"
+      },
+      "note": "Blizzard explosions split in 2; damage x8"
+    },
+    {
+      "name": "Lightning Breath",
+      "primary": {
+        "skill": "Electric Shock",
+        "trait": "Superconductivity"
+      },
+      "secondary": {
+        "skill": "Incineration",
+        "trait": "Flamestrike"
+      },
+      "note": "3 shocks in front; damage x7, number x2"
+    },
+    {
+      "name": "Flame Storm",
+      "primary": {
+        "skill": "Meteor",
+        "trait": "Volcanic Eruption"
+      },
+      "secondary": {
+        "skill": "Incineration",
+        "trait": "Cerberus Flame"
+      },
+      "note": "Meteors in 5 directions; damage x10"
+    },
+    {
+      "name": "Demon Equation",
+      "primary": {
+        "skill": "Fireball",
+        "trait": "Big Bang"
+      },
+      "secondary": {
+        "skill": "Energy Bolt",
+        "trait": "Flare"
+      },
+      "note": "Fireballs in many directions; damage x6.66, number x4"
+    },
+    {
+      "name": "Ghastly Rampage",
+      "primary": {
+        "skill": "Fireball",
+        "trait": "Constellation"
+      },
+      "secondary": {
+        "skill": "Satellite",
+        "trait": "Will o' the wisp"
+      },
+      "note": "Pierces all, moves randomly"
+    },
+    {
+      "name": "Winter Storm",
+      "primary": {
+        "skill": "Blizzard",
+        "trait": "Sub-Zero"
+      },
+      "secondary": {
+        "skill": "Fireball",
+        "trait": "Toxic Gas"
+      },
+      "note": "Blizzard explosions expand; damage x8"
+    },
+    {
+      "name": "Genesis",
+      "primary": {
+        "skill": "Blizzard",
+        "trait": "Shooting Star"
+      },
+      "secondary": {
+        "skill": "Fireball",
+        "trait": "Constellation"
+      },
+      "note": "Blizzard damage x30, cooldown -30%"
+    },
+    {
+      "name": "Origin Explosion",
+      "primary": {
+        "skill": "Energy Bolt",
+        "trait": "Flare"
+      },
+      "secondary": {
+        "skill": "Fireball",
+        "trait": "Constellation"
+      },
+      "note": "Bolts explode after spreading; damage x12"
+    },
+    {
+      "name": "Heart of Lightning",
+      "primary": {
+        "skill": "Electric Shock",
+        "trait": "Chain Lightning"
+      },
+      "secondary": {
+        "skill": "Energy Bolt",
+        "trait": "Charged Particles"
+      },
+      "note": "Chain splits in 2; damage x6"
+    },
+    {
+      "name": "Meissner Effect",
+      "primary": {
+        "skill": "Electric Zone",
+        "trait": "EMP"
+      },
+      "secondary": {
+        "skill": "Electric Shock",
+        "trait": "Superconductivity"
+      },
+      "note": "EMP stun knocks back, +10x damage; zone size +100%, Amplify ATK +25%"
+    },
+    {
+      "name": "Lightning Bolts",
+      "primary": {
+        "skill": "Thunderstorm",
+        "trait": "Thunderclap"
+      },
+      "secondary": {
+        "skill": "Electric Shock",
+        "trait": "Chain Lightning"
+      },
+      "note": "5 thunderstorms in a row; damage x12"
+    },
+    {
+      "name": "Great Rift",
+      "primary": {
+        "skill": "Frost Nova",
+        "trait": "Earthquake"
+      },
+      "secondary": {
+        "skill": "Meteor",
+        "trait": "Volcanic Eruption"
+      },
+      "note": "Knockback; damage x10"
+    },
+    {
+      "name": "Snowflake Blossom",
+      "primary": {
+        "skill": "Frost Nova",
+        "trait": "Ice Age"
+      },
+      "secondary": {
+        "skill": "Tsunami",
+        "trait": "Pole"
+      },
+      "note": "Explodes 24 times near enemies; damage x24"
+    },
+    {
+      "name": "Frozen Heart",
+      "primary": {
+        "skill": "Electric Zone",
+        "trait": "Fire Aura"
+      },
+      "secondary": {
+        "skill": "Frost Nova",
+        "trait": "Ice Age"
+      },
+      "note": "Zone freezes; stacking mult; damage x20"
+    },
+    {
+      "name": "Super Cyclone",
+      "primary": {
+        "skill": "Cyclone",
+        "trait": "Climate Change"
+      },
+      "secondary": {
+        "skill": "Electric Zone",
+        "trait": "Fire Aura"
+      },
+      "note": "One persistent Cyclone follows you; duration +100%, cooldown +100%"
+    },
+    {
+      "name": "Neutron Generation",
+      "primary": {
+        "skill": "Cyclone",
+        "trait": "Electric Orb"
+      },
+      "secondary": {
+        "skill": "Satellite",
+        "trait": "Nuclear Fusion"
+      },
+      "note": "One rapidly expanding Cyclone; damage x10"
+    },
+    {
+      "name": "Vortex",
+      "primary": {
+        "skill": "Cyclone",
+        "trait": "Void"
+      },
+      "secondary": {
+        "skill": "Satellite",
+        "trait": "Anti-Gravity"
+      },
+      "note": "Cyclones rotate near you; damage x9, duration x9, cooldown -50%"
+    },
+    {
+      "name": "Black Hole",
+      "primary": {
+        "skill": "Cyclone",
+        "trait": "Void"
+      },
+      "secondary": {
+        "skill": "Satellite",
+        "trait": "Nuclear Fission"
+      },
+      "note": "One Cyclone, staggers enemies; duration->damage x3; damage x8"
+    },
+    {
+      "name": "Great Flood",
+      "primary": {
+        "skill": "Tsunami",
+        "trait": "Siren's Song"
+      },
+      "secondary": {
+        "skill": "Cyclone",
+        "trait": "Extreme Weather"
+      },
+      "note": "2 extra Tsunamis behind; damage x8"
+    },
+    {
+      "name": "Phoenix",
+      "primary": {
+        "skill": "Tsunami",
+        "trait": "Great Eruption"
+      },
+      "secondary": {
+        "skill": "Blizzard",
+        "trait": "Conflagration"
+      },
+      "note": "Behind you, leaves flames; damage x24; +1 revival"
+    },
+    {
+      "name": "Astrape",
+      "primary": {
+        "skill": "Thunderstorm",
+        "trait": "Judgment"
+      },
+      "secondary": {
+        "skill": "Meteor",
+        "trait": "Asteroid"
+      },
+      "note": "Shock wave stuns; damage x7"
+    },
+    {
+      "name": "Orbital Strike",
+      "primary": {
+        "skill": "Thunderstorm",
+        "trait": "Lightning Explosion"
+      },
+      "secondary": {
+        "skill": "Blizzard",
+        "trait": "Shooting Star"
+      },
+      "note": "Fast thunderstorms at one spot; damage x9"
+    },
+    {
+      "name": "Empyrean Wrath",
+      "primary": {
+        "skill": "Thunderstorm",
+        "trait": "Lightning Explosion"
+      },
+      "secondary": {
+        "skill": "Meteor",
+        "trait": "Meteor Shower"
+      },
+      "note": "Wider non-expanding explosion; damage x5, number x3"
+    },
+    {
+      "name": "Great Impact",
+      "primary": {
+        "skill": "Meteor",
+        "trait": "Asteroid"
+      },
+      "secondary": {
+        "skill": "Blizzard",
+        "trait": "Shooting Star"
+      },
+      "note": "3 meteors in a row; damage x12"
+    },
+    {
+      "name": "War Climate",
+      "primary": {
+        "skill": "Meteor",
+        "trait": "Meteor Shower"
+      },
+      "secondary": {
+        "skill": "Blizzard",
+        "trait": "Shooting Star"
+      },
+      "note": "Cooldown shrinks with meteor count; damage x4"
+    },
+    {
+      "name": "Furnace",
+      "primary": {
+        "skill": "Lava Zone",
+        "trait": "Magma Eruption"
+      },
+      "secondary": {
+        "skill": "Meteor",
+        "trait": "Volcanic Eruption"
+      },
+      "note": "Lava zones expand; damage x10"
+    },
+    {
+      "name": "Hyperion",
+      "primary": {
+        "skill": "Satellite",
+        "trait": "Nuclear Fusion"
+      },
+      "secondary": {
+        "skill": "Meteor",
+        "trait": "Asteroid"
+      },
+      "note": "Second satellite that freezes; Satellite damage +50%"
+    },
+    {
+      "name": "Age of the Sun",
+      "primary": {
+        "skill": "Lava Zone",
+        "trait": "Crater"
+      },
+      "secondary": {
+        "skill": "Satellite",
+        "trait": "Nuclear Fission"
+      },
+      "note": "Lava zones everywhere; damage x15"
+    },
+    {
+      "name": "Magnetic Field",
+      "primary": {
+        "skill": "Satellite",
+        "trait": "Anti-Gravity"
+      },
+      "secondary": {
+        "skill": "Electric Zone",
+        "trait": "Electricity Blast"
+      },
+      "note": "Satellite damage x7, size +100%"
+    },
+    {
+      "name": "Lightning Calibration",
+      "primary": {
+        "skill": "Electric Zone",
+        "trait": "Electric Blast"
+      },
+      "secondary": {
+        "skill": "Satellite",
+        "trait": "Will o' the Wisp"
+      },
+      "note": "Electric Zones orbit you; damage x10"
+    },
+    {
+      "name": "Destroyer",
+      "primary": {
+        "skill": "Electric Zone",
+        "trait": "Electricity Blast"
+      },
+      "secondary": {
+        "skill": "Shield",
+        "trait": "Destruction Field"
+      },
+      "note": "Zone damage x99, size +99%; 7s cooldown, 3s duration; HP regen -0.1%"
+    },
+    {
+      "name": "Photon Explosion",
+      "primary": {
+        "skill": "Shield",
+        "trait": "Destruction Field"
+      },
+      "secondary": {
+        "skill": "Arcane Effuse",
+        "trait": ""
+      },
+      "note": "Shield explodes; cooldown -70%"
+    },
+    {
+      "name": "Reaction",
+      "primary": {
+        "skill": "Energy Bolt",
+        "trait": "Spark"
+      },
+      "secondary": {
+        "skill": "Shield",
+        "trait": "Destruction Field"
+      },
+      "note": "Bolts in all directions, +20% power per explosion; damage x9"
+    },
+    {
+      "name": "Teleport",
+      "primary": {
+        "skill": "Cloaking",
+        "trait": "Space Warp"
+      },
+      "secondary": {
+        "skill": "Concentration",
+        "trait": ""
+      },
+      "note": "Etherealization 7x with random teleport; damage x3"
+    },
+    {
+      "name": "Perpetual Engine",
+      "primary": {
+        "skill": "Magic Circle",
+        "trait": "Unleash Mana"
+      },
+      "secondary": {
+        "skill": "Intelligence",
+        "trait": ""
+      },
+      "note": "Permanent Magic Circles"
+    },
+    {
+      "name": "Gate of Creation",
+      "primary": {
+        "skill": "Intelligence",
+        "trait": ""
+      },
+      "secondary": {
+        "skill": "Magic Circle",
+        "trait": "Material Synthesis"
+      },
+      "note": "+20% Amplify ATK per active combination; +2 combination chances; Max Level +5"
+    },
+    {
+      "name": "Overmind",
+      "primary": {
+        "skill": "Intelligence",
+        "trait": ""
+      },
+      "secondary": {
+        "skill": "Magic Circle",
+        "trait": "Great Magic Circle"
+      },
+      "note": "Only combined spells can be cast; per active-magic level: Amplify ATK +1.5%, All Magic Size +0.5%, cooldown -0.3%"
+    },
+    {
+      "name": "Deus Ex Machina",
+      "primary": {
+        "skill": "Overmind",
+        "trait": ""
+      },
+      "secondary": {
+        "skill": "All passive spells",
+        "trait": ""
+      },
+      "note": "3rd combination only; no more combinations; Max Level +10; per active-magic level: All Magic Damage mult +0.0125, cooldown -0.125%"
+    }
+  ],
+  "artifact_synergies": {
+    "mechanics": "A synergy is revealed after acquiring one component artifact in a run. Collect ALL 3-4 required artifacts to gain a powerful passive. 35 Unique Synergies + 17 Magic Mastery Synergies = 52 total (Magic Mastery list not captured).",
+    "unique": [
+      {
+        "name": "Ego Sword",
+        "effect": "Magic Sword execute threshold 25%",
+        "components": [
+          "Magic Sword",
+          "Brand",
+          "Watcher's Eye",
+          "Mana Ore"
+        ]
+      },
+      {
+        "name": "Nightmare",
+        "effect": "Bigger enemy death explosions, occasionally greatly enhanced",
+        "components": [
+          "Iron Maiden",
+          "Countess",
+          "Carnival",
+          "Guillotine"
+        ]
+      },
+      {
+        "name": "Red Dragon",
+        "effect": "Amplify ATK +40%, ATK +40%, All Magic Damage +40%",
+        "components": [
+          "Dragon's Magic",
+          "Dragon's Heart",
+          "Dragontongue",
+          "Dragonscale"
+        ]
+      },
+      {
+        "name": "Venom",
+        "effect": "Enemy Max HP reduction rate x1.15",
+        "components": [
+          "Genome Map",
+          "Basilisk",
+          "Virus",
+          "Sample"
+        ]
+      },
+      {
+        "name": "Avalon",
+        "effect": "Excalibur aura expands, stacks >= 40; HP regen +0.1%",
+        "components": [
+          "Excalibur",
+          "Merlin's Cape",
+          "Worldtree Leaf",
+          "Holy Grail"
+        ]
+      },
+      {
+        "name": "Oracle",
+        "effect": "Normal passive magic effects +30%",
+        "components": [
+          "Akashic Record",
+          "Cube",
+          "Pyramid",
+          "Owl"
+        ]
+      },
+      {
+        "name": "Archangel",
+        "effect": "Revive +1, Max HP +100%",
+        "components": [
+          "Sacrosanct",
+          "Halo",
+          "Stained Glass",
+          "Crucifix"
+        ]
+      },
+      {
+        "name": "The Fifth Element",
+        "effect": "50% bonus damage every 5th cast; All Magic Damage +25%",
+        "components": [
+          "Creation",
+          "Ether",
+          "Ancient Tree Staff",
+          "Magic Scroll"
+        ]
+      },
+      {
+        "name": "Necromancer",
+        "effect": "Reaper's Scythe kills explode (75% enemy max HP)",
+        "components": [
+          "Reaper's Scythe",
+          "Undead",
+          "Wraith",
+          "Lantern"
+        ]
+      },
+      {
+        "name": "Deadeye",
+        "effect": "All attacks crit during Desperado; Crit multiplier +50%",
+        "components": [
+          "Desperado",
+          "Hunter",
+          "Crow",
+          "Target"
+        ]
+      },
+      {
+        "name": "Trickster",
+        "effect": "Four-leaf Clover crits trigger Joker; Crit rate +7%",
+        "components": [
+          "Joker",
+          "Tarot Cards",
+          "Four-leaf Clover",
+          "Rainbow"
+        ]
+      },
+      {
+        "name": "Sniper",
+        "effect": "+25% damage to enemies at >=75% HP",
+        "components": [
+          "Ballista",
+          "Guillotine",
+          "Rose",
+          "Radar"
+        ]
+      },
+      {
+        "name": "Nuclear",
+        "effect": "ATK +1% per 3% size increase; All Magic Size +20%",
+        "components": [
+          "Uranium",
+          "Amplifier",
+          "Bomb",
+          "Gunpowder"
+        ]
+      },
+      {
+        "name": "Zero-to-Hundred",
+        "effect": "Jet Engine Amplify effect x3",
+        "components": [
+          "Accelerator",
+          "Jet Engine",
+          "Breeze",
+          "Broom"
+        ]
+      },
+      {
+        "name": "Arbiter",
+        "effect": "Total Magic Damage Multiplier x1.25",
+        "components": [
+          "Overmind",
+          "Matrix",
+          "Mana Circuit",
+          "Mana Flame"
+        ]
+      },
+      {
+        "name": "Chronos",
+        "effect": "Amplify ATK +1% per 3% cooldown reduction; All Magic Cooldown -5%",
+        "components": [
+          "Ouroboros",
+          "Wizard's Hat",
+          "Black Cat",
+          "Hourglass"
+        ]
+      },
+      {
+        "name": "Monarch",
+        "effect": "ATK +1% per Common artifact, +2% per Rare artifact",
+        "components": [
+          "Crown",
+          "Diamond",
+          "Sapphire",
+          "Ruby"
+        ]
+      },
+      {
+        "name": "Godhand",
+        "effect": "Longinus' Spear lightning converges and is enhanced",
+        "components": [
+          "Longinus' Spear",
+          "Lightning",
+          "Holy Grail",
+          "Crucifix"
+        ]
+      },
+      {
+        "name": "Paladin",
+        "effect": "Amplify ATK +50% while invincible; Damage taken -5%",
+        "components": [
+          "Magic Seal",
+          "Aegis",
+          "Mana Shield",
+          "Force Field"
+        ]
+      },
+      {
+        "name": "AGI",
+        "effect": "Amplify ATK +25%",
+        "components": [
+          "ASI",
+          "Singularity",
+          "Oculus",
+          "Mortarboard"
+        ]
+      },
+      {
+        "name": "Treasure Hunter",
+        "effect": "Spawns 1 Treasure Chest; Item Pickup Range +25%",
+        "components": [
+          "Treasure Map",
+          "Keyring",
+          "Mimic",
+          "Spell Bag"
+        ]
+      },
+      {
+        "name": "Blood Moon",
+        "effect": "+25% damage during Rune of Frenzy; Crit rate +3%",
+        "components": [
+          "Werewolf",
+          "Hunter",
+          "Meat"
+        ]
+      },
+      {
+        "name": "Heartbreaker",
+        "effect": "Crit multiplier x1.1",
+        "components": [
+          "Assassination",
+          "Carnival",
+          "Masked Ball",
+          "Shadow Cape"
+        ]
+      },
+      {
+        "name": "Wonderland",
+        "effect": "Enemies and character 9% smaller",
+        "components": [
+          "Toy Castle",
+          "Strange Potion",
+          "Unicorn",
+          "Storybook"
+        ]
+      },
+      {
+        "name": "Cosmic Horror",
+        "effect": "Removes debuffs of Necronomicon and Abyss",
+        "components": [
+          "Necronomicon",
+          "Abyss",
+          "Clairvoyance"
+        ]
+      },
+      {
+        "name": "Android",
+        "effect": "Removes Plasma debuff; ATK +20%",
+        "components": [
+          "Plasma",
+          "Cyborg",
+          "Cogwheel"
+        ]
+      },
+      {
+        "name": "Gravity",
+        "effect": "Gravity Orb wave expands; enemy move speed -5%",
+        "components": [
+          "Amplifier",
+          "Gravity Orb",
+          "Spiderweb"
+        ]
+      },
+      {
+        "name": "Genius",
+        "effect": "Bonus level cap +10; Mana acquisition +25%",
+        "components": [
+          "Geometry",
+          "Owl",
+          "Mortarboard",
+          "Magic Grimoire"
+        ]
+      },
+      {
+        "name": "Elixir",
+        "effect": "HP Potion heals instantly and cuts cooldown 20s; Life Orb recovery +50%",
+        "components": [
+          "Worldtree Leaf",
+          "Mandrake",
+          "HP Potion"
+        ]
+      },
+      {
+        "name": "Healing Factor",
+        "effect": "Organic Shield HP scales with regen; HP regen +0.5%",
+        "components": [
+          "Second Heart",
+          "Organic Shield",
+          "Blood Pack"
+        ]
+      },
+      {
+        "name": "Steampunk",
+        "effect": "All Artifact Cooldown -12%; All Magic Duration +12%",
+        "components": [
+          "Clockwork",
+          "Pocket Watch",
+          "Cogwheel"
+        ]
+      },
+      {
+        "name": "Nymph",
+        "effect": "All Magic Damage +75%",
+        "components": [
+          "Cauldron",
+          "Lightning",
+          "Weather Controller",
+          "Mana Scepter"
+        ]
+      },
+      {
+        "name": "Chaos",
+        "effect": "Pandora's Box magic deals x2 damage",
+        "components": [
+          "Pandora's Box",
+          "Pyramid",
+          "Harmony",
+          "Harp"
+        ]
+      },
+      {
+        "name": "Genie",
+        "effect": "Large Mana Orb drops; Mana acquisition +10%",
+        "components": [
+          "Magic Fountain",
+          "Mercury",
+          "Aurora",
+          "Sapphire"
+        ]
+      },
+      {
+        "name": "War Machine",
+        "effect": "War Flag stacks instantly max; ATK +15%",
+        "components": [
+          "War Flag",
+          "Siege Hammer",
+          "Golem Core",
+          "Cogwheel"
+        ]
+      }
+    ]
+  },
+  "subjects": {
+    "mechanics": "Test Subjects menu: 25 subjects, each grants a STARTING artifact. Unlocking one (800 gems) permanently grants its passive stat even if not selected. The Subject does not have to match the Class chosen. (The bot's 'character' setting = this roster.)",
+    "list": [
+      {
+        "name": "Wizard",
+        "artifact": "The Freeshooter",
+        "artifact_effect": "Magic Bolt damage +100%",
+        "unlock_passive": "Magic Bolt Damage +5%"
+      },
+      {
+        "name": "Astronomer",
+        "artifact": "Core Energy",
+        "artifact_effect": "Satellites explode on damage; Satellites +2",
+        "unlock_passive": "Satellite Damage +5%"
+      },
+      {
+        "name": "Cryomancer",
+        "artifact": "Moon Crystal",
+        "artifact_effect": "First-frozen enemy permanently -10% move speed; Frost Nova damage +50%",
+        "unlock_passive": "Frost Nova Damage +5%"
+      },
+      {
+        "name": "Shaman",
+        "artifact": "Mjolnir",
+        "artifact_effect": "Thunderstorms +50%",
+        "unlock_passive": "Thunderstorm Damage +5%"
+      },
+      {
+        "name": "Warlock",
+        "artifact": "Dimensional Gate",
+        "artifact_effect": "20% chance to cast Meteor again; Meteor cooldown -25%",
+        "unlock_passive": "Meteor Damage +5%"
+      },
+      {
+        "name": "Arcanist",
+        "artifact": "Mana Ore",
+        "artifact_effect": "ATK +25%",
+        "unlock_passive": "ATK +2%"
+      },
+      {
+        "name": "Summoner",
+        "artifact": "Magic Wand",
+        "artifact_effect": "Damage +10% per Spirit; Spirits +2",
+        "unlock_passive": "Spirit Damage +5%"
+      },
+      {
+        "name": "Bishop",
+        "artifact": "Aegis",
+        "artifact_effect": "Amplify ATK +3% per 10% damage taken; Damage taken -10%",
+        "unlock_passive": "Damage Taken -2%"
+      },
+      {
+        "name": "Occultist",
+        "artifact": "Otherworldly Tentacles",
+        "artifact_effect": "Damage +8% per Arcane Ray; Arcane Ray cooldown -10%",
+        "unlock_passive": "Arcane Ray Damage +5%"
+      },
+      {
+        "name": "Druid",
+        "artifact": "Palm Leaf Fan",
+        "artifact_effect": "Every 5 Cyclone casts: next Cyclone damage & size x2; Cyclone damage +50%",
+        "unlock_passive": "Cyclone Damage +5%"
+      },
+      {
+        "name": "Pyromancer",
+        "artifact": "Phoenix's Bow",
+        "artifact_effect": "+50% damage to enemy directly hit by Fireball; Fireball penetration +1",
+        "unlock_passive": "Fireball Damage +5%"
+      },
+      {
+        "name": "Sorcerer",
+        "artifact": "Electric Cable",
+        "artifact_effect": "Electric Shock damage +50%; shocks +2",
+        "unlock_passive": "Electric Shock Damage +5%"
+      },
+      {
+        "name": "Alchemist",
+        "artifact": "Machine Arm",
+        "artifact_effect": "Energy Bolt damage +35%, number +35%",
+        "unlock_passive": "Energy Bolt Damage +5%"
+      },
+      {
+        "name": "Scholar",
+        "artifact": "Philosopher's Stone",
+        "artifact_effect": "Many Mana Orbs; Amplify ATK +10%",
+        "unlock_passive": "Mana Acquisition +2%"
+      },
+      {
+        "name": "Witch",
+        "artifact": "Sulfur",
+        "artifact_effect": "Lava Zone grows 2%/s; Lava Zone damage +80%",
+        "unlock_passive": "Lava Zone Damage +5%"
+      },
+      {
+        "name": "Electromancer",
+        "artifact": "Robot",
+        "artifact_effect": "Electric Zone deals +0.5% damage per character level",
+        "unlock_passive": "Electric Zone Damage +5%"
+      },
+      {
+        "name": "Arbiter",
+        "artifact": "Wave-calming Flute",
+        "artifact_effect": "Each Tsunami cast +12% damage, -12% cooldown (resets after 4 stacks)",
+        "unlock_passive": "Tsunami Damage +5%"
+      },
+      {
+        "name": "Archmage",
+        "artifact": "Black Cat",
+        "artifact_effect": "All Magic cooldown -9%",
+        "unlock_passive": "All Magic Cooldown -1%"
+      },
+      {
+        "name": "Archaeologist",
+        "artifact": "Mimic",
+        "artifact_effect": "Explosion + 10 random items when opening a Treasure Chest",
+        "unlock_passive": "Item Pickup Range +5%"
+      },
+      {
+        "name": "Magician",
+        "artifact": "Ether Arrow",
+        "artifact_effect": "Magic Bolt and Spirit cooldown -20%",
+        "unlock_passive": "Critical Strike Rate +1%"
+      },
+      {
+        "name": "Mage",
+        "artifact": "Snowflake Crown",
+        "artifact_effect": "Each Blizzard +1% damage; Blizzards +30%",
+        "unlock_passive": "Blizzard Damage +5%"
+      },
+      {
+        "name": "Battlemage",
+        "artifact": "Gae Bolg",
+        "artifact_effect": "Flash Shock damage +100%",
+        "unlock_passive": "Flash Shock Damage +5%"
+      },
+      {
+        "name": "Warlord",
+        "artifact": "Dragon's Breath",
+        "artifact_effect": "Incineration hits add +1% damage taken; Incineration damage +50%",
+        "unlock_passive": "Incineration Damage +5%"
+      },
+      {
+        "name": "Black Mage",
+        "artifact": "Exorcism",
+        "artifact_effect": "Enemy Max HP -3%; Mana from kills +20%",
+        "unlock_passive": "All Magic Size +2%"
+      },
+      {
+        "name": "Jack o' Lantern",
+        "artifact": "Lantern",
+        "artifact_effect": "Mana Orb acquisition +10%; Item Pickup Range +20%",
+        "unlock_passive": "Evasion +1%"
+      }
+    ]
+  },
+  "artifact_sources": {
+    "obtain": [
+      "Treasure Chests (drop after certain minutes, affected by treasure chest frequency)",
+      "Killing the last Elite created by the Cursed Rune",
+      "Surviving the wave (Obelisk / monolith)"
+    ],
+    "counts": {
+      "Normal": 22,
+      "Rare": 35,
+      "Epic": 61,
+      "Special": 34,
+      "Legendary": 29,
+      "total": 181
+    }
   }
 }

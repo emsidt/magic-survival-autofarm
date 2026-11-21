@@ -48,6 +48,9 @@ class TestCLIFlow(unittest.TestCase):
             stack.enter_context(patch("adb_controller.ADBController", return_value=controller))
             stack.enter_context(patch("bot_cli.DataRecorder", return_value=recorder))
             stack.enter_context(patch("bot_cli.get_adaptive_learner", return_value=learner))
+            # Test phải độc lập với terminal: không mở menu chọn nền tảng, không đọc tham số unittest
+            stack.enter_context(patch("bot_cli.sys.argv", ["bot_cli.py"]))
+            stack.enter_context(patch("bot_cli.sys.stdin", Mock(isatty=Mock(return_value=False))))
             stack.enter_context(patch("bot_cli.time.sleep"))
             stack.enter_context(patch("bot_cli.time.monotonic", side_effect=itertools.count(100, 5)))
             for name, value in detectors.items():

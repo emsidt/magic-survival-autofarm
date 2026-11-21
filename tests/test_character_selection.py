@@ -25,6 +25,21 @@ class CharacterVisionTests(unittest.TestCase):
                     self.assertAlmostEqual(target[0], 0.35, delta=0.01)
                     self.assertAlmostEqual(target[1], y, delta=0.01)
 
+    def test_roster_grid_has_24_cells_and_summoner_is_cell_6(self):
+        root = Path(__file__).resolve().parent / "fixtures" / "characters"
+        for filename in ("summoner_selected.jpg", "electromancer_selected.png"):
+            frame = cv2.imread(str(root / filename))
+            cells = botcore.get_character_grid_cells(frame)
+            self.assertEqual(len(cells), 24)
+            anchor = botcore.detect_character_option(frame, "summoner")
+            self.assertAlmostEqual(cells[6][0], anchor[0], delta=0.015)
+            self.assertAlmostEqual(cells[6][1], anchor[1], delta=0.015)
+
+    def test_electromancer_has_no_template_but_summoner_has(self):
+        self.assertTrue(botcore.character_has_template("summoner"))
+        self.assertFalse(botcore.character_has_template("electromancer"))
+        self.assertFalse(botcore.character_has_template("../x"))
+
     def test_blank_or_unknown_character_has_no_target(self):
         frame = np.zeros((800, 450, 3), np.uint8)
         self.assertIsNone(botcore.detect_character_option(frame))
@@ -91,6 +106,60 @@ class CharacterActionTests(unittest.TestCase):
         self.detect_enter_area.return_value = None
         self.assertFalse(self.select())
         self.assertEqual(self.controller.tap.call_count, 2)
+
+    def test_grid_scan_finds_class_without_template_and_confirms_only_on_name(self):
+        import game_actions
+        game_actions._CHARACTER_CELL_CACHE.clear()
+        cells = [(0.1 + i * 0.01, 0.5) for i in range(24)]
+        self.detect_character_option.return_value = None
+        self.detect_selected.return_value = (0.5, 0.93)
+        # header reads the right class only after the 3rd roster tap
+        self.is_character_selected.side_effect = [False, False, True]
+        with patch.object(botcore, "get_character_grid_cells", return_value=cells):
+            ok = select_character(self.controller, {}, self.frame, self.capture, "necromancer", sleep=self.sleep)
+        self.assertTrue(ok)
+        taps = [call.args[0] for call in self.controller.tap.call_args_list]
+        self.assertEqual(taps, [list(cells[0]), list(cells[1]), list(cells[2]), [0.5, 0.93]])
+        self.assertEqual(game_actions._CHARACTER_CELL_CACHE["necromancer"], 2)
+        # second time: remembered cell is tried first
+        self.controller.tap.reset_mock()
+        self.is_character_selected.side_effect = [True]
+        with patch.object(botcore, "get_character_grid_cells", return_value=cells):
+            self.assertTrue(select_character(self.controller, {}, self.frame, self.capture, "necromancer", sleep=self.sleep))
+        self.assertEqual(self.controller.tap.call_args_list[0].args[0], list(cells[2]))
+        game_actions._CHARACTER_CELL_CACHE.clear()
+
+    def test_electromancer_known_cell_15_is_tried_first_and_still_name_verified(self):
+        import game_actions
+        game_actions._CHARACTER_CELL_CACHE.clear()
+        cells = [(0.1 + i * 0.01, 0.5) for i in range(24)]
+        self.detect_character_option.return_value = None
+        self.detect_selected.return_value = (0.5, 0.93)
+        self.is_character_selected.side_effect = [True]
+        with patch.object(botcore, "get_character_grid_cells", return_value=cells):
+            self.assertTrue(select_character(self.controller, {}, self.frame, self.capture, "electromancer", sleep=self.sleep))
+        taps = [call.args[0] for call in self.controller.tap.call_args_list]
+        self.assertEqual(taps, [list(cells[15]), [0.5, 0.93]])
+        # wrong header on cell 15 must not confirm; scan continues with other cells
+        self.controller.tap.reset_mock()
+        game_actions._CHARACTER_CELL_CACHE.clear()
+        self.is_character_selected.side_effect = [False, True]
+        with patch.object(botcore, "get_character_grid_cells", return_value=cells):
+            self.assertTrue(select_character(self.controller, {}, self.frame, self.capture, "electromancer", sleep=self.sleep))
+        taps = [call.args[0] for call in self.controller.tap.call_args_list]
+        self.assertEqual(taps[:2], [list(cells[15]), list(cells[0])])
+        game_actions._CHARACTER_CELL_CACHE.clear()
+
+    def test_grid_scan_never_confirms_when_no_cell_matches(self):
+        import game_actions
+        game_actions._CHARACTER_CELL_CACHE.clear()
+        cells = [(0.1 + i * 0.01, 0.5) for i in range(24)]
+        self.detect_character_option.return_value = None
+        self.is_character_selected.return_value = False
+        with patch.object(botcore, "get_character_grid_cells", return_value=cells):
+            self.assertFalse(select_character(self.controller, {}, self.frame, self.capture, "necromancer", sleep=self.sleep))
+        self.assertEqual(self.controller.tap.call_count, 24)  # only roster cells, never 'Selected'
+        self.assertNotIn([0.5, 0.93], [c.args[0] for c in self.controller.tap.call_args_list])
 
     def test_stop_after_icon_prevents_confirmation(self):
         running = threading.Event()

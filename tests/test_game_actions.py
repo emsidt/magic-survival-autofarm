@@ -84,6 +84,26 @@ class TestGameActions(unittest.TestCase):
         self.assertFalse(select_card(self.controller, {}, self.frame, choice, Mock(return_value=self.frame), sleep=lambda _: None))
 
     @patch("game_actions.botcore.detect_selected", return_value=(0.503, 0.903))
+    def test_enchant_follows_class_and_build_not_a_fixed_spirit_cyclone(self, _):
+        import botcore
+        # Electromancer + vortex build: Electric Zone (class spell) first, then Cyclone (Black Hole's base)
+        pref = botcore.build_strengthen_preference("electromancer", ["black_hole", "satellite", "electric_zone"], {"cyclone"})
+        self.assertEqual(pref[:3], ["electric_zone", "cyclone", "satellite"])
+        strengthened = set()
+        with patch("game_actions.botcore.is_strengthen_magic_screen", side_effect=[True, False]):
+            res = select_strengthen_magic(
+                self.controller, {}, self.frame, Mock(return_value=self.frame),
+                strengthened_skills=strengthened, sleep=lambda _: None, preferred_skills=pref,
+            )
+        self.assertEqual(res.key, "electric_zone")
+        self.assertEqual(self.controller.tap.call_args_list[-2].args[0], [0.606, 0.391])
+        # Summoner keeps Spirit first; a fusion maps to its primary spell (Telekinetic Sword -> Spirit)
+        self.assertEqual(botcore.build_strengthen_preference("summoner", ["telekinetic_sword"], set())[0], "spirit")
+        self.assertEqual(botcore.build_strengthen_preference("unknown_class", ["black_hole"], set())[0], "cyclone")
+        # Passive-only / unknown build keys never appear as targets
+        self.assertNotIn("overmind", botcore.build_strengthen_preference("summoner", ["overmind", "intelligence"], set()))
+
+    @patch("game_actions.botcore.detect_selected", return_value=(0.503, 0.903))
     def test_select_strengthen_magic_picks_spirit_then_cyclone(self, _):
         strengthened = set()
         # 1st call: Spirit (Row 1, Col 3 = 0.605, 0.260) succeeds and screen closes

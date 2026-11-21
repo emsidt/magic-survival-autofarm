@@ -1,5 +1,5 @@
 """Structured gameplay data and decision recorder for Magic Survival AI learning.
-Implements Step 2 of KE_HOACH_AI.md.
+Implements Step 2.
 """
 from __future__ import annotations
 
@@ -20,10 +20,10 @@ RUNS_DIR = DATA_DIR / "runs"
 
 
 class DataRecorder:
-    def __init__(self, enabled: bool = True, max_runs: int = 50):
+    def __init__(self, enabled: bool = True, max_runs: Optional[int] = 0):
         self.enabled = enabled
-        if max_runs < 1:
-            raise ValueError("max_runs must be at least 1")
+        if max_runs is not None and max_runs < 0:
+            raise ValueError("max_runs cannot be negative (use 0 or None for unlimited retention)")
         self.max_runs = max_runs
         self.current_run_id: Optional[str] = None
         self.current_run_dir: Optional[Path] = None
@@ -131,6 +131,8 @@ class DataRecorder:
             self.current_run_dir = None
 
     def _prune_old_runs(self):
+        if not self.max_runs or self.max_runs <= 0:
+            return
         try:
             if not RUNS_DIR.is_dir():
                 return

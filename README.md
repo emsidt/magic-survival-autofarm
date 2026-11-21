@@ -1,236 +1,136 @@
-# 🤖 Magic Survival AutoFarm & Adaptive AI Bot
+# Magic Survival AutoFarm
 
-Hệ thống **tự động hóa hoàn toàn (Full Auto-Play) và Học máy thích ứng (Adaptive AI)** cho tựa game **Magic Survival**, hỗ trợ chạy song song trên **giả lập Android LDPlayer (qua ADB ngầm 100%)** và **Google Play Games PC (cửa sổ Windows)**.
+Bot tự động chơi game **Magic Survival** bằng thị giác máy tính (OpenCV + Windows OCR) và điều khiển ngoại vi/ADB. Không đụng bộ nhớ game, không sửa gói tin.
 
-Bot hoạt động thuần túy bằng **Thị giác máy tính (OpenCV + Windows OCR)** và **Điều khiển ngoại vi / ADB** — tuyệt đối **không can thiệp bộ nhớ (memory hack), không sửa gói tin mạng, không chỉnh sửa file game**.
+- **LDPlayer (ADB, khuyên dùng)**: chạy ngầm, không chiếm chuột/bàn phím.
+- **Google Play Games PC**: chụp cửa sổ bằng `mss`, điều khiển bằng WASD/chuột.
+- Có **AI học thích ứng**: tự điều chỉnh điểm ưu tiên kỹ năng sau mỗi ván dựa trên thời gian sống.
 
----
+## Cài đặt & chạy
 
-## 🌟 Tính năng nổi bật
-
-### 1. Hai chế độ điều khiển linh hoạt
-* **Chế độ 1 — LDPlayer / Android ADB (`control_mode: "adb"`)**:
-  * Chụp màn hình trực tiếp từ nhân Android qua `adb exec-out screencap -p`.
-  * Gửi thao tác chạm (`tap`) và kéo giữ joystick (`swipe`) trực tiếp vào giả lập.
-  * **Chạy ngầm hoàn toàn**: Không chiếm chuột hay bàn phím máy tính; bạn có thể vừa treo bot vừa làm việc khác.
-* **Chế độ 2 — Google Play Games PC (`control_mode: "desktop"`)**:
-  * Chụp vùng cửa sổ game tốc độ cao bằng thư viện `mss`.
-  * Điều khiển di chuyển bằng bàn phím (`WASD`) hoặc kéo chuột ảo (`pydirectinput`).
-
-### 2. Hai giao diện vận hành (CLI & GUI)
-* **Terminal CLI Mode ([`bot_cli.py`](bot_cli.py))**: Siêu nhẹ, tốn ít tài nguyên CPU/RAM, hiển thị nhật ký trạng thái thời gian thực (vàng, đá quý, thời gian sống, cấp độ, phép đã học, rương, tháp qua màn).
-* **Tkinter GUI Mode ([`main.py`](main.py))**: Giao diện trực quan có khung xem trước ảnh (Live Preview), vẽ mũi tên vector hướng di chuyển, thống kê bộ đếm hành động, chỉnh sửa cấu hình trực tiếp và công cụ dạy quy tắc bằng chuột (`F8` / `F9` / `F10`).
-
-### 3. Thị giác máy tính & Điều hướng chiến thuật ([`botcore.py`](botcore.py))
-* **Né quái & Vùng tối sát thương (Hazard / Void Avoidance)**:
-  * Phân tích mật độ quái vật (bóng đen & lõi đỏ), Boss khổng lồ và vùng tối thu hẹp bản đồ (`detect_wave_darkness`).
-  * Sử dụng **Bản đồ khoảng cách (Distance Transform)** kết hợp **32 tia phóng chiếu (Ray-casting)** và **Quán tính hướng (Momentum)** để không bị kẹt hoặc giật lắc hướng (`W ↔ S`) khi bị bao vây.
-* **Kỹ thuật "Lắc tay" (Human Weave)**:
-  * Tạo dao động hình sin vi mô khi di chuyển giúp gom quái và lách khe đạn tự nhiên như người chơi thật; tự động tắt khi đang lao thẳng vào nhặt rương hoặc chạm tháp qua màn.
-* **Thứ tự ưu tiên mục tiêu thông minh (Strict Target Hierarchy)**:
-  1. **Tháp qua màn (Monolith / Obelisk)** — *Ưu tiên tuyệt đối số 1*:
-     * Nhận diện đa tỷ lệ kết hợp bộ lọc **Vết nứt Rune đỏ thẫm nguyên bản (`Pure Crimson`: `R >= 80, G <= 75, B <= 75`)** và **Thân đá xám trung tính (`|B - G| <= 6`)**.
-     * Hoạt động chính xác trên mọi màu nền bản đồ (kể cả map đất đỏ/nâu như *Depths*, *Magma*) và nhận diện được ngay cả khi tháp mới chỉ ló một nửa thân ở sát mép màn hình.
-     * **Thuật toán Quét xoắn ốc hình hộp nở rộng (Expanding Box Spiral Sweep)**: Khi đã dẹp xong đợt quái (Wave Cleared) mà chưa thấy tháp trên màn hình, bot tự động ngừng đi vòng tròn nhỏ và chuyển sang chạy tuần tra mở rộng theo 4 hướng Đông – Tây – Nam – Bắc (2.6s → 5.0s → 7.4s → 9.8s...) để mở rộng tầm nhìn camera đi tìm tháp.
-  2. **Rương cổ vật (Treasure Chest / Reliquary / Opulence)**:
-     * Nhận diện cả rương nằm trên mặt đất lẫn biểu tượng mũi tên chỉ hướng rương ở rìa màn hình.
-  3. **Hạt kinh nghiệm & Vàng (Mana Orbs & Gold)**:
-     * Phân loại hạt theo màu sắc/giá trị (Xanh lam, Vàng, Tím/Hồng) và chỉ lao tới nhặt khi hành lang di chuyển an toàn.
-
-### 4. Tự động chọn Kỹ năng, Nhánh Lv.7 & Phép kết hợp (Magic Combination)
-* **Nhận diện bài bằng Windows OCR (`winocr`) + Template Matching**:
-  * Tự động đọc tên kỹ năng ở màn hình lên cấp (`Learn`), màn hình cường hóa (`Strengthen Magic`), màn hình chọn nhánh tiến hóa cấp 7 (`Select Attribute`), và màn hình ghép phép (`Combination` nút sao đỏ).
-* **Tối ưu hóa nhánh cấp 7 (Mastery Level 7) phục vụ ghép phép**:
-  * **Spirit Lv.7** → Tự động chọn **`Magic Blade`** + **Electric Shock Lv.7 (`Chain Lightning`)** $\rightarrow$ Ghép thành **`Telekinetic Sword`**.
-  * **Cyclone Lv.7** → Tự động chọn **`Void`** + **Satellite Lv.7 (`Antigravity`)** $\rightarrow$ Ghép thành **`Black Hole`**.
-  * Hỗ trợ đầy đủ cơ sở dữ liệu tri thức trong [`game_knowledge.json`](game_knowledge.json) cho các phép kết hợp mạnh nhất: *Superconductivity, Current Overload, Vortex, Neutron Generation, Perpetual Engine, Overmind, Demon Equation, Frenzy, Prism Spree...*
-* **Đánh giá & Chọn Cổ vật trong Rương (Artifact Evaluator)**:
-  * Tự động duyệt qua từng cổ vật trong rương thường (3 món) và rương Opulence (tối đa 6 món).
-  * Chấm điểm tự động dựa trên bậc hiếm (**Legendary > Special > Synergy > Rare > Common**) và chỉ số ưu tiên (**Giảm hồi chiêu `Cooldown`, Chí mạng `Crit Rate / Crit Damage`, Sát thương phép**), sau đó chọn cổ vật điểm cao nhất và bấm **Obtain**.
-
-### 5. Tự động hóa vòng đời trận đấu & Tắt mọi loại Quảng cáo
-* **Vòng lặp tự động khép kín 100%**:
-  * Sảnh chính (Đọc số Vàng & Gem hiện có) $\rightarrow$ Chọn nhân vật (**Summoner**) $\rightarrow$ **Selected** $\rightarrow$ **Enter Area** $\rightarrow$ **Start Game** $\rightarrow$ Chiến đấu $\rightarrow$ Khi kết thúc trận đọc thời gian sống sót & số mạng hạ gục $\rightarrow$ Bấm **Confirm / OK** $\rightarrow$ Tự quay lại sảnh và bắt đầu ván mới.
-  * Tự động nhận diện popup **Restore Gold** (khôi phục vàng sau khi văng game) và bấm **Confirm**.
-* **Hệ thống đóng quảng cáo đa tầng (Multi-Layer Ad Dismissal)**:
-  * **Màn hình "No Ads - Tap to Continue"**: Tự động nhận diện màn hình đen khi hết video quảng cáo và bấm *"Tap to Continue"* ngay lập tức.
-  * **Quét nút chữ đa ngôn ngữ (Full Frame + 1.5x Zoom Top/Bottom Action Bars)**: Nhận diện chính xác các nút `"Đóng"`, `"Đóng | ✔"`, `"Close"`, `"Skip"`, `"Skip reward"`, `"Bỏ qua"`, `"Chạm để bỏ qua"`, `"Thoát video"`, `"No thanks"`, `"Không cảm ơn"`, `"Hủy"`, `"Cancel"`, `"Quay lại"`, `"Back"`, `"Claim"`, `"Nhận thưởng"`, kể cả nút xám mờ ở góc dưới bên trái hoặc nút có kèm icon.
-  * **Xử lý hộp thoại xác nhận (Confirmation Dialogs)**: Khi gặp bảng hỏi *"Đóng quảng cáo?"* hoặc *"Đóng video?"*, bot tự động bỏ qua dòng tiêu đề câu hỏi (có dấu `?`) và bấm chính xác vào nút xác nhận **`ĐÓNG`** / **`ĐÓNG VIDEO`**.
-  * **Nhận diện biểu tượng góc**: Quét ký tự đơn (`X`, `✕`, `✖`, `×`, `>`, `>>`, `<`, `<<`) và khớp mẫu biểu tượng nút X tròn, chữ thập, mũi tên tua nhanh ở cả chế độ sáng trên nền tối và tối trên nền sáng (có cơ chế bảo vệ chống bấm nhầm nút X đóng cửa sổ LDPlayer trên thanh tiêu đề Windows).
-  * **Dự phòng phím Back Android**: Nếu màn hình vẫn là quảng cáo sau 2 giây mà ẩn nút đóng, bot tự động gửi phím `Back` (`ESC`) để thoát.
-
-### 6. Bộ não Học máy Thích ứng (Adaptive AI) & Học từ Chuyên gia
-* **Học tăng cường sau mỗi trận ([`learning_engine.py`](learning_engine.py))**:
-  * Sau mỗi ván đấu, `AdaptiveLearner` đối chiếu thời gian sống sót thực tế với thời gian sống trung bình lịch sử (`average_survival_sec`).
-  * Những bộ kỹ năng (`skill_weights`) và cặp phối hợp (`synergy_weights`) giúp sống lâu hơn trung bình sẽ được cộng điểm thưởng vào [`data/learned_policy.json`](data/learned_policy.json), giúp bot ngày càng ưu tiên các build mạnh hơn ở những ván tiếp theo.
-* **Chế độ Ghi hình Chuyên gia ([`record_human_play.py`](record_human_play.py) / [`record_human.bat`](record_human.bat))**:
-  * Cho phép bạn tự tay chơi 100%, trong khi bot chạy ngầm quan sát và ghi lại mọi lựa chọn kỹ năng, nhánh Lv.7, cổ vật và thời gian sống sót của bạn để nạp trực tiếp kinh nghiệm chuyên gia vào não AI.
-* **Ghi dữ liệu huấn luyện có cấu trúc ([`data_recorder.py`](data_recorder.py))**:
-  * Lưu ảnh chụp màn hình và thông tin quyết định từng bước vào `data/runs/<run_id>/decisions.jsonl` (tự động dọn dẹp và giữ lại tối đa 50 ván gần nhất).
-
----
-
-## 📂 Cấu trúc thư mục dự án
-
-```text
-d:\magic-survival-autofarm\
-├── botcore.py                 # Trái tim xử lý thị giác (OpenCV, OCR), nhận diện UI/Tháp/Rương/Quái & thuật toán điều hướng
-├── bot_cli.py                 # Chế độ chạy Terminal CLI tự động hoàn toàn (hỗ trợ cả ADB và Desktop)
-├── main.py                    # Giao diện người dùng Tkinter GUI, xem trước trực tiếp & quản lý quy tắc
-├── game_actions.py            # Các thao tác tương tác game cấp cao có khóa bảo vệ trạng thái (GuardedController)
-├── adb_controller.py          # Giao tiếp ADB với giả lập LDPlayer (chụp ảnh screencap, tap, swipe ngầm)
-├── learning_engine.py         # Bộ máy AI học thích ứng trọng số kỹ năng & synergy qua từng ván đấu
-├── data_recorder.py           # Ghi nhật ký quyết định (JSONL + ảnh) theo từng ván chơi
-├── record_human_play.py       # Công cụ quan sát người chơi thật để dạy chiến thuật cho AI
-├── storage.py                 # Ghi file JSON nguyên tử (atomic write) chống hỏng dữ liệu khi tắt đột ngột
-├── config.json                # Cấu hình trung tâm của toàn bộ hệ thống
-├── game_knowledge.json        # Cơ sở dữ liệu tri thức về kỹ năng, nhánh Lv.7, phép kết hợp (Combination) & cổ vật
-├── rules.json                 # Các quy tắc nhận diện hình ảnh tùy chỉnh do người dùng dạy
-├── requirements.txt           # Danh sách thư viện Python cần thiết
-├── setup.bat                  # Script khởi tạo môi trường ảo (.venv) và cài đặt thư viện
-├── chay_bot_ldplayer.bat      # Chạy nhanh bot ở Chế độ 1: LDPlayer (ADB)
-├── chay_bot_google_play.bat   # Chạy nhanh bot ở Chế độ 2: Google Play Games PC
-├── run_cli.bat                # Mở menu chọn chế độ chạy trên Terminal CLI
-├── run.bat                    # Mở giao diện đồ họa Tkinter GUI
-├── record_human.bat           # Chạy chế độ ghi hình học từ người chơi thật
-├── assets/                    # Ảnh mẫu chuẩn (nhân vật, tháp monolith, rương, biểu tượng phép, nút quảng cáo...)
-│   ├── characters/            # Mẫu biểu tượng nhân vật (summoner.png...)
-│   └── chests/                # Mẫu các loại rương & mũi tên chỉ hướng rương
-├── data/                      # Dữ liệu AI đã học và lịch sử các ván đấu
-│   ├── learned_policy.json    # Trọng số kỹ năng & synergy do AI đúc kết
-│   ├── learning_history.json  # Lịch sử chi tiết 100 ván đấu gần nhất
-│   └── runs/                  # Ảnh chụp và log quyết định từng bước của 50 ván gần nhất
-└── tests/                     # Hơn 230 bài kiểm thử tự động (Unit & Integration Tests)
-```
-
----
-
-## 🛠️ Yêu cầu hệ thống & Cài đặt
-
-### Yêu cầu
-* **Hệ điều hành**: Windows 10 hoặc Windows 11 (bắt buộc để sử dụng tính năng nhận diện chữ `winocr` tích hợp của Windows).
-* **Ngôn ngữ**: Python 3.10 trở lên (khuyến nghị Python 3.11 hoặc 3.12).
-* **Môi trường chạy game**:
-  * **LDPlayer 9** (khuyến nghị bật *ADB Debugging* trong Cài đặt giả lập, độ phân giải dọc `900x1600` hoặc `1080x1920`), **HOẶC**
-  * **Google Play Games PC**.
-
-### Các bước cài đặt lần đầu
-1. Mở thư mục dự án tại `D:\magic-survival-autofarm`.
-2. Nhấp đúp vào **`setup.bat`** (hoặc chạy trong PowerShell) để tự động tạo môi trường ảo `.venv` và cài đặt các thư viện cần thiết:
-   ```powershell
-   cd D:\magic-survival-autofarm
-   py -3.12 -m venv .venv
-   .\.venv\Scripts\python.exe -m pip install --upgrade pip
-   .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-   ```
-3. Đảm bảo Windows đã cài gói ngôn ngữ nhận diện chữ **English (United States)** trong *Windows Settings → Time & language → Language & region* để `winocr` hoạt động.
-
----
-
-## 🚀 Hướng dẫn sử dụng
-
-### Cách 1: Chạy bằng Terminal CLI (Khuyên dùng — Nhẹ và ổn định nhất)
-* **Dành cho giả lập LDPlayer (ADB chạy ngầm)**:
-  1. Mở LDPlayer và vào game **Magic Survival**.
-  2. Kiểm tra đường dẫn `adb_path` trong [`config.json`](config.json) (mặc định: `"D:\\LDPlayer\\LDPlayer9\\adb.exe"`).
-  3. Nhấp đúp file **`chay_bot_ldplayer.bat`** (hoặc chạy `python bot_cli.py 1`).
-* **Dành cho Google Play Games PC**:
-  1. Mở cửa sổ game Magic Survival trên màn hình (không thu nhỏ cửa sổ).
-  2. Nhấp đúp file **`chay_bot_google_play.bat`** (hoặc chạy `python bot_cli.py 2`).
-* **Dừng bot trên CLI**: Nhấn tổ hợp phím **`Ctrl + C`** tại cửa sổ Terminal, bot sẽ tự động nhả toàn bộ thao tác điều khiển ngay lập tức.
-
-### Cách 2: Chạy bằng Giao diện đồ họa GUI
-1. Nhấp đúp file **`run.bat`** (hoặc chạy `.\.venv\Scripts\python.exe main.py`).
-2. Sử dụng các phím tắt toàn cục:
-
-| Phím tắt | Chức năng |
-| :---: | :--- |
-| **F8** | Bắt đầu chạy bot / Tạm dừng bot |
-| **F9** | Dừng khẩn cấp và nhả toàn bộ phím/chuột/cảm ứng ngay lập tức |
-| **F10** | Dừng và chụp màn hình hiện tại để thêm quy tắc nhận diện mới |
-
-### Cách 3: Tự tay chơi để dạy AI (Human Expert Recorder)
-1. Mở game trên LDPlayer hoặc Google Play Games PC.
-2. Nhấp đúp file **`record_human.bat`**.
-3. Tự tay chơi một ván thật xuất sắc (ví dụ sống trên 20–45 phút). Công cụ sẽ âm thầm ghi lại thứ tự lên cấp phép, cách bạn chọn nhánh Lv.7, cách chọn rương và nạp thẳng trọng số ưu tiên vào [`data/learned_policy.json`](data/learned_policy.json).
-
----
-
-## ⚙️ Cấu hình chi tiết (`config.json`)
-
-Bạn có thể chỉnh sửa trực tiếp file [`config.json`](config.json) để tùy biến hành vi của bot:
-
-| Tham số | Kiểu | Giá trị mặc định | Mô tả chi tiết |
-| :--- | :---: | :---: | :--- |
-| `window_title` | `string` | `"Magic Survival"` | Tên tiêu đề cửa sổ game khi dùng chế độ Desktop. |
-| `control_mode` | `string` | `"adb"` | `"adb"` (điều khiển giả lập LDPlayer ngầm) hoặc `"desktop"` (cửa sổ PC). |
-| `adb_path` | `string` | `"D:\\LDPlayer\\LDPlayer9\\adb.exe"` | Đường dẫn tới file `adb.exe` của giả lập Android. |
-| `input_mode` | `string` | `"touch"` | `"touch"` (ADB), `"keyboard"` (phím WASD), hoặc `"mouse"` (kéo chuột). |
-| `crop_left_px`, `crop_top_px`, `crop_right_px`, `crop_bottom_px` | `int` | `0` | Số pixel cắt bỏ ở 4 mép cửa sổ khi dùng chế độ Desktop (ví dụ bỏ thanh bên 65px của Google Play Games). |
-| `player_position` | `[float, float]` | `[0.5, 0.5]` | Tọa độ chuẩn hóa `(x, y)` của nhân vật trên màn hình (chính giữa là `0.5, 0.5`). |
-| `joystick_position` | `[float, float]` | `[0.5, 0.8]` | Tâm đặt ngón tay/chuột để kéo joystick. |
-| `joystick_radius_px` | `int` | `180` | Bán kính kéo joystick tính bằng pixel. |
-| `fps` | `int` | `30` | Tần suất vòng lặp quét tối đa mỗi giây. |
-| `max_session_minutes` | `float` | `0` | Thời gian chạy tối đa (phút). Đặt `0` để chạy vô hạn. |
-| `auto_levelup` | `bool` | `true` | Tự động chọn bài khi lên cấp, chọn nhánh Lv.7 và ghép phép Combination. |
-| `auto_chest` | `bool` | `true` | Tự động đánh giá và nhận cổ vật khi mở rương. |
-| `auto_close_ads` | `bool` | `true` | Tự động tắt quảng cáo, bấm *Tap to Continue* và thoát về sảnh. |
-| `auto_restart` | `bool` | `true` | Tự động chọn nhân vật và vào ván mới khi kết thúc trận. |
-| `character` | `string` | `"summoner"` | Tên nhân vật tự động chọn trước khi vào trận (`assets/characters/<name>.png`). |
-| `game_map` | `string` | `"depth"` | Tên bản đồ đang cày (hỗ trợ hệ số thời gian thực tế cho map `depth`). |
-| `enable_human_weave` | `bool` | `true` | Bật kỹ thuật lắc tay vi mô khi di chuyển né quái. |
-| `early_priority_skills` | `object` | `{"electric_zone": {"target_level": 4, "max_player_level": 10}}` | Ép ưu tiên lấy kỹ năng bảo vệ vòng ngoài (như *Electric Zone* lên cấp 4) trong 10 cấp đầu tiên để trụ vững đầu trận. |
-| `nearest_target_skills` | `list[str]` | `["telekinetic_sword"]` | Danh sách kỹ năng tự nhắm quái gần nhất cho phép bot chủ động áp sát nhặt đồ nếu chỉ có quái đơn lẻ. |
-| `skill_priority` | `list[str]` | `[...]` | Danh sách thứ tự ưu tiên kỹ năng gốc của người dùng (kết hợp cùng điểm AI học được). |
-| `prefer_freeze_traits` | `bool` | `true` | Ưu tiên các nhánh làm chậm/đóng băng (*Blizzard, Frost Nova, Tsunami*). |
-| `prefer_crit_and_cooldown`| `bool` | `true` | Ưu tiên chọn cổ vật và thuộc tính giảm hồi chiêu & tăng chí mạng. |
-| `record_gameplay_data` | `bool` | `true` | Ghi lại hình ảnh và quyết định mỗi ván vào thư mục `data/runs/`. |
-| `max_data_runs` | `int` | `50` | Số lượng thư mục ván đấu tối đa lưu giữ trên ổ đĩa (tự động xóa ván cũ nhất). |
-
----
-
-## 🧪 Kiểm thử tự động (Automated Testing)
-
-Dự án đi kèm bộ **230+ bài kiểm thử (Unit Tests & Integration Tests)** bao phủ toàn bộ thuật toán thị giác, điều hướng, chọn phép, nhận diện tháp/rương, tắt quảng cáo và học máy.
-
-Để chạy toàn bộ bộ kiểm thử:
 ```powershell
-.\.venv\Scripts\python.exe -m unittest discover -s tests -v
+setup.bat                      # tạo .venv + cài requirements.txt
+chay_bot_ldplayer.bat          # CLI + LDPlayer, tự restart khi lỗi (giáo án mặc định: vortex)
+chay_bot_aura_blade.bat        # CLI + giáo án Aura Blade (DEM) - đang thử nghiệm
+chay_bot_google_play.bat       # CLI + Google Play Games PC
+run.bat                        # GUI Tkinter (main.py)
+run_cli.bat [tham số]          # CLI tuỳ chọn tham số
+test_ldplayer.bat              # kiểm tra luồng ADB với LDPlayer
+record_human.bat               # ghi lại ván người chơi để AI học
 ```
 
-Hoặc chạy riêng từng nhóm kiểm thử:
+Yêu cầu: Windows 10/11 (có gói OCR English-US), Python 3.11, LDPlayer bật *ADB debugging: Open local connection*, `adb_path` trong `config.json` trỏ đúng `adb.exe`.
+
+### Tham số `bot_cli.py`
+
+| Tham số | Ý nghĩa |
+|---|---|
+| `1` / `ld` | LDPlayer (ADB) |
+| `2` / `google` / `pc` | Google Play Games PC |
+| `--build aura_blade` / `--aura` | Giáo án Aura Blade – DEM |
+| `--build vortex` / `--classic` | Giáo án Vortex/Black Hole (mặc định) |
+| `--runs N` | Số ván tối đa (0 = vô hạn) |
+| `--hibernate` | Hibernate máy khi hết giới hạn phiên (`max_session_minutes`) |
+
+Ví dụ: `python bot_cli.py 1 --build aura_blade --runs 5`
+
+## Cấu trúc project
+
+| File / thư mục | Vai trò |
+|---|---|
+| [bot_cli.py](bot_cli.py) | Vòng lặp chính chế độ terminal: nhận diện màn hình, chọn thẻ, chạy ván, tổng kết, hibernate |
+| [main.py](main.py) | GUI Tkinter (preview, chỉnh config, dạy quy tắc bằng chuột F8/F9/F10) |
+| [botcore.py](botcore.py) | Lõi thị giác + chính sách: nhận diện thẻ/kỹ năng (OCR + template), né quái/vùng tối, tìm tháp & rương, `BUILD_PRESETS`, chấm điểm thẻ |
+| [game_actions.py](game_actions.py) | Thao tác menu dùng chung: chọn nhân vật/map, bắt đầu ván, đóng quảng cáo, nhận thưởng |
+| [adb_controller.py](adb_controller.py) | Điều khiển giả lập qua ADB (screencap, tap, swipe joystick) |
+| [learning_engine.py](learning_engine.py) | `AdaptiveLearner`: cập nhật `skill_weights` / `synergy_weights` sau mỗi ván |
+| [data_recorder.py](data_recorder.py) | Ghi quyết định + ảnh từng ván vào `data/runs/` (tự xoay vòng `max_data_runs`) |
+| [record_human_play.py](record_human_play.py) | Quan sát người chơi thật và nạp lựa chọn vào AI |
+| [storage.py](storage.py) | Ghi JSON nguyên tử (không hỏng file khi tắt ngang) |
+| [game_knowledge.json](game_knowledge.json) | Cơ sở tri thức: 181 cổ vật, **60 phép kết hợp** (kèm trait nguyên liệu), **35 synergy cổ vật**, **25 Subject**, công thức chỉ số (ATK × Amplify × All Magic Damage × Crit; CDR/Damage Reduction nhân dồn), nguồn nhận cổ vật (nguồn: wiki Magic Survival) |
+| [knowledge.py](knowledge.py) | Truy cập tri thức: tra fusion/Subject, nhận diện nhóm chỉ số, theo dõi cổ vật đã nhặt trong ván và cộng điểm khi cổ vật giúp hoàn thành synergy (đủ bộ +2500, mỗi mảnh đã có +400) |
+| [config.json](config.json) | Cấu hình chạy (xem bên dưới) |
+| [rules.json](rules.json) / `rules/` | Quy tắc bấm tuỳ chỉnh do người dùng dạy (GUI) |
+| `assets/` | Ảnh mẫu nhận diện (nút, tháp, rương, nhân vật, kỹ năng) |
+| `data/` | `learned_policy.json`, `learning_history.json` (giữ lại), `runs/` (ghi hình, bị git bỏ qua) |
+| `scripts/` | `inspect_captures.py` (phân loại `captures/`), `test_ldplayer_stream.py` |
+| `tests/` | 231 unit/integration test |
+
+## Cơ chế hoạt động
+
+**Thứ tự ưu tiên mục tiêu khi chiến đấu:** Tháp qua màn (Monolith) → Rương cổ vật → Hạt kinh nghiệm. Né quái bằng distance transform + ray-casting + quán tính hướng; "lắc tay" (human weave) để gom quái, tự tắt khi lao vào tháp/rương. Hết quái mà chưa thấy tháp thì quét xoắn ốc mở rộng.
+
+**Chọn thẻ khi lên cấp** (`choose_best_artifact_or_card`):
+1. Kỹ năng trong `early_priority_skills` (mặc định `electric_zone` lên Lv4 trong 10 cấp đầu cho dễ sống).
+2. Nhánh tiến hóa Lv.7 / phép kết hợp (dấu ★) / passive đặc biệt mạnh.
+3. Kỹ năng trong `skill_priority`: mỗi bậc 25 điểm, cộng bonus học được `clamp(bonus*0.5, -12, 12)`.
+4. Cổ vật/passive chấm theo bậc hiếm, crit, cooldown, synergy với kỹ năng đang có.
+
+Hiện **không có epsilon-greedy**: giáo án là chính, AI chỉ tinh chỉnh ±12 điểm.
+
+**AI học:** sau mỗi ván so thời gian sống với trung bình động. Hơn trung bình/ván người chơi ≥ 20 phút → thưởng (lr 0.20); thấp hơn → phạt nhẹ (lr 0.06). Trọng số kỹ năng trong [-1.5, 8], synergy trong [-1, 5] (chi tiết ở mục "Hệ thống AI học").
+
+## Hệ thống AI học (chi tiết)
+
+Hai tầng: (1) **thị giác & điều khiển thời gian thực** (`botcore.py`, `game_actions.py`, `bot_cli.py`, `main.py`); (2) **học thích ứng & ghi tri thức** (`learning_engine.py`, `data_recorder.py`, `record_human_play.py`).
+
+**Ghi dữ liệu** (`DataRecorder`): mỗi quyết định lưu ảnh `step_XXXX_<screen>.png` + dòng trong `data/runs/<run_id>/decisions.jsonl`; cuối ván ghi `summary.json` (thời gian sống, quái, vàng, kỹ năng/cấp). Tự xoá ván cũ nhất khi vượt `max_data_runs` (mặc định 50).
+
+**Học từ người chơi** (`record_human.bat`): quan sát người chơi thật, phát hiện lúc chọn thẻ/nhánh Lv.7/Combination/mở rương, rồi nạp lựa chọn vào trọng số khi hết ván. Ván người ≥ 20 phút luôn được thưởng và **không** kéo lệch mốc trung bình của bot.
+
+**Hàm thưởng** (`AdaptiveLearner.evaluate_and_learn_run`, lưu nguyên tử qua `storage.write_json_atomic`):
+- `diff = thời gian sống − average_survival_sec` (EMA, tối đa 12 mẫu).
+- Ván ≥ 20 phút hoặc `diff ≥ 0`: `reward = clamp(diff / max(0.7·avg, 120), 0..1.5)` (ván người tối thiểu 1.0), `lr = 0.20`.
+- Ván thấp hơn TB: `reward = max(-0.30, diff / max(2.5·avg, 360))`, `lr = 0.06` (phạt chậm để không phá build tốt khi chết do di chuyển).
+- **Chia công theo "lợi thế" (v2):** kỹ năng dùng trong ván: `+= lr·reward·2·(1 − p)`, kỹ năng đã biết nhưng không dùng: `+= lr·reward·2·(−p)·0.5`, với `p` = tần suất dùng thường lệ (EMA, `skill_usage`). Cặp: `+= lr·reward·1.5·(1 − p_a·p_b)`. Kỹ năng ván nào cũng có (Spirit) nhận ~0 thay vì leo lên trần 8.0 như luật v1 (từng làm 23/43 kỹ năng chạm trần). Mỗi ván mọi trọng số co về 0 thêm 1% để điểm cũ phai dần.
+- Policy cũ (v1) tự được dựng lại từ `learning_history.json` khi nạp lần đầu; bản gốc lưu ở `data/learned_policy.v1.bak.json`.
+- Giới hạn: `skill_weights` ∈ [-1.5, 8] (kỹ năng lõi sàn 0), `synergy_weights` ∈ [-1, 5].
+- Chống học trùng theo `run_id`; chỉ học khi có thời gian sống hợp lệ đọc từ HUD/màn kết quả.
+
+**Dữ liệu `data/`:** `learned_policy.json` (`total_runs_analyzed`, `average_survival_sec`, `skill_weights`, `synergy_weights`, `skill_usage`, `movement_policy`, `recent_run_ids`, `version`), `learning_history.json` (100 ván gần nhất: thời gian, quái, reward, kỹ năng, delta), `runs/<run_id>/`.
+
+**Tri thức gốc** (`game_knowledge.json`): kỹ năng, nhánh Lv.7, công thức Magic Combination (Telekinetic Sword = Spirit + Electric Shock; Black Hole = Cyclone + Satellite; Superconductivity, Current Overload, Vortex, Overmind...), điểm cổ vật theo bậc hiếm và chỉ số (Cooldown, Crit...).
+
+**Giới hạn hiện tại (đánh giá thẳng):** tín hiệu học chỉ là thời gian sống (nhiễu cao, khó quy cho từng kỹ năng); mức chỉnh tối đa ±12 điểm so với giáo án; chưa có thống kê so sánh giữa các build. Hiệu quả thực chủ yếu đến từ giáo án viết tay và độ chính xác của vision. Cần tích luỹ nhiều ván để so `vortex` với `aura_blade` bằng số liệu.
+
+**Log khi chạy:** mỗi ván in khối tổng kết (thời gian sống, reward AI, vàng/gem/quái, kỹ năng và delta); khi dừng bot in thêm **Tổng kết phiên** (số ván, sống TB/tốt nhất/tệ nhất, tổng vàng/gem/quái).
+
+## Giáo án (build)
+
+Chọn bằng `build_mode` trong `config.json` hoặc `--build`:
+
+- **`vortex`** (mặc định): Cyclone + Satellite → Vortex / Black Hole, kèm Blizzard/Frost Nova, Shield, Cloaking.
+- **`aura_blade`** (thử nghiệm, tách riêng): Summoner; Spirit + Electric Shock → Telekinetic Sword (Aura Blade) → Magic Circle + Intelligence Lv5 → Overmind → max toàn bộ passive để mở Deus Ex Machina. Mục tiêu crit ≥ 80%, nhiều kiếm, cooldown thấp.
+
+Thêm giáo án mới: khai báo trong `BUILD_PRESETS` ở `botcore.py` (`skill_priority`, `early_priority_skills`, `nearest_target_skills`, ...).
+
+## Các khoá `config.json` chính
+
+| Khoá | Ý nghĩa |
+|---|---|
+| `control_mode` | `adb` hoặc `desktop` |
+| `adb_path` | Đường dẫn `adb.exe` của LDPlayer |
+| `character`, `game_map` | Nhân vật, bản đồ khi bắt đầu ván (`summoner`, `depth`) |
+| `build_mode`, `skill_priority`, `early_priority_skills`, `nearest_target_skills` | Giáo án |
+| `prefer_crit_and_cooldown`, `prefer_freeze_traits` | Thiên hướng chấm cổ vật |
+| `auto_levelup`, `auto_chest`, `auto_close_ads`, `auto_restart` | Tự động hoá |
+| `enable_human_weave` | Bật lắc tay |
+| `max_session_minutes`, `auto_hibernate`, `max_matches` | Giới hạn phiên (270 phút), hibernate, số ván (0 = vô hạn) |
+| `record_gameplay_data`, `max_data_runs` | Ghi dữ liệu ván |
+| `auto_clear_terminal`, `clear_terminal_interval_sec` | Dọn terminal định kỳ |
+
+## Kiểm thử
+
 ```powershell
-# Kiểm thử nhận diện và tắt quảng cáo (Đóng, Skip, X, No Ads...)
-.\.venv\Scripts\python.exe -m unittest tests.test_ad_close_text
-
-# Kiểm thử nhận diện tháp Monolith, rương, né quái và chọn kỹ năng
-.\.venv\Scripts\python.exe -m unittest tests.test_botcore
-
-# Kiểm thử di chuyển nhặt đồ và lao vào tháp qua màn
-.\.venv\Scripts\python.exe -m unittest tests.test_pickup_movement
-
-# Kiểm thử bộ máy AI học thích ứng
-.\.venv\Scripts\python.exe -m unittest tests.test_learning_engine
+.\.venv\Scripts\python.exe -m unittest discover -s tests
 ```
 
----
+## Sự cố thường gặp
 
-## 🔧 Xử lý sự cố thường gặp (Troubleshooting)
+- **Không kết nối ADB**: bật ADB local connection trong LDPlayer; kiểm tra `adb_path`.
+- **OCR không đọc được**: cài gói ngôn ngữ English (US) có OCR; độ rộng giả lập 540–1080px.
+- **Google Play Games không nhận WASD**: `Shift+Tab` → Controls Editor gán joystick W/A/S/D, hoặc dùng LDPlayer; đừng minimize cửa sổ game.
 
-1. **Lỗi không kết nối được ADB trên LDPlayer**:
-   * Mở **LDPlayer Settings (Cài đặt)** $\rightarrow$ **Other settings (Cài đặt khác)** $\rightarrow$ Bật **ADB debugging: Open local connection**.
-   * Kiểm tra đường dẫn `adb_path` trong `config.json` đã trỏ đúng tới file `adb.exe` trong thư mục cài đặt LDPlayer chưa.
-2. **OCR không đọc được chữ trên màn hình nâng cấp / quảng cáo**:
-   * Đảm bảo Windows 10/11 đã cài đặt gói ngôn ngữ **English (US)** có hỗ trợ *Optical Character Recognition (OCR)*.
-   * Không thu nhỏ độ phân giải giả lập xuống quá thấp (khuyến nghị chiều rộng từ `540px` đến `1080px`).
-3. **Chế độ Google Play Games PC không nhận phím WASD**:
-   * Nhấn `Shift + Tab` trong Google Play Games để mở *Controls Editor*, đặt biểu tượng Joystick vào giữa vùng điều khiển và gán phím `W/A/S/D`, hoặc chuyển sang chế độ LDPlayer ADB để ổn định hơn.
-   * Đảm bảo cửa sổ game không bị thu nhỏ (Minimize) hoặc bị che khuất bởi cửa sổ khác khi dùng chế độ Desktop.
+## Lưu ý
 
----
-
-## ⚠️ Lưu ý & Miễn trừ trách nhiệm
-
-* Công cụ này được phát triển cho mục đích nghiên cứu **Thị giác máy tính (Computer Vision)**, **Tự động hóa giao diện (UI Automation)** và **Học tăng cường thích ứng (Adaptive Reinforcement Learning)**.
-* Không dạy các quy tắc tùy chỉnh (`rules.json`) bấm vào các nút giao dịch cửa hàng bằng tiền thật.
-* Người dùng tự chịu trách nhiệm tuân thủ điều khoản dịch vụ của trò chơi khi sử dụng công cụ tự động hóa.
+Dự án phục vụ nghiên cứu Computer Vision / UI automation. Đừng dạy quy tắc bấm vào nút mua bằng tiền thật. Người dùng tự chịu trách nhiệm về điều khoản dịch vụ của game.

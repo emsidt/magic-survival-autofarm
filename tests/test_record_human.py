@@ -70,10 +70,15 @@ class TestRecordHumanPlay(unittest.TestCase):
         import numpy as np
         from game_actions import finish_match
         from data_recorder import DataRecorder
-        from learning_engine import get_adaptive_learner
+        import shutil
+        import tempfile
+        from learning_engine import AdaptiveLearner
 
         rec = DataRecorder(enabled=False)
-        learner = get_adaptive_learner()
+        # Never touch the user's real data/ policy: use an isolated learner in a temp dir
+        tmp = tempfile.mkdtemp()
+        self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
+        learner = AdaptiveLearner(data_dir=tmp)
         dummy_frame = np.zeros((100, 100, 3), dtype=np.uint8)
 
         rep = finish_match(

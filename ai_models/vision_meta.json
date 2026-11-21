@@ -1,0 +1,54 @@
+{
+  "card_classes": [
+    "adrenaline",
+    "arcane_effuse",
+    "arcane_ray",
+    "armageddon",
+    "blizzard",
+    "cloaking",
+    "concentration",
+    "cyclone",
+    "electric_shock",
+    "electric_zone",
+    "enchant",
+    "energy_bolt",
+    "explorer",
+    "fast_casting",
+    "fireball",
+    "flash_shock",
+    "frost_nova",
+    "guardian_angel",
+    "haste",
+    "incineration",
+    "intelligence",
+    "juggernaut",
+    "lava_zone",
+    "magic_bullet",
+    "magic_circle",
+    "meteor",
+    "satellite",
+    "shield",
+    "snipe",
+    "spirit",
+    "thunderstorm",
+    "tsunami",
+    "vitality"
+  ],
+  "screen_classes": [
+    "attribute",
+    "chest",
+    "combination_magic",
+    "endgame",
+    "level_up",
+    "shop",
+    "strengthen_magic"
+  ],
+  "card_size_wh": [
+    192,
+    64
+  ],
+  "screen_size_wh": [
+    96,
+    160
+  ]
+}

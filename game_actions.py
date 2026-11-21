@@ -204,7 +204,9 @@ def select_character(controller, rect, frame, capture, character="summoner", sle
         return False
     target = botcore.detect_character_option(frame, character)
     if target is None:
-        return False
+        if botcore.character_has_template(character):
+            return False
+        return _select_character_by_grid_scan(controller, rect, frame, capture, character, sleep)
     controller.tap(list(target), rect)
     # Allow the details panel to update; OCR failure never confirms another class.
     for _ in range(3):
@@ -214,6 +216,39 @@ def select_character(controller, rect, frame, capture, character="summoner", sle
         if not selected:
             return False
         if botcore.is_character_selected(details, character):
+            controller.tap(list(selected), rect)
+            for _ in range(3):
+                sleep(0.40)
+                if botcore.detect_enter_area(capture()):
+                    return True
+            return False
+    return False
+
+
+_CHARACTER_CELL_CACHE: dict[str, int] = {}
+
+
+def _select_character_by_grid_scan(controller, rect, frame, capture, character, sleep=time.sleep):
+    """No icon template for this class: tap roster cells and let the name header (OCR) decide.
+
+    Never confirms 'Selected' unless the header reads exactly the requested class name. The cell
+    that matched is remembered so later matches go straight to it.
+    """
+    cells = botcore.get_character_grid_cells(frame)
+    order = list(range(len(cells)))
+    cached = _CHARACTER_CELL_CACHE.get(character, botcore.CHARACTER_ROSTER_CELLS.get(character))
+    if cached is not None and 0 <= cached < len(cells):
+        order.remove(cached)
+        order.insert(0, cached)
+    for idx in order:
+        controller.tap(list(cells[idx]), rect)
+        sleep(0.30)
+        details = capture()
+        selected = botcore.detect_selected(details)
+        if not selected:
+            return False  # left the roster screen; never reuse stale coordinates
+        if botcore.is_character_selected(details, character):
+            _CHARACTER_CELL_CACHE[character] = idx
             controller.tap(list(selected), rect)
             for _ in range(3):
                 sleep(0.40)
@@ -233,7 +268,7 @@ def select_attribute(controller, rect, capture, sleep=time.sleep):
     last_index = None
     for index, target in circles.items():
         controller.tap(list(target), rect)
-        sleep(0.18)
+        sleep(0.28)
         frame = capture()
         if not botcore.is_attribute_screen(frame):
             return None
@@ -250,7 +285,7 @@ def select_attribute(controller, rect, capture, sleep=time.sleep):
     _, index, label, parent = best
     if last_index != index:
         controller.tap(list(circles[index]), rect)
-        sleep(0.18)
+        sleep(0.25)
     frame = capture()
     learn = botcore.detect_learn_button(frame)
     if not botcore.is_attribute_screen(frame) or not learn or not botcore.is_learn_button_active(frame):
@@ -262,7 +297,7 @@ def select_attribute(controller, rect, capture, sleep=time.sleep):
     return LearnedSelection(parent, label, index)
 
 
-def select_combination(controller, rect, frame, capture, priority=None, sleep=time.sleep):
+def select_combination(controller, rect, frame, capture, priority=None, active_skills=None, sleep=time.sleep):
     """Open only a red star; return a learned combo only after a confirmed transition."""
     star = botcore.detect_combination_star(frame)
     if not star:
@@ -270,7 +305,7 @@ def select_combination(controller, rect, frame, capture, priority=None, sleep=ti
     controller.tap(list(star), rect)
     sleep(0.45)
     menu = capture()
-    choice = botcore.find_best_combination_option(menu, priority)
+    choice = botcore.find_best_combination_option(menu, priority, active_skills=active_skills)
     if not choice:
         # Do not reuse the pre-menu screenshot or tap the star as a guessed close button.
         controller.press_esc()
@@ -300,14 +335,16 @@ def select_strengthen_magic(
     capture,
     strengthened_skills=None,
     sleep=time.sleep,
+    preferred_skills=None,
 ):
     """Select a magic to strengthen on 'Choose the Magic to strengthen' (Enchant screen).
-    Prioritizes Spirit (Row 1, Col 3) first; if Spirit was already strengthened, selects Cyclone (Row 3, Col 2).
+    Spells are tried in `preferred_skills` order (class spell first, then the build's spells); without a preference
+    the legacy grid order is used. Spells already strengthened this run are tried last.
     """
     controller.release()
     if not botcore.is_strengthen_magic_screen(frame):
         return None
-    candidates = botcore.get_strengthen_magic_targets(strengthened_skills)
+    candidates = botcore.get_strengthen_magic_targets(strengthened_skills, preferred_skills)
     for idx, (skill_key, label, target) in enumerate(candidates[:4], 1):
         controller.tap(list(target), rect)
         sleep(0.30)
@@ -457,6 +494,30 @@ def format_match_summary(
     summary_block = "\n".join(lines)
     status_line = f"🏁 [Kết quả ván] ⏱️ {survival_str} | Điểm AI: {reward_str} | 💰 +{gold:,} Vàng | 💎 +{gems:,} Gem | Skill: {skills_summary}"
     return summary_block, status_line
+
+
+def format_session_summary(runs: list[dict], build: str = "", elapsed_sec: float = 0.0) -> str:
+    """Tổng kết cả phiên chạy: số ván, thời gian sống TB/tốt nhất, tổng vàng/gem/quái."""
+    lines = ["=" * 65, "  📈 TỔNG KẾT PHIÊN CHẠY 📈", "=" * 65]
+    if build:
+        lines.append(f"🛡️  Giáo án: {build}")
+    if elapsed_sec > 0:
+        h, rem = divmod(int(elapsed_sec), 3600)
+        lines.append(f"🕒  Thời gian phiên: {h:d}h{rem // 60:02d}m")
+    valid = [r for r in runs if float(r.get("survival_sec") or 0) > 0]
+    lines.append(f"🎮  Số ván hoàn thành: {len(runs)} (có thời gian hợp lệ: {len(valid)})")
+    if valid:
+        secs = [float(r["survival_sec"]) for r in valid]
+        avg, best, worst = sum(secs) / len(secs), max(secs), min(secs)
+        fmt = lambda s: f"{int(s) // 60:02d}:{int(s) % 60:02d}"
+        lines.append(f"⏱️  Sống TB/tốt nhất/tệ nhất: {fmt(avg)} / {fmt(best)} / {fmt(worst)}")
+        lines.append("📉  Từng ván: " + ", ".join(fmt(s) for s in secs[-15:]))
+    total_gold = sum(int(r.get("gold") or 0) for r in runs)
+    total_gems = sum(int(r.get("gems") or 0) for r in runs)
+    total_kills = sum(int(r.get("kills") or 0) for r in runs)
+    lines.append(f"💰  Tổng: +{total_gold:,} Vàng | 💎 +{total_gems:,} Gem | ⚔️ {total_kills:,} Quái")
+    lines.append("=" * 65)
+    return "\n".join(lines)
 
 
 def finish_match(
