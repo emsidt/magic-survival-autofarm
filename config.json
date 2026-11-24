@@ -17,14 +17,16 @@
   ],
   "joystick_radius_px": 180,
   "fps": 30,
-  "max_session_minutes": 270,
+  "max_session_minutes": 420,
   "auto_levelup": true,
+  "allow_mana_retrieve": true,
   "card_choice": 1,
   "auto_close_ads": true,
+  "ad_stuck_restart_sec": 120,
   "auto_restart": true,
   "build_mode": "ai",
   "character": "summoner",
-  "game_map": "depth",
+  "game_map": "ecosystem",
   "auto_chest": true,
   "enable_human_weave": true,
   "early_priority_skills": {
@@ -46,6 +48,5 @@
   "auto_clear_terminal": true,
   "clear_terminal_interval_sec": 600,
   "max_matches": 0,
-  "auto_hibernate": true,
   "use_kaggle_ai": true
 }

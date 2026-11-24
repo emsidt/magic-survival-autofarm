@@ -58,9 +58,11 @@ class MouseTracker:
         was_down = False
         while self._running:
             try:
-                # 0x01 là VK_LBUTTON
-                is_down = bool(ctypes.windll.user32.GetAsyncKeyState(0x01) & 0x8000)
-                if is_down and not was_down:
+                # 0x01 là VK_LBUTTON; kiểm tra cả bit 0x0001 (đã bấm giữa 2 lần quét) để không lỡ cú click nhanh
+                key_state = ctypes.windll.user32.GetAsyncKeyState(0x01)
+                is_down = bool(key_state & 0x8000)
+                just_pressed = bool(key_state & 0x0001)
+                if (is_down and not was_down) or (just_pressed and not is_down):
                     pt = POINT()
                     ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
                     with self._lock:
@@ -72,21 +74,28 @@ class MouseTracker:
                 pass
             time.sleep(0.01)
 
-    def get_last_click_in_rect(self, rect: dict, since_time: float = 0.0) -> Optional[tuple[float, float]]:
+    def get_clicks_in_rect(self, rect: dict, since_time: float = 0.0) -> list[tuple[float, float, float]]:
         rx = rect.get("left", 0)
         ry = rect.get("top", 0)
         rw = rect.get("width", 1)
         rh = rect.get("height", 1)
         if rw <= 0 or rh <= 0:
-            return None
+            return []
+        out: list[tuple[float, float, float]] = []
         with self._lock:
-            for cx, cy, t in reversed(self.clicks):
+            for cx, cy, t in self.clicks:
                 if t >= since_time - 0.2:  # Cho phép click xảy ra ngay trước/trong khi phát hiện
                     nx = (cx - rx) / rw
                     ny = (cy - ry) / rh
                     if 0.0 <= nx <= 1.0 and 0.0 <= ny <= 1.0:
-                        return (round(nx, 4), round(ny, 4))
-        return None
+                        out.append((round(nx, 4), round(ny, 4), t))
+        return out
+
+    def get_last_click_in_rect(self, rect: dict, since_time: float = 0.0) -> Optional[tuple[float, float]]:
+        clicks = self.get_clicks_in_rect(rect, since_time=since_time)
+        if not clicks:
+            return None
+        return (clicks[-1][0], clicks[-1][1])
 
     def clear(self):
         with self._lock:
@@ -188,6 +197,119 @@ def format_game_time(seconds: float) -> str:
     return f"{s // 60:02d}:{s % 60:02d}"
 
 
+def extract_card_level_badge(frame, card_index: int, num_cards: int) -> Optional[int]:
+    """Read the yellow 'Lv X' number at the top-right of a level-up card when OCR missed it."""
+    if frame is None or frame.size == 0 or card_index < 1:
+        return None
+    import cv2
+    import numpy as np
+    h, w = frame.shape[:2]
+    bands = ((0.15, 0.367), (0.367, 0.540), (0.540, 0.714), (0.714, 0.890)) if num_cards == 4 else (
+        (0.20, 0.445), (0.445, 0.619), (0.619, 0.798)
+    )
+    if card_index > len(bands):
+        return None
+    y0, y1 = bands[card_index - 1]
+    cy0 = int(h * (y0 + 0.01))
+    cy1 = int(h * (y0 + (y1 - y0) * 0.65))
+    crop = frame[cy0:cy1, int(w * 0.76) : int(w * 0.93)]
+    if crop.size == 0:
+        return None
+    hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+    mask = cv2.inRange(hsv, (14, 60, 80), (40, 255, 255))
+    v = cv2.bitwise_and(hsv[:, :, 2], hsv[:, :, 2], mask=mask)
+    if int(np.max(v)) < 40:
+        return None
+    _, bw = cv2.threshold(v, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    num, _, stats, _ = cv2.connectedComponentsWithStats(bw)
+    comps = sorted(
+        [(int(stats[i, 0]), int(stats[i, 1]), int(stats[i, 2]), int(stats[i, 3]))
+         for i in range(1, num) if stats[i, 3] >= 6 and stats[i, 2] >= 2],
+        key=lambda b: b[0],
+    )
+    if len(comps) < 3:
+        return None
+    for i in range(len(comps) - 1):
+        if comps[i + 1][0] - (comps[i][0] + comps[i][2]) >= 4:
+            dx, dy, dw, dh = comps[i + 1]
+            sub = crop[max(0, dy - 3) : min(crop.shape[0], dy + dh + 4), max(0, dx - 2) :]
+            val = botcore._read_digits_value(sub, hsv_ranges=[((14, 60, 80), (40, 255, 255))], min_score=0.55)
+            if val is not None and 1 <= val <= 10:
+                return val
+    return None
+
+
+def update_inferred_skill_levels(
+    ocr_cards: dict,
+    active_skills: set[str],
+    skill_levels: dict[str, int],
+    pending_offers: dict[str, tuple[int, int, int]],
+    inferred_choices: dict[int, tuple[int, str]],
+    step_idx: int,
+) -> None:
+    """Infer chosen skills across level-ups when a previously offered skill reappears at Lv L+1."""
+    for card_idx, cdata in ocr_cards.items():
+        lv = cdata.offered_level
+        if lv is None:
+            continue
+        for sk in cdata.skills:
+            # If skill is offered at Lv >= 2, it was definitely picked at least (lv - 1) times already
+            if lv >= 2:
+                active_skills.add(sk)
+                skill_levels[sk] = max(skill_levels.get(sk, 0), lv - 1)
+            prev = pending_offers.get(sk)
+            if prev is not None:
+                prev_step, prev_card_idx, prev_lv = prev
+                if lv > prev_lv and prev_step not in inferred_choices:
+                    inferred_choices[prev_step] = (prev_card_idx, sk)
+            pending_offers[sk] = (step_idx, card_idx, lv)
+
+
+def detect_shop_purchase(
+    prev_mana: Optional[int],
+    cur_mana: Optional[int],
+    buy_clicks: list[tuple[float, float, float]],
+    last_buy_click_t: float,
+    can_buy: bool,
+    last_label: str,
+) -> tuple[bool, Optional[int], float]:
+    """Detect whether the player bought the currently highlighted Merchant Shop artifact.
+
+    Prefers observing an actual Mana Orb balance drop; falls back to a fresh Buy-button
+    click while Buy was enabled. Returns (purchased, mana_spent, new_last_buy_click_t).
+    """
+    if prev_mana is not None and cur_mana is not None and cur_mana < prev_mana and last_label:
+        latest_t = max((ct for _, _, ct in buy_clicks), default=last_buy_click_t)
+        return (True, prev_mana - cur_mana, max(last_buy_click_t, latest_t))
+
+    if can_buy and last_label:
+        matched_clicks = [
+            ct for cx, cy, ct in buy_clicks
+            if ct > last_buy_click_t and cy >= 0.80 and 0.25 <= cx <= 0.75
+        ]
+        if matched_clicks:
+            return (True, None, max(matched_clicks))
+
+    return (False, None, last_buy_click_t)
+
+
+def should_commit_modal_exit(
+    still_open: bool,
+    back_in_combat: bool,
+    absent_streak: int,
+    min_absent: int = 3,
+) -> tuple[bool, int]:
+    """Debounce transient detector flicker while a chest, attribute, or shop modal is still open."""
+    if still_open:
+        return (False, 0)
+    if back_in_combat:
+        return (True, 0)
+    new_streak = absent_streak + 1
+    if new_streak >= min_absent:
+        return (True, 0)
+    return (False, new_streak)
+
+
 def run_human_recorder():
     print("=" * 65)
     print("  🎮 MAGIC SURVIVAL - HUMAN EXPERT DEMONSTRATION RECORDER 🎮")
@@ -236,15 +358,33 @@ def run_human_recorder():
     last_level_up_time = 0.0
     last_seen_cards = None
     in_level_up = False
+    in_chest = False
+    chest_absent_streak = 0
+    last_chest_label = ""
+    last_chest_frame = None
+    in_attribute = False
+    attr_absent_streak = 0
+    last_attr_label = ""
+    last_attr_skill = ""
+    last_attr_frame = None
     in_shop = False
+    shop_absent_streak = 0
     last_shop_time = 0.0
     last_shop_label = ""
     last_shop_frame = None
     last_mana_val = None
+    last_shop_can_buy = False
+    last_shop_buy_click_t = 0.0
+    shop_bought_items: list[str] = []
+    last_purchased_label = ""
+    last_purchased_at = 0.0
+    last_purchased_had_mana = False
     step_count = 0
     death_streak = 0
     last_known_game_timer_sec = 0.0
     last_timer_scan_time = 0.0
+    pending_offers: dict[str, tuple[int, int, int]] = {}
+    inferred_choices: dict[int, tuple[int, str]] = {}
 
     try:
         while True:
@@ -292,10 +432,28 @@ def run_human_recorder():
                     step_count = 0
                     death_streak = 0
                     in_level_up = False
+                    in_chest = False
+                    chest_absent_streak = 0
+                    last_chest_label = ""
+                    last_chest_frame = None
+                    in_attribute = False
+                    attr_absent_streak = 0
+                    last_attr_label = ""
+                    last_attr_skill = ""
+                    last_attr_frame = None
                     in_shop = False
+                    shop_absent_streak = 0
                     last_shop_label = ""
                     last_shop_frame = None
                     last_mana_val = None
+                    last_shop_can_buy = False
+                    last_shop_buy_click_t = 0.0
+                    shop_bought_items.clear()
+                    last_purchased_label = ""
+                    last_purchased_at = 0.0
+                    last_purchased_had_mana = False
+                    pending_offers.clear()
+                    inferred_choices.clear()
                     run_id = recorder.start_new_run()
                     game_map = config.get("game_map", "depth")
                     time_mult = 1.24 if str(game_map).lower().strip() == "depth" else 1.0
@@ -307,16 +465,22 @@ def run_human_recorder():
 
             # --- TRẠNG THÁI 2: ĐANG TRONG TRẬN ĐẤU (PLAYING) ---
             elif state == STATE_PLAYING:
+                game_map = config.get("game_map", "depth")
+                time_mult = 1.24 if str(game_map).lower().strip() == "depth" else 1.0
                 if now - last_timer_scan_time >= 0.5:
                     last_timer_scan_time = now
                     timer = botcore.detect_game_timer(frame)
-                    if timer:
-                        last_known_game_timer_sec = max(last_known_game_timer_sec, float(timer[2]))
+                    v_timer = botcore.validate_game_timer(
+                        timer, last_known_game_timer_sec, match_start_time, now, time_mult
+                    )
+                    if v_timer is not None:
+                        last_known_game_timer_sec = v_timer
 
-                game_map = config.get("game_map", "depth")
-                time_mult = 1.24 if str(game_map).lower().strip() == "depth" else 1.0
                 cur_game_sec = last_known_game_timer_sec if last_known_game_timer_sec > 0.0 else max(0.0, (now - match_start_time) * time_mult)
                 cur_game_time_str = format_game_time(cur_game_sec)
+                back_in_combat = bool(
+                    pause_pos is not None and botcore.is_fast_combat_frame(frame, skip_ocr=True)
+                )
 
                 # 2.1 Phát hiện lên cấp (Level Up)
                 lvl_res = botcore.is_level_up_screen(frame)
@@ -331,8 +495,14 @@ def run_human_recorder():
                         last_level_up_time = now
                         step_count += 1
                         last_level_up_frame = frame.copy()
-                        last_seen_cards = ocr_res
                         num_c = len(ocr_res)
+                        for idx, cdata in ocr_res.items():
+                            if cdata.offered_level is None:
+                                cdata.offered_level = extract_card_level_badge(frame, idx, max(3, num_c))
+                        update_inferred_skill_levels(
+                            ocr_res, active_skills, skill_levels, pending_offers, inferred_choices, step_count
+                        )
+                        last_seen_cards = ocr_res
                         print(f"\n[Cấp #{step_count}] Màn hình lên cấp ({num_c} lựa chọn có sẵn) - Thời gian: {cur_game_time_str}:")
                         for idx in sorted(ocr_res.keys()):
                             cdata = ocr_res[idx]
@@ -355,14 +525,17 @@ def run_human_recorder():
                         click_y_val = click_norm[1] if click_norm is not None else None
 
                         if chosen_card_idx == "mana":
-                            chosen_name = "Mana 20% Retrieve"
+                            chosen_name = "Mana Retrieve (Thu hồi Mana)"
                         elif chosen_card_idx in last_seen_cards:
                             cdata = last_seen_cards[chosen_card_idx]
                             if cdata.skills:
                                 chosen_name = ", ".join(cdata.skills)
                                 for sk in cdata.skills:
                                     active_skills.add(sk)
-                                    skill_levels[sk] = skill_levels.get(sk, 0) + 1
+                                    target_lv = skill_levels.get(sk, 0) + 1
+                                    if cdata.offered_level is not None:
+                                        target_lv = max(target_lv, cdata.offered_level)
+                                    skill_levels[sk] = target_lv
                             elif cdata.text_lines:
                                 chosen_name = cdata.text_lines[0].title()
                                 if cdata.special_passive_name:
@@ -393,27 +566,87 @@ def run_human_recorder():
 
                     click_info = f" (Click y={click_y_val:.2f})" if click_y_val is not None else ""
                     if chosen_card_idx == "mana":
-                        print(f"    -> [ĐÃ CHỌN]: Mana 20% Retrieve (Bỏ qua thẻ để lấy Mana)!{click_info} (Thời gian trong game: {cur_game_time_str})")
+                        print(f"    -> [ĐÃ CHỌN]: Mana Retrieve (Thu hồi Mana)!{click_info} (Thời gian trong game: {cur_game_time_str})")
                     elif chosen_card_idx is not None:
                         print(f"    -> [ĐÃ CHỌN]: Thẻ {chosen_card_idx} -> [{chosen_name}]!{click_info} (Thời gian trong game: {cur_game_time_str})")
                     else:
                         print(f"    -> [Đã ghi nhận]: Bạn vừa chọn xong kỹ năng! (Thời gian trong game: {cur_game_time_str})")
 
-                # 2.2 Thuộc tính cấp 7
+                # 2.2 Thuộc tính cấp 7 (chỉ log 1 lần sau khi chọn xong, tránh spam)
                 learn_pos = botcore.detect_learn_button(frame)
-                if learn_pos:
-                    score, label, p_sk = botcore.evaluate_selected_attribute(frame)
-                    print(f"[Thuộc tính cấp 7] Đang quan sát nhánh bạn chọn: [{label}] (Thuộc: {p_sk})")
+                attr_open = bool(learn_pos or (in_attribute and botcore.is_attribute_screen(frame)))
+                if attr_open:
+                    in_attribute = True
+                    attr_absent_streak = 0
+                    if learn_pos:
+                        _, attr_lbl, p_sk = botcore.evaluate_selected_attribute(frame)
+                        if attr_lbl:
+                            last_attr_label = attr_lbl
+                        if p_sk:
+                            last_attr_skill = p_sk
+                        last_attr_frame = frame.copy()
+                elif in_attribute:
+                    commit_attr, attr_absent_streak = should_commit_modal_exit(
+                        False, back_in_combat, attr_absent_streak, min_absent=3
+                    )
+                    if commit_attr:
+                        in_attribute = False
+                        if last_attr_skill:
+                            active_skills.add(last_attr_skill)
+                            skill_levels[last_attr_skill] = max(skill_levels.get(last_attr_skill, 0), 7)
+                        print(f"✨ [Thuộc tính cấp 7] Đã chọn: [{last_attr_label or 'Chưa rõ'}] (Thuộc: {last_attr_skill or 'chưa rõ'}) (Thời gian: {cur_game_time_str})")
+                        recorder.record_decision(
+                            last_attr_frame if last_attr_frame is not None else frame,
+                            "human_attribute",
+                            "learn",
+                            confidence=1.0 if last_attr_label else 0.0,
+                            metadata={
+                                "chosen_attribute": last_attr_label,
+                                "parent_skill": last_attr_skill,
+                                "game_time": cur_game_time_str,
+                                "game_time_sec": cur_game_sec,
+                            },
+                        )
+                        last_attr_label = ""
+                        last_attr_skill = ""
+                        last_attr_frame = None
 
-                # 2.3 Rương cổ vật
+                # 2.3 Rương cổ vật (chỉ log 1 lần khi nhận xong cổ vật, chống flicker nút Obtain)
                 obtain_pos = botcore.detect_obtain_button(frame)
-                if obtain_pos:
-                    _, lbl = botcore.evaluate_selected_chest_artifact(frame, True, active_skills=active_skills)
-                    print(f"[Rương Cổ vật] Bạn đang mở rương: {lbl}")
+                chest_open = bool(obtain_pos or (in_chest and botcore.is_chest_screen(frame)))
+                if chest_open:
+                    in_chest = True
+                    chest_absent_streak = 0
+                    if obtain_pos:
+                        _, lbl = botcore.evaluate_selected_chest_artifact(frame, True, active_skills=active_skills)
+                        if lbl and ("select the desired artifact" not in lbl.lower() or not last_chest_label):
+                            last_chest_label = lbl
+                        last_chest_frame = frame.copy()
+                elif in_chest:
+                    commit_chest, chest_absent_streak = should_commit_modal_exit(
+                        False, back_in_combat, chest_absent_streak, min_absent=3
+                    )
+                    if commit_chest:
+                        in_chest = False
+                        print(f"🎁 [Rương Cổ vật] Đã nhận: [{last_chest_label or 'Chưa rõ'}] (Thời gian: {cur_game_time_str})")
+                        recorder.record_decision(
+                            last_chest_frame if last_chest_frame is not None else frame,
+                            "human_chest",
+                            "obtain",
+                            confidence=1.0 if last_chest_label else 0.0,
+                            metadata={
+                                "chosen_artifact": last_chest_label,
+                                "game_time": cur_game_time_str,
+                                "game_time_sec": cur_game_sec,
+                            },
+                        )
+                        last_chest_label = ""
+                        last_chest_frame = None
 
                 # 2.4 Cửa hàng Thương Nhân (Merchant Shop - Mua cổ vật bằng Mana Orbs)
                 buy_pos = botcore.detect_buy_button(frame)
                 if buy_pos:
+                    shop_absent_streak = 0
                     if not in_shop and (now - last_shop_time >= 1.0):
                         in_shop = True
                         last_shop_time = now
@@ -422,7 +655,13 @@ def run_human_recorder():
                         last_mana_val = mana_val
                         _, s_lbl = botcore.evaluate_selected_shop_artifact(frame, prefer_crit_and_cooldown=True, active_skills=active_skills)
                         last_shop_label = s_lbl
-                        can_buy = botcore.is_shop_buy_enabled(frame)
+                        can_buy = botcore.is_shop_buy_enabled(frame, buy_pos=buy_pos)
+                        last_shop_can_buy = can_buy
+                        last_shop_buy_click_t = now
+                        shop_bought_items.clear()
+                        last_purchased_label = ""
+                        last_purchased_at = 0.0
+                        last_purchased_had_mana = False
                         mana_str = f"{mana_val} Mana Orbs" if mana_val is not None else "Đang đọc..."
                         status_str = "ĐỦ TIỀN MUA (Nút Buy sáng)!" if can_buy else "Chưa đủ Mana Orb"
                         print(f"\n[🛒 CỬA HÀNG THƯƠNG NHÂN] Mở cửa hàng mua cổ vật:")
@@ -430,45 +669,97 @@ def run_human_recorder():
                         print(f"    - Cổ vật đang xem: [{s_lbl}]")
                         print(f"    - Trạng thái: {status_str}")
                     elif in_shop:
+                        cur_mana = botcore.detect_mana_orb_currency(frame)
+                        shop_clicks = mouse_tracker.get_clicks_in_rect(rect, since_time=last_shop_time)
+                        purchased, spent, last_shop_buy_click_t = detect_shop_purchase(
+                            last_mana_val,
+                            cur_mana,
+                            shop_clicks,
+                            last_shop_buy_click_t,
+                            last_shop_can_buy,
+                            last_shop_label,
+                        )
+                        is_dup_settle = (
+                            purchased
+                            and spent is not None
+                            and not last_purchased_had_mana
+                            and last_purchased_label == last_shop_label
+                            and (now - last_purchased_at) <= 1.2
+                        )
+                        if purchased and not is_dup_settle:
+                            shop_bought_items.append(last_shop_label)
+                            last_purchased_label = last_shop_label
+                            last_purchased_at = now
+                            last_purchased_had_mana = spent is not None
+                            if spent is not None:
+                                print(f"    -> 💰 [ĐÃ MUA CỔ VẬT]: [{last_shop_label}] (-{spent} Mana, còn {cur_mana} Mana) [{cur_game_time_str}]")
+                            else:
+                                print(f"    -> 💰 [ĐÃ MUA CỔ VẬT]: [{last_shop_label}] [{cur_game_time_str}]")
+                            recorder.record_decision(
+                                last_shop_frame if last_shop_frame is not None else frame,
+                                "human_shop_action",
+                                "buy",
+                                confidence=1.0,
+                                metadata={
+                                    "artifact": last_shop_label,
+                                    "mana_orbs": cur_mana if cur_mana is not None else last_mana_val,
+                                    "mana_spent": spent,
+                                    "time": cur_game_time_str,
+                                    "game_time_sec": cur_game_sec,
+                                },
+                            )
+                        elif is_dup_settle and spent is not None:
+                            last_purchased_had_mana = True
+                        if cur_mana is not None:
+                            last_mana_val = cur_mana
+
                         _, cur_s_lbl = botcore.evaluate_selected_shop_artifact(frame, prefer_crit_and_cooldown=True, active_skills=active_skills)
+                        cur_can_buy = botcore.is_shop_buy_enabled(frame, buy_pos=buy_pos)
                         if cur_s_lbl and cur_s_lbl != last_shop_label:
                             last_shop_label = cur_s_lbl
                             last_shop_frame = frame.copy()
-                            can_buy = botcore.is_shop_buy_enabled(frame)
-                            status_str = "ĐỦ TIỀN MUA!" if can_buy else "Chưa đủ Mana Orb"
+                            last_shop_can_buy = cur_can_buy
+                            status_str = "ĐỦ TIỀN MUA!" if cur_can_buy else "Chưa đủ Mana Orb"
                             print(f"    -> Đổi sang xem: [{cur_s_lbl}] ({status_str})")
-                elif not buy_pos and in_shop:
-                    # Rời khỏi cửa hàng
-                    in_shop = False
-                    click_norm = mouse_tracker.get_last_click_in_rect(rect, since_time=last_shop_time)
-                    bought = False
-                    if click_norm is not None:
-                        cx, cy = click_norm
-                        if cy >= 0.80 and 0.25 <= cx <= 0.75:
-                            bought = True
-                        elif cy <= 0.16 and cx >= 0.75:
-                            bought = False  # Bấm X
                         else:
-                            bought = False
-                    else:
-                        bought = False
-
-                    if bought and last_shop_label:
-                        print(f"    -> [ĐÃ MUA CỔ VẬT]: Đã quan sát thao tác mua [{last_shop_label}] bằng Mana Orb! (Thời gian trong game: {cur_game_time_str})")
-                        recorder.record_decision(
-                            last_shop_frame if last_shop_frame is not None else frame,
-                            "human_shop_action",
-                            "buy_attempt",
-                            confidence=1.0,
-                            metadata={
-                                "artifact": last_shop_label,
-                                "mana_orbs": last_mana_val,
-                                "time": cur_game_time_str,
-                                "game_time_sec": cur_game_sec,
-                            },
+                            last_shop_can_buy = cur_can_buy
+                elif not buy_pos and in_shop:
+                    # Rời khỏi cửa hàng: chống flicker, chỉ kết thúc khi chắc chắn đã thoát shop
+                    commit_shop, shop_absent_streak = should_commit_modal_exit(
+                        False, back_in_combat, shop_absent_streak, min_absent=3
+                    )
+                    if commit_shop:
+                        in_shop = False
+                        shop_clicks = mouse_tracker.get_clicks_in_rect(rect, since_time=last_shop_time)
+                        purchased, _, last_shop_buy_click_t = detect_shop_purchase(
+                            last_mana_val,
+                            None,
+                            shop_clicks,
+                            last_shop_buy_click_t,
+                            last_shop_can_buy,
+                            last_shop_label,
                         )
-                    else:
-                        print(f"    -> [ĐÃ ĐÓNG CỬA HÀNG]: Bạn đã đóng cửa hàng tiếp tục farm! (Thời gian trong game: {cur_game_time_str})")
+                        if purchased and last_shop_label:
+                            shop_bought_items.append(last_shop_label)
+                            print(f"    -> 💰 [ĐÃ MUA CỔ VẬT]: [{last_shop_label}] [{cur_game_time_str}]")
+                            recorder.record_decision(
+                                last_shop_frame if last_shop_frame is not None else frame,
+                                "human_shop_action",
+                                "buy",
+                                confidence=1.0,
+                                metadata={
+                                    "artifact": last_shop_label,
+                                    "mana_orbs": last_mana_val,
+                                    "mana_spent": None,
+                                    "time": cur_game_time_str,
+                                    "game_time_sec": cur_game_sec,
+                                },
+                            )
+
+                        if shop_bought_items:
+                            print(f"    -> [ĐÃ ĐÓNG CỬA HÀNG]: Đã mua {len(shop_bought_items)} món ({', '.join(shop_bought_items)})! [{cur_game_time_str}]")
+                        else:
+                            print(f"    -> [ĐÃ ĐÓNG CỬA HÀNG]: Bạn đã đóng cửa hàng tiếp tục farm! (Thời gian trong game: {cur_game_time_str})")
 
                 # 2.5 KẾT THÚC TRẬN ĐẤU (Nhân vật chết hoặc bấm kết thúc)
                 # Safeguards:
@@ -477,16 +768,22 @@ def run_human_recorder():
                 if confirm_pos and pause_pos is None:
                     death_streak += 1
                     if death_streak >= 3:
-                        # Đọc thời gian sống sót trên màn hình kết quả hoặc HUD
-                        t_final = botcore.detect_results_survival_time(frame) or botcore.detect_game_timer(frame)
-                        if t_final:
-                            last_known_game_timer_sec = max(last_known_game_timer_sec, float(t_final[2]))
+                        # Đọc thời gian sống sót trên màn hình kết quả (chuẩn gốc từ engine game) hoặc HUD
+                        t_res = botcore.detect_results_survival_time(frame)
+                        if t_res:
+                            fixed_sec, _ = botcore.reconcile_results_time(float(t_res[2]), last_known_game_timer_sec)
+                            last_known_game_timer_sec = fixed_sec
+                        elif last_known_game_timer_sec <= 0.0:
+                            t_hud = botcore.detect_game_timer(frame)
+                            if t_hud:
+                                last_known_game_timer_sec = float(t_hud[2])
 
                         # Fallback gia tốc bản đồ Depth nếu OCR bị che khuất
                         time_mult = 1.24 if str(config.get("game_map", "depth")).lower().strip() == "depth" else 1.0
                         if last_known_game_timer_sec <= 0.0 and match_start_time > 0.0:
                             last_known_game_timer_sec = max(0.0, (now - match_start_time) * time_mult)
 
+                        stats = botcore.detect_results_stats(frame)
                         survival_sec = last_known_game_timer_sec
                         # Bắt buộc trận phải diễn ra ít nhất 10 giây mới tính là 1 trận hợp lệ (loại bỏ glitch)
                         if survival_sec >= 10.0:
@@ -506,6 +803,9 @@ def run_human_recorder():
                                 skill_levels=skill_levels,
                                 character=config.get("character", "summoner"),
                                 game_map=config.get("game_map", "depth"),
+                                gold=stats.get("gold", 0),
+                                gems=stats.get("gems", 0),
+                                kills=stats.get("kills", 0),
                             )
                             if learn_rep and isinstance(learn_rep, dict) and "summary_text" in learn_rep:
                                 print(learn_rep["summary_text"])

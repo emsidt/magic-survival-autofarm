@@ -667,6 +667,15 @@ class VisionTests(unittest.TestCase):
         self.assertEqual(circles[2], (0.31, 0.44))
         self.assertEqual(circles[3], (0.68, 0.44))
 
+        # Ad button 'Learn More' must never trigger detect_learn_button OCR fallback
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock, patch
+        ad_banner = np.full((1024, 600, 3), 240, dtype=np.uint8)
+        word_lm = SimpleNamespace(text="Learn", bounding_rect=SimpleNamespace(x=100, y=50, width=80, height=30))
+        ocr_lm = SimpleNamespace(recognize_pil=AsyncMock(return_value=SimpleNamespace(lines=[SimpleNamespace(text="Learn More", words=[word_lm])])))
+        with patch.dict("sys.modules", {"winocr": ocr_lm}):
+            self.assertIsNone(detect_learn_button(ad_banner))
+
     def test_skill_synergy_bonus_and_combinations(self):
         # Empty or None active skills -> 0 bonus
         self.assertEqual(compute_skill_synergy_bonus("some artifact text", set()), (0, []))
@@ -1314,6 +1323,14 @@ class VisionTests(unittest.TestCase):
         # Special Artifact must decisively beat Epic/Rare/Normal
         self.assertGreater(score_spec, score_epic + 8000)
 
+        # 4. Gaia strictly beats Opulence in chest/shop evaluation (Treasure Map remains Special)
+        self.assertTrue(is_special_artifact("Treasure Map"))
+        self.assertFalse(is_special_artifact("Opulence"))
+        gaia_bonus, gaia_tag = botcore._meta_artifact_priority_bonus("gaia legendary artifact", 5)
+        opulence_bonus, _ = botcore._meta_artifact_priority_bonus("opulence legendary artifact", 5)
+        self.assertGreater(gaia_bonus, opulence_bonus + 8000)
+        self.assertIn("Gaia", gaia_tag)
+
     def test_monster_eyes_in_combat_do_not_trigger_level_up(self):
         """Red spots (monster eyes) in icon bands must NEVER trigger false level-up when cards have no text."""
         from botcore import _detect_cards_ocr, is_level_up_screen
@@ -1763,6 +1780,77 @@ class VisionTests(unittest.TestCase):
         self.assertIn("electric_zone", botcore.SKILL_TEMPLATE_FILES)
         self.assertIn("electric zone", botcore.SKILL_ALIASES["electric_zone"])
         self.assertIn("eiectric zone", botcore.SKILL_ALIASES["electric_zone"])
+
+    def test_mana_retrieve_selected_when_no_suitable_skill_in_fixed_and_ai_mode(self):
+        from unittest.mock import patch, MagicMock
+        import botcore
+
+        self.assertEqual(botcore.get_mana_retrieve_target(3), (0.50, 0.835))
+        self.assertEqual(botcore.get_mana_retrieve_target(4), (0.50, 0.922))
+
+        frame = np.full((960, 540, 3), 25, dtype=np.uint8)
+        cards = {
+            1: botcore.CardSlotData(1, text_lines=["shield"], skills=["shield"], offered_level=2),
+            2: botcore.CardSlotData(2, text_lines=["meteor"], skills=["meteor"], offered_level=1),
+            3: botcore.CardSlotData(3, text_lines=["lava zone"], skills=["lava_zone"], offered_level=1),
+        }
+        fake_ai = MagicMock(has_skill_model=False, has_card_vision=False)
+        low_learner = MagicMock()
+        low_learner.get_skill_bonus.return_value = -5.0
+
+        with patch("botcore._detect_cards_ocr", return_value=cards), \
+                patch("botcore._detect_skills_templates", return_value={}), \
+                patch("ai_inference.get_ai_engine", return_value=fake_ai):
+            # 1) Fixed build mode: off-build unowned skills + allow_mana_retrieve=True -> retrieve mana (idx 0)
+            res_fixed = botcore.choose_best_artifact_or_card(
+                frame,
+                skill_priority=["spirit", "electric_shock"],
+                active_skills={"spirit"},
+                learner=low_learner,
+                level_count=12,
+                early_priority_skills={},
+                allow_mana_retrieve=True,
+            )
+            self.assertEqual(res_fixed.idx, 0)
+            self.assertEqual(res_fixed.target, (0.50, 0.835))
+
+            # 2) Same cards with allow_mana_retrieve=False -> must pick a card (idx > 0)
+            res_no_retrieve = botcore.choose_best_artifact_or_card(
+                frame,
+                skill_priority=["spirit", "electric_shock"],
+                active_skills={"spirit"},
+                learner=low_learner,
+                level_count=12,
+                early_priority_skills={},
+                allow_mana_retrieve=False,
+            )
+            self.assertGreater(res_no_retrieve.idx, 0)
+
+            # 3) Already-owned skill offered -> upgrade it instead of retrieving mana
+            res_owned = botcore.choose_best_artifact_or_card(
+                frame,
+                skill_priority=["spirit", "electric_shock"],
+                active_skills={"shield"},
+                learner=low_learner,
+                level_count=12,
+                early_priority_skills={},
+                allow_mana_retrieve=True,
+            )
+            self.assertEqual(res_owned.idx, 1)
+            self.assertEqual(res_owned.skill_key, "shield")
+
+            # 4) AI free mode: >=6 active skills & rank < 89.0 -> retrieve mana
+            res_ai = botcore.choose_best_artifact_or_card(
+                frame,
+                skill_priority=[],
+                active_skills={"spirit", "electric_shock", "electric_zone", "tsunami", "cyclone", "satellite"},
+                learner=low_learner,
+                level_count=20,
+                early_priority_skills={},
+                allow_mana_retrieve=True,
+            )
+            self.assertEqual(res_ai.idx, 0)
+            self.assertEqual(res_ai.target, (0.50, 0.835))
 
 
 if __name__ == "__main__":

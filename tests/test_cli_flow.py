@@ -13,10 +13,10 @@ import botcore
 
 
 class TestCLIFlow(unittest.TestCase):
-    def run_frames(self, frames, overrides=None, config=None, controller_effects=None):
+    def run_frames(self, frames, overrides=None, config=None, controller_effects=None, monotonic_step=5):
         controller = Mock(spec=["device", "screen_width", "screen_height", "lock", "release",
                                 "screenshot", "is_game_foreground", "tap", "move", "press_esc", "close", "launch_game",
-                                "get_foreground_package", "close_external_browsers"])
+                                "restart_game", "get_foreground_package", "close_external_browsers"])
         controller.device = "emulator-test"
         controller.screen_width, controller.screen_height = 100, 200
         controller.lock = threading.RLock()
@@ -52,7 +52,7 @@ class TestCLIFlow(unittest.TestCase):
             stack.enter_context(patch("bot_cli.sys.argv", ["bot_cli.py"]))
             stack.enter_context(patch("bot_cli.sys.stdin", Mock(isatty=Mock(return_value=False))))
             stack.enter_context(patch("bot_cli.time.sleep"))
-            stack.enter_context(patch("bot_cli.time.monotonic", side_effect=itertools.count(100, 5)))
+            stack.enter_context(patch("bot_cli.time.monotonic", side_effect=itertools.count(100, monotonic_step)))
             for name, value in detectors.items():
                 kwargs = {"side_effect": overrides[name]} if overrides and name in overrides else {"return_value": value}
                 stack.enter_context(patch.object(botcore, name, **kwargs))
@@ -247,3 +247,207 @@ class TestCLIFlow(unittest.TestCase):
                     )
                 expected = {"telekinetic_sword"} if learned else set()
                 self.assertEqual(observed, [(expected, ["telekinetic_sword"])])
+
+    def test_stuck_ad_after_death_restarts_game_after_two_minutes(self):
+        results = np.zeros((200, 100, 3), np.uint8)
+        stuck_ad = results + 50
+        # back_from_ad consumes an extra capture per loop -> ~55 frames reaches > 120s
+        frames = [results] + [stuck_ad] * 55
+        controller, _, _ = self.run_frames(
+            frames,
+            overrides={
+                "detect_confirm_button": lambda f: (0.5, 0.85) if f is results else None,
+                "detect_results_survival_time": lambda f: (2, 0, 120),
+                "is_ad_screen": lambda f: f is stuck_ad,
+            },
+            config={"auto_close_ads": True, "auto_restart": True, "ad_stuck_restart_sec": 120},
+        )
+        controller.restart_game.assert_called_once()
+
+    def test_ad_closing_before_two_minutes_does_not_restart_game(self):
+        results = np.zeros((200, 100, 3), np.uint8)
+        ad = results + 50
+        lobby = results + 10
+        # Several ad frames (< 120s), then back to lobby Start Game
+        frames = [results] + [ad] * 5 + [lobby]
+        controller, _, _ = self.run_frames(
+            frames,
+            overrides={
+                "detect_confirm_button": lambda f: (0.5, 0.85) if f is results else None,
+                "detect_results_survival_time": lambda f: (2, 0, 120),
+                "is_ad_screen": lambda f: f is ad,
+                "detect_start_game": lambda f: (0.5, 0.8) if f is lobby else None,
+            },
+            config={"auto_close_ads": True, "auto_restart": True, "ad_stuck_restart_sec": 120},
+        )
+        controller.restart_game.assert_not_called()
+
+    def test_boss_chest_pickup_after_wave_does_not_blind_obelisk(self):
+        wave_on = np.zeros((200, 100, 3), np.uint8) + 10
+        wave_off1 = wave_on + 1
+        wave_off2 = wave_on + 2
+        boss_chest = wave_on + 3
+        after_chest = wave_on + 4
+        observed_monoliths = []
+        distance = np.full((200, 100), 100, np.float32)
+
+        def fake_inspect(frame, **kwargs):
+            v = botcore.Vision(np.zeros((200, 100), np.uint8), distance, [], True, 1)
+            if frame is after_chest:
+                v.monolith = (80, 120)
+                v.monolith_detected = True
+            return v
+
+        def fake_choose(vision, **kwargs):
+            observed_monoliths.append(vision.monolith)
+            return (1, 0)
+
+        chosen_artifact = Mock(index=1, label="Treasure Map")
+        with patch("botcore.detect_wave_active", side_effect=lambda f: f is wave_on), \
+                patch("bot_cli.select_chest_artifact", return_value=chosen_artifact):
+            self.run_frames(
+                [wave_on, wave_off1, wave_off2, boss_chest, after_chest],
+                overrides={
+                    "detect_pause_button": lambda f: (0.9, 0.04) if f is not boss_chest else None,
+                    "is_fast_combat_frame": lambda f: f is not boss_chest,
+                    "detect_obtain_button": lambda f: (0.5, 0.8) if f is boss_chest else None,
+                    "detect_game_timer": lambda f: (9, 0, 540),
+                    "inspect_game": fake_inspect,
+                    "choose_direction": fake_choose,
+                },
+            )
+        self.assertEqual(observed_monoliths[-1], (80, 120))
+
+    def test_frozen_timer_ignores_chests_and_dark_floor_to_ram_obelisk(self):
+        frames = [np.zeros((200, 100, 3), np.uint8) + i for i in range(10, 14)]
+        observed = []
+        distance = np.full((200, 100), 100, np.float32)
+
+        def fake_inspect(frame, **kwargs):
+            # Simulate dark Ecosystem floor in enemy_mask (50k+ pixels) while real enemies = 286
+            dark_floor = np.full((200, 100), 255, np.uint8)
+            return botcore.Vision(
+                dark_floor, distance, [(10, 20)], True, 1,
+                chest=(20, 40), chest_detected=True,
+                monolith=(80, 120), monolith_detected=True,
+                active_enemy_pixels=286,
+            )
+
+        def fake_choose(vision, **kwargs):
+            observed.append((vision.monolith, vision.chest, list(vision.gems)))
+            return (1, 0)
+
+        self.run_frames(
+            frames,
+            overrides={
+                "detect_pause_button": lambda _: (0.9, 0.04),
+                "is_fast_combat_frame": lambda _: True,
+                "detect_game_timer": lambda _: (9, 0, 540),
+                "inspect_game": fake_inspect,
+                "choose_direction": fake_choose,
+            },
+            config={"auto_chest": True},
+        )
+        # First frame sets timer=540; by frame 2+ (+5s monotonic each), timer_frozen=True:
+        # chest and orbs must be cleared and monolith must NOT be wiped!
+        self.assertEqual(observed[-1], ((80, 120), None, []))
+
+    def test_post_wave_stands_still_to_scan_then_moves_to_obelisk(self):
+        wave_on = np.zeros((200, 100, 3), np.uint8) + 10
+        wave_off1 = wave_on + 1
+        wave_off2 = wave_on + 2
+        wait_spawn = wave_on + 3
+        obelisk_up = wave_on + 4
+        distance = np.full((200, 100), 100, np.float32)
+        choose_frames = []
+
+        def fake_inspect(frame, **kwargs):
+            v = botcore.Vision(
+                np.zeros((200, 100), np.uint8), distance, [], True, 1,
+                active_enemy_pixels=0,
+            )
+            if frame is obelisk_up:
+                v.monolith = (80, 120)
+                v.monolith_detected = True
+            return v
+
+        def fake_choose(vision, **kwargs):
+            choose_frames.append(vision.monolith)
+            return (1, 0)
+
+        with patch("botcore.detect_wave_active", side_effect=lambda f: f is wave_on):
+            controller, _, _ = self.run_frames(
+                [wave_on, wave_off1, wave_off2, wait_spawn, obelisk_up],
+                overrides={
+                    "detect_pause_button": lambda _: (0.9, 0.04),
+                    "is_fast_combat_frame": lambda _: True,
+                    "detect_game_timer": lambda _: (9, 0, 540),
+                    "inspect_game": fake_inspect,
+                    "choose_direction": fake_choose,
+                },
+            )
+        # Frames: wave_on (move), wave_off1 (move), wave_off2 (wave_ended -> stand still!),
+        # wait_spawn (stand still!), obelisk_up (monolith found -> move!)
+        self.assertEqual(controller.move.call_count, 3)
+        self.assertEqual(choose_frames, [None, None, (80, 120)])
+
+    def test_post_death_ad_with_learn_more_still_restarts_after_two_minutes(self):
+        results = np.zeros((200, 100, 3), np.uint8)
+        stuck_ad = results + 50
+        frames = [results] + [stuck_ad] * 55
+        with patch("bot_cli.select_attribute", return_value=None):
+            controller, _, _ = self.run_frames(
+                frames,
+                overrides={
+                    "detect_confirm_button": lambda f: (0.5, 0.85) if f is results else None,
+                    "detect_results_survival_time": lambda f: (2, 0, 120),
+                    "detect_learn_button": lambda f: (0.5, 0.88) if f is stuck_ad else None,
+                    "is_attribute_screen": lambda f: f is stuck_ad,
+                    "is_ad_screen": lambda f: f is stuck_ad,
+                },
+                config={"auto_close_ads": True, "auto_restart": True, "ad_stuck_restart_sec": 120},
+            )
+        controller.restart_game.assert_called_once()
+
+    def test_menu_modal_pause_does_not_falsely_trigger_timer_frozen_wave_clear(self):
+        combat1 = np.zeros((200, 100, 3), np.uint8) + 10
+        level_up_modal = combat1 + 1
+        combat2 = combat1 + 2
+        observed = []
+        distance = np.full((200, 100), 100, np.float32)
+
+        def fake_inspect(frame, **kwargs):
+            return botcore.Vision(
+                np.zeros((200, 100), np.uint8),
+                distance,
+                [(10, 20)],
+                True,
+                1,
+                chest=(20, 40),
+                chest_detected=True,
+                active_enemy_pixels=200,
+            )
+
+        def fake_choose(vision, **kwargs):
+            observed.append((vision.chest, list(vision.gems)))
+            return (1, 0)
+
+        # Simulate +2s ticks per iteration (100 -> 102 -> 104) where level_up reads 301:
+        # returning to combat2 at 104 must NOT falsely trigger timer_frozen and wipe chests/orbs.
+        with patch("bot_cli.select_card", return_value=True), \
+                patch("botcore.choose_best_artifact_or_card", return_value=botcore.CardChoice(1, (0.5, 0.4))):
+            self.run_frames(
+                [combat1, level_up_modal, combat2],
+                overrides={
+                    "detect_pause_button": lambda _: (0.9, 0.04),
+                    "is_fast_combat_frame": lambda f: f is not level_up_modal,
+                    "is_level_up_screen": lambda f: f is level_up_modal,
+                    "detect_game_timer": lambda f: (5, 0, 300) if f is combat1 else (5, 1, 301),
+                    "inspect_game": fake_inspect,
+                    "choose_direction": fake_choose,
+                },
+                config={"auto_chest": True},
+                monotonic_step=2,
+            )
+        self.assertEqual(len(observed), 2)
+        self.assertEqual(observed[-1], ((20, 40), [(10, 20)]))

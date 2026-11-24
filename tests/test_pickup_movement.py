@@ -228,6 +228,21 @@ class PickupMovementTests(unittest.TestCase):
         self.assertGreater(direction[0], 0.35)
         self.assertLess(direction[1], -0.60)
 
+    def test_detect_chest_rejects_upper_hud_strip_at_y_90(self):
+        """Any chest-colored artifact/UI patch inside the top HUD corners or strip (e.g. y=91 on 540x960) must be ignored."""
+        from botcore import detect_chest
+        frame = np.full((1920, 1080, 3), 110, np.uint8)
+        cx, cy = 482, 91
+        cv2.rectangle(frame, (cx - 32, cy - 25), (cx + 32, cy + 25), (20, 20, 20), -1)
+        cv2.rectangle(frame, (cx - 28, cy - 22), (cx + 28, cy + 22), (20, 120, 220), -1)
+        self.assertIsNone(detect_chest(frame))
+
+        small = np.full((960, 540, 3), 110, np.uint8)
+        for sx, sy in ((50, 91), (482, 91)):
+            cv2.rectangle(small, (sx - 18, sy - 14), (sx + 18, sy + 14), (20, 20, 20), -1)
+            cv2.rectangle(small, (sx - 14, sy - 11), (sx + 14, sy + 11), (20, 120, 220), -1)
+        self.assertIsNone(detect_chest(small))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -113,6 +113,19 @@ class ActionTransitionTests(unittest.TestCase):
             self.assertIsNone(select_chest_artifact(self.controller, {}, Mock(return_value=self.frame), sleep=lambda _: None))
         self.controller.tap.assert_called_once()
 
+    def test_single_card_golden_roulette_clicks_center_card_before_obtain(self):
+        with patch("botcore.detect_obtain_button", side_effect=[(0.5, 0.8), (0.5, 0.8), (0.5, 0.8), None]), \
+                patch("botcore.is_three_card_chest", return_value=False), \
+                patch("botcore.evaluate_selected_chest_artifact", side_effect=[
+                    (100, "Select the desired Artifact [Normal]"),
+                    (12400, "Widowmaker [Legendary]"),
+                ]), \
+                patch("botcore.is_fast_combat_frame", return_value=True):
+            result = select_chest_artifact(self.controller, {}, Mock(return_value=self.frame), sleep=lambda _: None)
+        self.assertEqual((result.index, result.label), (1, "Widowmaker [Legendary]"))
+        self.assertEqual(self.controller.tap.call_args_list[0].args[0], list(botcore.get_chest_card_target(2, 0.5)))
+        self.assertEqual(self.controller.tap.call_args_list[1].args[0], [0.5, 0.8])
+
     def test_shop_x_shape_in_another_screen_is_not_clicked(self):
         with patch("botcore.detect_buy_button", return_value=None), \
                 patch("botcore.cv2.matchTemplate", side_effect=AssertionError("Not a shop")):

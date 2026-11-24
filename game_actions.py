@@ -48,6 +48,9 @@ class GuardedController:
     def launch_game(self, *args, **kwargs):
         return self._act("launch_game", *args, **kwargs)
 
+    def restart_game(self, *args, **kwargs):
+        return self._act("restart_game", *args, **kwargs)
+
 
 def capture_frame(controller, rect, desktop_capture):
     """Keep screenshots and input in the same coordinate space. Never mix ADB/desktop."""
@@ -178,7 +181,17 @@ def select_chest_artifact(controller, rect, capture, active_skills=None, prefer_
             obtain = botcore.detect_obtain_button(frame)
             if obtain is None:
                 return None
-        candidates[index] = botcore.evaluate_selected_chest_artifact(frame, prefer_cc, active_skills=active_skills)
+        cand = botcore.evaluate_selected_chest_artifact(frame, prefer_cc, active_skills=active_skills)
+        if count == 1 and ("select the desired" in cand[1].lower() or "desired artifact" in cand[1].lower() or cand[1].lower().startswith("artifact ")):
+            # 1-card chest (e.g. Golden Roulette): must tap the centered card (slot 2) to reveal artifact & enable Obtain
+            controller.tap(list(botcore.get_chest_card_target(2, obtain[0])), rect)
+            sleep(0.30)
+            frame = capture()
+            obtain = botcore.detect_obtain_button(frame)
+            if obtain is None:
+                return None
+            cand = botcore.evaluate_selected_chest_artifact(frame, prefer_cc, active_skills=active_skills)
+        candidates[index] = cand
     best = max(candidates, key=lambda index: candidates[index][0])
     if best != count:
         controller.tap(list(botcore.get_chest_card_target(best, obtain[0])), rect)

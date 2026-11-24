@@ -733,6 +733,7 @@ class FarmApp:
         last_attribute_scan_time = 0.0
         last_confirm_click_time = 0.0
         ad_wait_start_time = 0.0
+        post_death_at = 0.0
         active_skills: set[str] = set()
         skill_levels: dict[str, int] = {}
         maxed_skills: set[str] = set()
@@ -768,12 +769,28 @@ class FarmApp:
                         continue
 
                     is_adb = hasattr(controller, "screen_width")
+                    ad_stuck_sec = float(self.config.get("ad_stuck_restart_sec", 120) or 0)
                     if is_adb:
                         rect = {"left": 0, "top": 0, "width": controller.screen_width, "height": controller.screen_height}
                         if hasattr(controller, "is_game_foreground") and not controller.is_game_foreground():
                             controller.release()
                             self.previous_direction = None
                             match_running = False
+
+                            if (
+                                post_death_at > 0.0
+                                and ad_stuck_sec > 0.0
+                                and (start_tick - post_death_at) >= ad_stuck_sec
+                                and self.config.get("auto_restart", True)
+                                and hasattr(controller, "restart_game")
+                            ):
+                                self._push("status", f"⏰ [Quảng cáo] Kẹt quá {int(ad_stuck_sec)}s sau khi chết -> Tắt hẳn game và mở lại!")
+                                post_death_at = 0.0
+                                post_death_phase = False
+                                ad_wait_start_time = 0.0
+                                controller.restart_game()
+                                time.sleep(3.0)
+                                continue
 
                             # Kiểm tra xem có bị nhảy sang Chrome hoặc Google Play Store sau khi bấm X không
                             if hasattr(controller, "get_foreground_package"):
@@ -892,6 +909,8 @@ class FarmApp:
                                     last_die_click_time = start_tick
                                     last_auto_action_time = start_tick
                                     if dismiss_death(controller, rect, capture):
+                                        if post_death_at == 0.0:
+                                            post_death_at = start_tick
                                         self.rule_counts["bam_die"] = self.rule_counts.get("bam_die", 0) + 1
                                         self._push("status", "Đã xác nhận Die, chuyển sang nhận thưởng.")
                                     else:
@@ -948,6 +967,7 @@ class FarmApp:
                                     now_tick = time.monotonic()
                                     last_confirm_click_time = now_tick
                                     ad_wait_start_time = now_tick
+                                    post_death_at = now_tick
                                     last_auto_action_time = now_tick
                                     self.rule_counts["confirm_ket_qua"] = self.rule_counts.get("confirm_ket_qua", 0) + 1
                                     self._push("status", f"[Endgame] Bấm 'Confirm' tại ({confirm_pos[0]:.2f}, {confirm_pos[1]:.2f}) -> Bắt đầu chờ quảng cáo (~10s)...")
@@ -993,6 +1013,7 @@ class FarmApp:
                                 if sg_pos:
                                     match_running = False
                                     post_death_phase = False
+                                    post_death_at = 0.0
                                     active_skills.clear()
                                     skill_levels.clear()
                                     maxed_skills.clear()
@@ -1021,6 +1042,7 @@ class FarmApp:
                                 if sel_pos:
                                     match_running = False
                                     post_death_phase = False
+                                    post_death_at = 0.0
                                     active_skills.clear()
                                     skill_levels.clear()
                                     maxed_skills.clear()
@@ -1043,6 +1065,7 @@ class FarmApp:
                                 if ea_pos:
                                     match_running = False
                                     post_death_phase = False
+                                    post_death_at = 0.0
                                     active_skills.clear()
                                     skill_levels.clear()
                                     maxed_skills.clear()
@@ -1076,8 +1099,24 @@ class FarmApp:
                             # A4. POPUP QUẢNG CÁO (AdMob, Play Store overlay, Unity Ads):
                             if post_death_phase and botcore.detect_pause_button(frame):
                                 post_death_phase = False
+                                post_death_at = 0.0
                                 match_running = True
                                 ad_wait_start_time = 0.0
+                            if (
+                                post_death_at > 0.0
+                                and ad_stuck_sec > 0.0
+                                and (start_tick - post_death_at) >= ad_stuck_sec
+                                and self.config.get("auto_restart", True)
+                                and not match_running
+                                and hasattr(controller, "restart_game")
+                            ):
+                                self._push("status", f"⏰ [Quảng cáo] Quá {int(ad_stuck_sec)}s sau khi chết chưa skip được -> Tắt hẳn game và mở lại!")
+                                post_death_at = 0.0
+                                post_death_phase = False
+                                ad_wait_start_time = 0.0
+                                controller.restart_game()
+                                time.sleep(3.0)
+                                continue
                             if self.config.get("auto_close_ads", True):
                                 tap_cont = botcore.detect_tap_to_continue(frame)
                                 if tap_cont and (start_tick - last_ad_close_time >= 1.0):

@@ -114,6 +114,57 @@ class TestEndgameSummary(unittest.TestCase):
             self.assertEqual(cur_small["gold"], 9684)
             self.assertEqual(cur_small["gems"], 156)
 
+        img_stream = Path("captures/ldplayer_live_stream.png")
+        if img_stream.is_file():
+            cur_stream = botcore.detect_main_screen_currencies(cv2.imread(str(img_stream)))
+            self.assertEqual(cur_stream["gold"], 52212)
+            self.assertEqual(cur_stream["gems"], 48)
+
+        img_sel = Path("captures/character_selection_current.png")
+        if img_sel.is_file():
+            cur_sel = botcore.detect_main_screen_currencies(cv2.imread(str(img_sel)))
+            self.assertEqual(cur_sel["gold"], 108733)
+            self.assertEqual(cur_sel["gems"], 108)
+
+    def test_digit_7_vs_1_endgame_and_level(self):
+        import cv2
+        cases = [
+            (
+                Path("data/runs/run_20261123_004142_563455_967b1b98/step_0047_endgame.png"),
+                {"kills": 14178, "gold": 4781, "gems": 22},
+                (6, 43, 403),
+            ),
+            (
+                Path("data/runs/run_20261122_230619_704603_87b1aae3/step_0059_endgame.png"),
+                {"kills": 23209, "gold": 7980, "gems": 22},
+                (9, 0, 540),
+            ),
+            (
+                Path("data/runs/run_20261123_011803_104319_47ed4b38/step_0045_endgame.png"),
+                {"kills": 14176, "gold": 5016, "gems": 22},
+                (6, 52, 412),
+            ),
+            (
+                Path("data/runs/run_20261123_013415_865912_dd61c267/step_0050_endgame.png"),
+                {"kills": 14673, "gold": 4928, "gems": 22},
+                (6, 56, 416),
+            ),
+        ]
+        for img_path, expected_stats, expected_time in cases:
+            if img_path.is_file():
+                frame = cv2.imread(str(img_path))
+                self.assertEqual(botcore.detect_results_stats(frame), expected_stats)
+                self.assertEqual(botcore.detect_results_survival_time(frame), expected_time)
+
+        lvl_cases = [
+            (Path("data/runs/run_20261123_013415_865912_dd61c267/step_0007_level_up.png"), 7),
+            (Path("data/runs/run_20261123_013415_865912_dd61c267/step_0018_level_up.png"), 17),
+            (Path("data/runs/run_20261123_013415_865912_dd61c267/step_0030_level_up.png"), 27),
+        ]
+        for img_path, expected_lvl in lvl_cases:
+            if img_path.is_file():
+                self.assertEqual(botcore.detect_player_level(cv2.imread(str(img_path))), expected_lvl)
+
     def test_format_match_summary_with_gold_and_gems(self):
         summary_block, status_line = format_match_summary(
             survival_seconds=300.0,

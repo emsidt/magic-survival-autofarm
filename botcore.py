@@ -229,7 +229,9 @@ def detect_chest(
 
     px, py = int(fw * player[0]), int(fh * player[1])
     min_player_dist = max(36, int(span * 0.066))
-    top_hud_y = int(fh * 0.045)
+    top_hud_y = int(fh * 0.105)
+    indicator_top_hud_y = int(fh * 0.068)
+    corner_hud_y = int(fh * 0.115)
 
     candidates = []
     all_positions: list[tuple[int, int]] = []
@@ -251,11 +253,11 @@ def detect_chest(
                 cx = int(pt_x * 2 + tw)
                 cy = int(pt_y * 2 + th)
                 # Static HUD elements: top status/mana bar, top-left avatar icon, top-right pause button
-                if cy < top_hud_y:
+                if cy < (indicator_top_hud_y if is_indicator else top_hud_y):
                     continue
-                if cx < int(fw * 0.12) and cy < int(fh * 0.095):
+                if cx < int(fw * 0.14) and cy < corner_hud_y:
                     continue
-                if cx > int(fw * 0.88) and cy < int(fh * 0.095):
+                if cx > int(fw * 0.86) and cy < corner_hud_y:
                     continue
                 dist_to_player = math.hypot(cx - px, cy - py)
                 # Protect immediate player sprite center + orbiting spirit stars
@@ -277,7 +279,7 @@ def detect_chest(
     for ccx, ccy, quality in _detect_chests_by_color(frame):
         if ccy < top_hud_y:
             continue
-        if (ccx < int(fw * 0.12) and ccy < int(fh * 0.095)) or (ccx > int(fw * 0.88) and ccy < int(fh * 0.095)):
+        if (ccx < int(fw * 0.14) and ccy < corner_hud_y) or (ccx > int(fw * 0.86) and ccy < corner_hud_y):
             continue
         if math.hypot(ccx - px, ccy - py) < min_player_dist:
             continue
@@ -501,6 +503,7 @@ class Vision:
     bosses: list[tuple[int, int, int]] = field(default_factory=list)
     monolith_detected: bool = False
     chest_detected: bool = False
+    active_enemy_pixels: Optional[int] = None
 
 
 def measure_modal_panel(gray: np.ndarray) -> float:
@@ -538,16 +541,16 @@ def detect_wave_darkness(gray: np.ndarray) -> np.ndarray:
     terrain = cv2.medianBlur(small, 9)
     terrain = cv2.GaussianBlur(terrain, (9, 9), 0)
     top = int(terrain.shape[0] * 0.10)
-    baseline = float(np.percentile(terrain[top:], 75))
-    threshold = max(48.0, min(80.0, baseline * 0.72))
+    baseline = max(float(np.percentile(terrain[top:], 75)), float(np.percentile(terrain[top:], 90)) * 0.85)
+    threshold = min(80.0, max(28.0, baseline * 0.68))
     dim = (terrain <= threshold).astype(np.uint8) * 255
     dim[:top] = 0
     count, labels, stats, _ = cv2.connectedComponentsWithStats(dim, 8)
     mask = np.zeros_like(dim)
     for label in range(1, count):
         x, y, bw, bh, area = stats[label]
-        touches_edge = x <= 2 or x + bw >= 158 or y + bh >= dim.shape[0] - 2
-        if touches_edge and area >= 160 * 160 * 0.04 and max(bw, bh) >= 160 * 0.4:
+        touches_edge = x <= 2 or x + bw >= 158 or y <= top + 2 or y + bh >= dim.shape[0] - 2
+        if touches_edge and area >= 160 * 160 * 0.025 and max(bw, bh) >= 160 * 0.30:
             mask[labels == label] = 255
     # Light from a spell inside darkness is not a safe island to escape into.
     contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -605,6 +608,9 @@ def inspect_game(
     player: tuple[float, float] = (0.5, 0.5),
     known_monolith: Optional[tuple[int, int]] = None,
     known_chest: Optional[tuple[int, int]] = None,
+    *,
+    scan_monolith: bool = True,
+    scan_chest: bool = True,
 ) -> Vision:
     """Detect enemy shadows, chests, and Mana orbs (Purple L -> Gold M -> Blue S) in a BGR game crop."""
     h, w = frame.shape[:2]
@@ -635,32 +641,47 @@ def inspect_game(
                 modal=True,
                 panel_fraction=panel_fraction,
             )
-    chest_target = detect_chest(frame, player=player) if gameplay else None
+
+    # Elite/Boss monster detection ('quái to' with horizontal red health bar, ~6ms) & enemy pixels:
+    # Run BEFORE detect_chest (~188ms) and detect_monolith (~55ms) so active boss/swarm waves skip them.
+    bosses = detect_boss_monsters(frame) if gameplay else []
+    B, G, R = frame[:, :, 0], frame[:, :, 1], frame[:, :, 2]
+    enemy_pixels = (gray <= 24) | ((R >= 130) & (G <= 42) & (B <= 42))
+    enemy_mask = (enemy_pixels.astype(np.uint8) * 255)
+    enemy_mask[:, : int(w * 0.015)] = 0
+    enemy_mask[:, int(w * 0.985) :] = 0
+
+    # Strict Magic Survival game logic:
+    # While active enemies/bosses are on the map, a milestone monolith CANNOT spawn!
+    inner_mask = np.zeros((h, w), dtype=bool)
+    inner_mask[int(h * 0.14) : int(h * 0.86), int(w * 0.10) : int(w * 0.82)] = True
+    active_combat_enemies = int(np.sum((enemy_mask > 0) & inner_mask))
+    has_active_threats = bool(bosses or active_combat_enemies > max(800, int(w * h * 0.003)))
+
+    chest_target = detect_chest(frame, player=player) if (gameplay and scan_chest and not bosses) else None
     chest_detected = chest_target is not None
     chest_pos = (chest_target[0], chest_target[1]) if chest_target else None
-    if chest_pos is None and gameplay and known_chest is not None:
+    if chest_pos is None and gameplay and not bosses and known_chest is not None:
         chest_pos = known_chest
     chest_type = getattr(chest_target, "chest_type", "treasure_chest")
     chest_weight = getattr(chest_target, "weight", 24.0)
-    raw_monolith = detect_monolith(frame) if gameplay else None
+
+    raw_monolith = detect_monolith(frame) if (gameplay and scan_monolith and not has_active_threats) else None
     if raw_monolith is not None and chest_target is not None:
         all_chests = getattr(chest_target, "all_positions", None) or ([chest_pos] if chest_pos else [])
         if monolith_is_chest_misdetection(raw_monolith, all_chests, span):
             raw_monolith = None
     monolith_detected = raw_monolith is not None
     monolith_pos = raw_monolith
-    if monolith_pos is None and gameplay and known_monolith is not None:
+    if monolith_pos is None and gameplay and scan_monolith and not has_active_threats and known_monolith is not None:
         monolith_pos = known_monolith
 
-    # Shadow enemies (pitch-black silhouettes <= 24 & crimson cores) + dark HP-drain void zones:
-    # 1. Pitch-black enemy bodies (<= 24) and crimson core eyes:
-    B, G, R = frame[:, :, 0], frame[:, :, 1], frame[:, :, 2]
-    enemy_pixels = (gray <= 24) | ((R >= 130) & (G <= 42) & (B <= 42))
-
-    # 2. Dark Void / Map Border Hazard Zones ("vùng đen" gây trừ máu):
-    # Encroaching darkness / map borders are continuous dark regions (gray <= 48)
-    # spanning massive connected areas (>= 1500 px). Small dirt patches (< 500 px) are ignored.
-    void_cand = (gray <= 48).astype(np.uint8) * 255
+    # Dark Void / Map Border Hazard Zones ("vùng đen" gây trừ máu):
+    # Encroaching darkness / map borders are continuous dark regions substantially darker than the map floor
+    # spanning massive connected areas (>= 1500 px). Normal slate floor tiles (39..48 on Ecosystem) are ignored.
+    floor_p75 = float(np.percentile(gray[int(h * 0.10):], 75)) if h > 20 else 80.0
+    void_thr = min(48, int(max(26.0, floor_p75 * 0.58)))
+    void_cand = (gray <= void_thr).astype(np.uint8) * 255
     void_cand[: int(h * 0.095)] = 0  # HUD is not void
     cnt_v, lbl_v, stats_v, _ = cv2.connectedComponentsWithStats(void_cand, 8)
     void_mask = np.zeros((h, w), dtype=np.uint8)
@@ -672,26 +693,10 @@ def inspect_game(
                 and max(stats_v[i, cv2.CC_STAT_WIDTH], stats_v[i, cv2.CC_STAT_HEIGHT]) >= span * 0.35):
             hazard_mask[lbl_v == i] = 255
 
-    enemy_mask = (enemy_pixels.astype(np.uint8) * 255)
-    enemy_mask[:, : int(w * 0.015)] = 0
-    enemy_mask[:, int(w * 0.985) :] = 0
     dark = enemy_mask | void_mask
     dark[: int(h * 0.095)] = 0  # HUD is not an enemy.
-    # Elite/Boss monster detection ('quái to' with horizontal red health bar):
-    bosses = detect_boss_monsters(frame) if gameplay else []
     for bcx, bcy, br in bosses:
-        cv2.circle(dark, (bcx, bcy), int(br * 1.50), 255, -1)
-
-    # Strict Magic Survival game logic:
-    # While active enemies/bosses are on the map, a milestone monolith CANNOT spawn!
-    inner_mask = np.zeros((h, w), dtype=bool)
-    inner_mask[int(h * 0.14) : int(h * 0.86), int(w * 0.10) : int(w * 0.82)] = True
-    active_combat_enemies = int(np.sum((enemy_mask > 0) & inner_mask))
-    has_active_threats = bool(bosses or active_combat_enemies > max(800, int(w * h * 0.003)))
-    if has_active_threats:
-        raw_monolith = None
-        monolith_pos = None
-        monolith_detected = False
+        cv2.circle(dark, (bcx, bcy), int(br * 1.85), 255, -1)
     # Crucial: mask out the player's own dark character sprite at center so
     # distanceTransform measures distance to real enemies, not the player itself!
     # Clears both circular base and vertical humanoid/robe ellipse.
@@ -772,6 +777,7 @@ def inspect_game(
         bosses,
         monolith_detected,
         chest_detected,
+        active_enemy_pixels=active_combat_enemies,
     )
 
 
@@ -959,8 +965,9 @@ def choose_direction(
     px, py = int(w * player[0]), int(h * player[1])
     span = min(w, h)
     hazard = vision.hazard_mask
+    hazard_dist = None
     if hazard is not None and np.any(hazard):
-        margin = max(2, int(span * 0.06))
+        margin = max(2, int(span * 0.08))
         hazard = cv2.dilate(hazard, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * margin + 1, 2 * margin + 1)))
         if hazard[py, px]:
             # Already caught by the shrinking arena: take the shortest exit,
@@ -979,6 +986,7 @@ def choose_direction(
             delta = offsets[np.argmin(np.sum(offsets * offsets, axis=1))]
             length = float(np.linalg.norm(delta))
             return (float(delta[0] / length), float(delta[1] / length)) if length else (0.0, 0.0)
+        hazard_dist = cv2.distanceTransform(cv2.bitwise_not(hazard), cv2.DIST_L2, 3)
     targeting_skills = DEFAULT_NEAREST_TARGET_SKILLS if nearest_target_skills is None else set(nearest_target_skills)
     has_nearest_target_attack = bool(set(active_skills or ()) & targeting_skills)
     has_guaranteed_attack = bool(set(active_skills or ()) & (targeting_skills | DEFAULT_GUARANTEED_HIT_SKILLS))
@@ -1014,6 +1022,8 @@ def choose_direction(
         if min_orb_dist < dist < span * 0.95:
             gy_c = min(h - 1, max(0, gy))
             gx_c = min(w - 1, max(0, gx))
+            if hazard_dist is not None and (hazard[gy_c, gx_c] > 0 or float(hazard_dist[gy_c, gx_c]) < span * 0.10):
+                continue
             d_px = float(vision.distance[gy_c, gx_c])
             if d_px < 6.0:
                 continue  # Skip orbs inside lethal enemy core
@@ -1028,7 +1038,11 @@ def choose_direction(
                 best_orb = (gx, gy, bw, dist, gem_safety)
 
     inner_enemy_mask = vision.enemy_mask[int(h * 0.14) : int(h * 0.86), int(w * 0.14) : int(w * 0.86)]
-    field_enemy_ratio = float(np.mean(inner_enemy_mask > 0)) if inner_enemy_mask.size > 0 else 0.0
+    raw_active_px = getattr(vision, "active_enemy_pixels", None)
+    if raw_active_px is not None and inner_enemy_mask.size > 0:
+        field_enemy_ratio = float(raw_active_px) / float(inner_enemy_mask.size)
+    else:
+        field_enemy_ratio = float(np.mean(inner_enemy_mask > 0)) if inner_enemy_mask.size > 0 else 0.0
     is_searching_monolith = bool(
         best_orb is None
         and vision.chest is None
@@ -1060,7 +1074,7 @@ def choose_direction(
             pickup_target = vision.chest
     elif pickup_target is None and best_orb is not None:
         pickup_target = (best_orb[0], best_orb[1])
-    boss_emergency = any(math.hypot(px - bcx, py - bcy) < br * 2.2 for bcx, bcy, br in getattr(vision, "bosses", []))
+    boss_emergency = any(math.hypot(px - bcx, py - bcy) < max(br * 3.8, span * 0.68) for bcx, bcy, br in getattr(vision, "bosses", []))
     if not boss_emergency and pickup_target is not None and _hazard_path_clear(hazard, (px, py), pickup_target):
         approach = _approach_pickup(vision, pickup_target, (px, py), has_nearest_target_attack)
         if approach is not None:
@@ -1112,8 +1126,14 @@ def choose_direction(
     best_score = -float("inf")
     best = (0.0, 0.0)
     has_clear_exit = any(near_dist >= 14.0 for _, _, near_dist in ray_info)
+    hazard_lookahead = span * 0.16
+    if hazard is not None and any(
+        _hazard_path_clear(hazard, (px, py), (px + d[0] * span * 0.24, py + d[1] * span * 0.24))
+        for d, _, _ in ray_info
+    ):
+        hazard_lookahead = span * 0.24
     for direction, forward_danger, near_danger_dist in ray_info:
-        if not _hazard_path_clear(hazard, (px, py), (px + direction[0] * span * 0.16, py + direction[1] * span * 0.16)):
+        if not _hazard_path_clear(hazard, (px, py), (px + direction[0] * hazard_lookahead, py + direction[1] * hazard_lookahead)):
             continue
 
         # Compute chest vector if a chest or off-screen chest indicator is present
@@ -1187,7 +1207,7 @@ def choose_direction(
             b_dir_x, b_dir_y = bdx / bdist, bdy / bdist
             boss_dot = direction[0] * b_dir_x + direction[1] * b_dir_y
             b_clearance = bdist - br
-            danger_reach = max(br * 2.6, span * 0.70)
+            danger_reach = max(br * 4.2, span * 0.95)
             if b_clearance < danger_reach:
                 danger_intensity = max(0.0, (danger_reach - b_clearance) / danger_reach)
                 if boss_dot > -0.25:
@@ -1196,16 +1216,50 @@ def choose_direction(
                     if danger_intensity > 0.30 and boss_dot > -0.05:
                         boss_penalty += 1000.0
                 if boss_dot < -0.10:
-                    boss_bonus += 450.0 * danger_intensity * (-boss_dot)
-                # If chest lies in the general direction of this boss or boss is near, suppress chest approach
-                if vision.chest and chest_dist > 4:
-                    cdx, cdy = vision.chest[0] - px, vision.chest[1] - py
-                    dot_cb = (cdx * bdx + cdy * bdy) / (max(1.0, chest_dist) * bdist)
-                    if dot_cb > 0.20 or bdist < br * 2.0:
-                        boss_blocks_chest = True
+                    open_space = max(0.2, 1.0 - forward_danger)
+                    if danger_intensity > 0.55:
+                        # Very close to boss hitbox: strong radial retreat + light tangential tie-break
+                        boss_bonus += 450.0 * danger_intensity * (-boss_dot)
+                        boss_bonus += 120.0 * danger_intensity * max(0.0, 1.0 - abs(boss_dot)) * open_space
+                    else:
+                        # Mid-range: blend radial retreat with tangential circular kiting into open space
+                        boss_bonus += 320.0 * danger_intensity * max(0.0, -boss_dot)
+                        boss_bonus += 220.0 * danger_intensity * max(0.0, 1.0 - abs(boss_dot + 0.45)) * open_space
+                # Any boss within wide reach suppresses chest chasing so loot never lures toward a boss
+                if vision.chest:
+                    boss_blocks_chest = True
         score = score - boss_penalty + boss_bonus
         if boss_blocks_chest:
             allow_chest_approach = False
+
+        # Strong repulsive gradient from shrinking wave dark zone ("vùng đen")
+        if hazard_dist is not None:
+            safe_buf = span * 0.32
+            h_samples = [
+                float(
+                    hazard_dist[
+                        min(h - 1, max(0, int(round(py + direction[1] * span * st)))),
+                        min(w - 1, max(0, int(round(px + direction[0] * span * st)))),
+                    ]
+                )
+                for st in (0.12, 0.22, 0.34, 0.46)
+            ]
+            min_hdist = min(h_samples)
+            end_hdist = float(
+                hazard_dist[
+                    min(h - 1, max(0, int(round(py + direction[1] * span * 0.28)))),
+                    min(w - 1, max(0, int(round(px + direction[0] * span * 0.28)))),
+                ]
+            )
+            cur_hdist = float(hazard_dist[py, px])
+            approaching_wall = (min_hdist < cur_hdist - 2.0) or (min_hdist <= 1.0)
+            if min_hdist < safe_buf:
+                wall_weight = 4500.0 if approaching_wall else 400.0
+                score -= wall_weight * ((1.0 - min_hdist / safe_buf) ** 1.5)
+            if min_hdist <= 1.0:
+                score -= 1500.0
+            if cur_hdist < safe_buf and end_hdist > cur_hdist:
+                score += 180.0 * min(1.0, (end_hdist - cur_hdist) / (span * 0.20))
 
         # Path factor for movement
         path_safe_factor = max(0.20, 1.0 - forward_danger * 1.20)
@@ -1301,8 +1355,9 @@ def choose_direction(
             best_score = score
             best = direction
 
-    # Apply human weaving ("Lắc tay") micro-oscillation if enabled (disabled when charging/searching monolith)
-    if enable_weave and not is_searching_monolith and getattr(vision, "monolith", None) is None and best != (0.0, 0.0) and not boss_emergency and (hazard is None or not np.any(hazard)):
+    # Apply human weaving ("Lắc tay") micro-oscillation if enabled (disabled when charging/searching monolith, near chest, or bosses present)
+    near_chest = bool(vision.chest is not None and math.hypot(vision.chest[0] - px, vision.chest[1] - py) < span * 0.42)
+    if enable_weave and not is_searching_monolith and not near_chest and getattr(vision, "monolith", None) is None and best != (0.0, 0.0) and not boss_emergency and not getattr(vision, "bosses", None) and (hazard is None or not np.any(hazard)):
         weaved = apply_human_weave(best, elapsed, frequency=weave_freq, amplitude=weave_amp)
         wx = int(px + weaved[0] * span * 0.05)
         wy = int(py + weaved[1] * span * 0.05)
@@ -1354,18 +1409,37 @@ def prepare_analysis_frame(frame: np.ndarray) -> np.ndarray:
     return cv2.resize(frame, (540, max(1, round(h * 540 / w))), interpolation=cv2.INTER_AREA)
 
 
-def is_fast_combat_frame(frame: np.ndarray) -> bool:
+def is_fast_combat_frame(frame: np.ndarray, *, skip_ocr: bool = False) -> bool:
     """Check HUD, panels and one small header instead of all expensive menu scans."""
     if detect_pause_button(frame) is None:
         return False
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
     h, w = gray.shape
     middle = gray[int(h * 0.15):int(h * 0.85), int(w * 0.08):int(w * 0.92)]
+    modal = measure_modal_panel(gray)
     clear_field = (float(np.mean(gray)) >= 22.0
-            and measure_modal_panel(gray) < 0.55
+            and modal < 0.55
             and float(np.mean((middle >= 42) & (middle <= 200))) >= 0.12)
     if not clear_field:
         return False
+    # A wide black card/popup is sufficient (~3ms) to catch level-up/chest/shop modals without OCR,
+    # while ignoring edge-to-edge dark map-boundary fog at top/bottom when center & modal are clear.
+    dark_slice = gray[int(h * 0.20):int(h * 0.90)]
+    slice_h = dark_slice.shape[0]
+    dark = (dark_slice <= 20).astype(np.uint8)
+    _, _, stats, _ = cv2.connectedComponentsWithStats(dark, 8)
+    for x, y, width, height, area in stats[1:]:
+        if width > w * 0.6 and height > h * 0.08 and area > width * height * 0.65:
+            is_edge_fog = (
+                width >= w * 0.95
+                and height < slice_h * 0.45
+                and modal < 0.22
+                and (y + height <= int(slice_h * 0.45) or y >= int(slice_h * 0.55))
+            )
+            if not is_edge_fog:
+                return False
+    if skip_ocr:
+        return True
     # Level-up cards keep the Pause icon visible and may have bright backgrounds.
     # Read their header rather than mistaking that HUD alone for active combat.
     try:
@@ -1380,12 +1454,6 @@ def is_fast_combat_frame(frame: np.ndarray) -> bool:
         text = " ".join(line.text.lower() for line in asyncio.run(recognize()).lines)
         if any(term in text for term in ("select", "current level", "pause", "treasure", "merchant", "life or death", "restore gold", "obtain", "artifact")):
             return False
-        # A wide black card/popup is also sufficient even when header OCR misses.
-        dark = (gray[int(h * 0.20):int(h * 0.90)] <= 20).astype(np.uint8)
-        _, _, stats, _ = cv2.connectedComponentsWithStats(dark, 8)
-        for x, y, width, height, area in stats[1:]:
-            if width > w * 0.6 and height > h * 0.08 and area > width * height * 0.65:
-                return False
         return True
     except Exception:
         return False
@@ -1977,6 +2045,141 @@ def validate_game_timer(
     return None
 
 
+_DIGIT_TARGET_W, _DIGIT_TARGET_H = 20, 24
+_DIGIT_TEMPLATES_CACHE: Optional[list[tuple[str, float, np.ndarray]]] = None
+
+
+def _load_digit_templates() -> list[tuple[str, float, np.ndarray]]:
+    """Load normalized Magic Survival digit glyph templates (0-9) from assets/digit_templates.npz."""
+    global _DIGIT_TEMPLATES_CACHE
+    if _DIGIT_TEMPLATES_CACHE is not None:
+        return _DIGIT_TEMPLATES_CACHE
+    tmpl_path = _BASE_DIR / "assets" / "digit_templates.npz"
+    loaded: list[tuple[str, float, np.ndarray]] = []
+    if tmpl_path.is_file():
+        try:
+            data = np.load(str(tmpl_path))
+            patches = data["patches"]
+            labels = data["labels"]
+            ars = data["aspect_ratios"]
+            for patch, lbl, ar in zip(patches, labels, ars):
+                loaded.append((str(int(lbl)), float(ar), patch.astype(np.float32)))
+        except Exception:
+            loaded = []
+    _DIGIT_TEMPLATES_CACHE = loaded
+    return _DIGIT_TEMPLATES_CACHE
+
+
+def _segment_and_match_digits(
+    crop: np.ndarray,
+    hsv_ranges: Optional[list[tuple[tuple[int, int, int], tuple[int, int, int]]]] = None,
+    min_score: float = 0.52,
+) -> Optional[tuple[str, list[tuple[int, int, int, int]], float]]:
+    """Segment and classify Magic Survival font digits (0-9) in a crop.
+
+    Uses aspect-ratio-penalized NCC against saved font glyphs so '7' (ar ~0.65)
+    is never confused with '1' (ar ~0.35). Returns (digits, boxes, min_score) or None.
+    """
+    if crop is None or crop.size == 0 or crop.shape[0] < 8 or crop.shape[1] < 8:
+        return None
+    templates = _load_digit_templates()
+    if not templates:
+        return None
+
+    if hsv_ranges:
+        hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+        mask = np.zeros(crop.shape[:2], dtype=np.uint8)
+        for lo, hi in hsv_ranges:
+            mask = cv2.bitwise_or(mask, cv2.inRange(hsv, lo, hi))
+        val_src = cv2.bitwise_and(hsv[:, :, 2], hsv[:, :, 2], mask=mask)
+        if int(np.max(val_src)) < 45:
+            return None
+    else:
+        val_src = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        if int(np.max(val_src)) < 40:
+            return None
+
+    _, bw = cv2.threshold(val_src, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    num, _, stats, _ = cv2.connectedComponentsWithStats(bw)
+    ch, cw = crop.shape[:2]
+    min_h = max(6, int(ch * 0.22))
+    raw_cands: list[tuple[int, int, int, int]] = []
+    for i in range(1, num):
+        bx, by, bw_w, bw_h, area = (
+            int(stats[i, 0]), int(stats[i, 1]), int(stats[i, 2]), int(stats[i, 3]), int(stats[i, 4])
+        )
+        if bw_h < min_h or bw_h > int(ch * 0.92) or bw_w < 2 or area < 10:
+            continue
+        if bw_w > int(bw_h * 1.45):
+            # Merged digits or wide non-digit blob; reject so caller can fall back safely
+            return None
+        raw_cands.append((bx, by, bw_w, bw_h))
+    if not raw_cands:
+        return None
+
+    max_h = max(c[3] for c in raw_cands)
+    cands = [c for c in raw_cands if c[3] >= 0.62 * max_h]
+    if not cands:
+        return None
+    cands.sort(key=lambda b: b[0])
+
+    digits: list[str] = []
+    min_matched = 1.0
+    for bx, by, bw_w, bw_h in cands:
+        patch = val_src[by : by + bw_h, bx : bx + bw_w]
+        norm = cv2.normalize(patch, None, 0, 255, cv2.NORM_MINMAX)
+        resized = cv2.resize(norm, (_DIGIT_TARGET_W, _DIGIT_TARGET_H), interpolation=cv2.INTER_AREA).astype(np.float32)
+        ar = bw_w / max(1, bw_h)
+        best_ch = None
+        best_sc = -1e9
+        for ch_lbl, tar, tmpl in templates:
+            ncc = float(cv2.matchTemplate(resized, tmpl, cv2.TM_CCOEFF_NORMED)[0][0])
+            sc = ncc - 0.8 * abs(ar - tar)
+            if sc > best_sc:
+                best_sc = sc
+                best_ch = ch_lbl
+        if best_ch is None or best_sc < min_score:
+            return None
+        digits.append(best_ch)
+        min_matched = min(min_matched, best_sc)
+    return ("".join(digits), cands, min_matched)
+
+
+def _read_digits_value(
+    crop: np.ndarray,
+    hsv_ranges: Optional[list[tuple[tuple[int, int, int], tuple[int, int, int]]]] = None,
+    min_score: float = 0.55,
+) -> Optional[int]:
+    """Read an integer value from a Magic Survival UI crop using digit templates."""
+    res = _segment_and_match_digits(crop, hsv_ranges=hsv_ranges, min_score=min_score)
+    if res is None:
+        return None
+    return int(res[0])
+
+
+def _read_timer_from_crop(
+    crop: np.ndarray,
+    hsv_ranges: Optional[list[tuple[tuple[int, int, int], tuple[int, int, int]]]] = None,
+    min_score: float = 0.72,
+) -> Optional[tuple[int, int, int]]:
+    """Read MM:SS (or MMM:SS) timer from a crop using digit templates with colon-gap validation."""
+    res = _segment_and_match_digits(crop, hsv_ranges=hsv_ranges, min_score=min_score)
+    if res is None:
+        return None
+    digits, boxes, _ = res
+    if len(digits) not in (4, 5):
+        return None
+    avg_h = sum(b[3] for b in boxes) / len(boxes)
+    colon_gap = boxes[-2][0] - (boxes[-3][0] + boxes[-3][2])
+    if colon_gap < avg_h * 0.50:
+        return None
+    mins = int(digits[:-2])
+    secs = int(digits[-2:])
+    if secs >= 60 or mins >= 180:
+        return None
+    return (mins, secs, mins * 60 + secs)
+
+
 def detect_game_timer(frame: np.ndarray) -> Optional[tuple[int, int, int]]:
     """Detect in-game survival timer from the HUD top-center bar (e.g. '02:31', '03:32', '05:43').
     Returns (minutes, seconds, total_seconds) or None.
@@ -1987,6 +2190,16 @@ def detect_game_timer(frame: np.ndarray) -> Optional[tuple[int, int, int]]:
     if frame is None or frame.size == 0:
         return None
     h, w = frame.shape[:2]
+    # Fast, font-exact digit template path on the centered HUD timer strip (avoids 7 vs 1 OCR confusion)
+    hud_crop = frame[int(h * 0.008) : int(h * 0.055), int(w * 0.35) : int(w * 0.65)]
+    for t_ranges in (
+        [((0, 0, 90), (180, 75, 255))],
+        [((0, 70, 90), (18, 255, 255)), ((165, 70, 90), (180, 255, 255))],
+    ):
+        t_fast = _read_timer_from_crop(hud_crop, hsv_ranges=t_ranges, min_score=0.72)
+        if t_fast is not None:
+            return t_fast
+
     # The in-game timer in Magic Survival is located strictly in the top bar: y: ~1.5%..8.0%, x: ~28%..72%
     y0, y1 = int(h * 0.015), int(h * 0.080)
     x0, x1 = int(w * 0.28), int(w * 0.72)
@@ -2037,6 +2250,12 @@ def detect_results_survival_time(frame: np.ndarray) -> Optional[tuple[int, int, 
     if frame is None or frame.size == 0:
         return None
     h, w = frame.shape[:2]
+    # Fast, font-exact digit template path on the centered green survival timer (x >= 0.43 skips clock icon)
+    res_timer_crop = frame[int(h * 0.38) : int(h * 0.43), int(w * 0.43) : int(w * 0.68)]
+    t_fast = _read_timer_from_crop(res_timer_crop, min_score=0.65)
+    if t_fast is not None:
+        return t_fast
+
     # In Magic Survival 'Experiment Failed' screen, survival time is in the upper-middle area (y: 10% - 55%)
     roi = frame[int(h * 0.10):int(h * 0.55), int(w * 0.05):int(w * 0.95)]
     if roi.size == 0:
@@ -2107,13 +2326,27 @@ def detect_results_stats(frame: np.ndarray) -> dict[str, int]:
     if frame is None or frame.size == 0:
         return {"kills": 0, "gold": 0, "gems": 0}
     h, w = frame.shape[:2]
+    if h < 100 or w < 100:
+        return {"kills": 0, "gold": 0, "gems": 0}
+
+    # Primary font-exact digit template recognition (eliminates 7 vs 1 confusion and split-word drops)
+    kills_crop = frame[int(h * 0.45) : int(h * 0.495), int(w * 0.42) : int(w * 0.68)]
+    gold_crop = frame[int(h * 0.645) : int(h * 0.695), int(w * 0.31) : int(w * 0.48)]
+    gems_crop = frame[int(h * 0.645) : int(h * 0.695), int(w * 0.51) : int(w * 0.68)]
+
+    t_kills = _read_digits_value(kills_crop, min_score=0.55)
+    t_gold = _read_digits_value(gold_crop, min_score=0.55)
+    t_gems = _read_digits_value(gems_crop, min_score=0.55)
+    if t_kills is not None and t_gold is not None and t_gems is not None:
+        return {"kills": t_kills, "gold": t_gold, "gems": t_gems}
+
     # In Magic Survival 'Experiment Failed' screen:
     # Kills is at y: 40%..55%
     # Gold and Gems rewards are at y: 56%..76% (Gold on left: x < 48%, Gems on right: x >= 48%)
     y0, y1 = int(h * 0.40), int(h * 0.76)
     roi = frame[y0:y1, :]
     if roi.size == 0:
-        return {"kills": 0, "gold": 0, "gems": 0}
+        return {"kills": t_kills or 0, "gold": t_gold or 0, "gems": t_gems or 0}
 
     def _clean_digits(txt: str) -> Optional[int]:
         # Handle stylized numbers in Magic Survival font (O/o -> 0, l/t/I/i -> 1)
@@ -2121,6 +2354,7 @@ def detect_results_stats(frame: np.ndarray) -> dict[str, int]:
         d = re.sub(r"[^\d]", "", t)
         return int(d) if d else None
 
+    kills, gold, gems = t_kills or 0, t_gold or 0, t_gems or 0
     try:
         import asyncio
         import winocr
@@ -2129,45 +2363,42 @@ def detect_results_stats(frame: np.ndarray) -> dict[str, int]:
         async def _ocr(p_img):
             return await winocr.recognize_pil(p_img, lang="en")
 
-        pil_img = Image.fromarray(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB))
-        res = asyncio.run(_ocr(pil_img))
-        kills, gold, gems = 0, 0, 0
-        for l in res.lines:
-            for wrd in l.words:
-                y_pct = (y0 + wrd.bounding_rect.y) / h
-                x_pct = wrd.bounding_rect.x / w
-                val = _clean_digits(wrd.text)
-                if val is not None:
-                    if 0.41 <= y_pct <= 0.54 and kills == 0:
-                        kills = val
-                    elif 0.56 <= y_pct <= 0.74:
-                        if x_pct < 0.48 and gold == 0:
-                            gold = val
-                        elif x_pct >= 0.48 and gems == 0:
-                            gems = val
-
-        if gold == 0:
-            gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
-            norm = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
-            pil_norm = Image.fromarray(norm)
-            res_norm = asyncio.run(_ocr(pil_norm))
-            for l in res_norm.lines:
-                for wrd in l.words:
+        def _fill_from_ocr(ocr_res):
+            nonlocal kills, gold, gems
+            for l in ocr_res.lines:
+                k_parts, g_parts, gm_parts = [], [], []
+                for wrd in sorted(l.words, key=lambda x: x.bounding_rect.x):
                     y_pct = (y0 + wrd.bounding_rect.y) / h
                     x_pct = wrd.bounding_rect.x / w
                     val = _clean_digits(wrd.text)
-                    if val is not None:
-                        if 0.41 <= y_pct <= 0.54 and kills == 0:
-                            kills = val
-                        elif 0.56 <= y_pct <= 0.74:
-                            if x_pct < 0.48 and gold == 0:
-                                gold = val
-                            elif x_pct >= 0.48 and gems == 0:
-                                gems = val
+                    if val is None:
+                        continue
+                    if 0.41 <= y_pct <= 0.54:
+                        k_parts.append(str(val))
+                    elif 0.56 <= y_pct <= 0.74:
+                        if x_pct < 0.48:
+                            g_parts.append(str(val))
+                        else:
+                            gm_parts.append(str(val))
+                if kills == 0 and k_parts:
+                    kills = int("".join(k_parts))
+                if gold == 0 and g_parts:
+                    gold = int("".join(g_parts))
+                if gems == 0 and gm_parts:
+                    gems = int("".join(gm_parts))
+
+        pil_img = Image.fromarray(cv2.cvtColor(roi, cv2.COLOR_BGR2RGB))
+        _fill_from_ocr(asyncio.run(_ocr(pil_img)))
+
+        if gold == 0 or kills == 0:
+            gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
+            norm = cv2.normalize(gray, None, 0, 255, cv2.NORM_MINMAX)
+            pil_norm = Image.fromarray(norm)
+            _fill_from_ocr(asyncio.run(_ocr(pil_norm)))
         return {"kills": kills, "gold": gold, "gems": gems}
     except Exception:
         pass
-    return {"kills": 0, "gold": 0, "gems": 0}
+    return {"kills": kills, "gold": gold, "gems": gems}
 
 
 def detect_confirm_button(frame: np.ndarray, min_confidence: float = 0.70) -> Optional[tuple[float, float]]:
@@ -2251,6 +2482,11 @@ def get_upgrade_target(card_index: int = 1, num_cards: int = 3) -> tuple[float, 
             3: (0.50, 0.66),
         }
         return mapping.get(card_index, (0.50, 0.38))
+
+
+def get_mana_retrieve_target(num_cards: int = 3) -> tuple[float, float]:
+    """Return normalized screen coordinates for the 'Mana Retrieve' button below the last card."""
+    return (0.50, 0.922) if num_cards == 4 else (0.50, 0.835)
 
 
 def detect_enter_area(frame: np.ndarray, min_confidence: float = 0.70) -> Optional[tuple[float, float]]:
@@ -2486,9 +2722,14 @@ def detect_main_screen_currencies(frame: np.ndarray) -> dict[str, Optional[int]]
         return {"gold": None, "gems": None}
 
     h, w = frame.shape[:2]
-    # Gold and Gem counters reside in the top-left area:
-    # Row 1 (Gold): y: ~1.5%..5.0%, x: ~8%..35%
-    # Row 2 (Gems): y: ~5.0%..9.0%, x: ~8%..35%
+    # Gold and Gem counters reside in the top-left dark badge:
+    # Row 1 (Gold): y: ~1.5%..5.0%, x: ~9%..29% (bright lobby background starts at x~29%)
+    # Row 2 (Gems): y: ~5.0%..9.0%, x: ~9%..29%
+    gold_tight = frame[int(h * 0.015) : int(h * 0.050), int(w * 0.09) : int(w * 0.29)]
+    gem_tight = frame[int(h * 0.050) : int(h * 0.090), int(w * 0.09) : int(w * 0.29)]
+    gold_val = _read_digits_value(gold_tight, hsv_ranges=[((14, 60, 60), (40, 255, 255))], min_score=0.55)
+    gem_val = _read_digits_value(gem_tight, hsv_ranges=[((40, 55, 60), (95, 255, 255))], min_score=0.55)
+
     gold_roi = frame[int(h * 0.015):int(h * 0.050), int(w * 0.08):int(w * 0.35)]
     gem_roi = frame[int(h * 0.050):int(h * 0.090), int(w * 0.08):int(w * 0.35)]
 
@@ -2527,8 +2768,8 @@ def detect_main_screen_currencies(frame: np.ndarray) -> dict[str, Optional[int]]
         return None
 
     return {
-        "gold": _parse_currency_crop(gold_roi),
-        "gems": _parse_currency_crop(gem_roi),
+        "gold": gold_val if gold_val is not None else _parse_currency_crop(gold_roi),
+        "gems": gem_val if gem_val is not None else _parse_currency_crop(gem_roi),
     }
 
 
@@ -3036,7 +3277,6 @@ SPECIAL_ARTIFACT_NAMES: set[str] = {
     "cyberspace",
     "evil sword",
     "genome map",
-    "opulence",
     "magnum opus",
 }
 
@@ -3050,6 +3290,21 @@ def is_special_artifact(text: str) -> bool:
         if _match_keyword(name, t):
             return True
     return False
+
+
+def _meta_artifact_priority_bonus(full_text: str, tier: int) -> tuple[int, Optional[str]]:
+    """Shared top-tier meta priority adjustment for chest and shop artifact evaluation."""
+    if is_toy_castle_artifact(full_text):
+        return (50000, "★ Ưu Tiên Tuyệt Đối: Toy Castle / MagicToys")
+    if is_dragon_tongue_artifact(full_text):
+        return (35000, "★ Thần Khí Meta: Dragon's Tongue (Lưỡi Rồng)")
+    if _match_keyword("gaia", full_text):
+        return (8000, "★ Thần Khí Meta: Gaia")
+    if _match_keyword("opulence", full_text):
+        return (-2000, "⏬ Hạ ưu tiên: Opulence")
+    if tier == 4 or is_special_artifact(full_text):
+        return (3000, "★ Trang Bị Special (Ưu Tiên)")
+    return (0, None)
 
 
 def evaluate_selected_chest_artifact(
@@ -3157,16 +3412,11 @@ def evaluate_selected_chest_artifact(
     bonus = 0
     tags: list[str] = [tier_names[tier]]
 
-    # Toy Castle (MagicToys) and Dragon's Tongue have absolute top priority over any artifact in the game!
-    if is_toy_castle_artifact(full_text):
-        bonus += 50000
-        tags.append("★ Ưu Tiên Tuyệt Đối: Toy Castle / MagicToys")
-    elif is_dragon_tongue_artifact(full_text):
-        bonus += 35000
-        tags.append("★ Thần Khí Meta: Dragon's Tongue (Lưỡi Rồng)")
-    elif tier == 4 or is_special_artifact(full_text):
-        bonus += 3000
-        tags.append("★ Trang Bị Special (Ưu Tiên)")
+    prio_bonus, prio_tag = _meta_artifact_priority_bonus(full_text, tier)
+    if prio_bonus:
+        bonus += prio_bonus
+    if prio_tag:
+        tags.append(prio_tag)
 
     if has_s_tier:
         bonus += 240
@@ -3461,16 +3711,11 @@ def evaluate_selected_shop_artifact(
     bonus = 0
     tags: list[str] = [tier_names[tier]]
 
-    # Toy Castle (MagicToys) and Dragon's Tongue have absolute top priority over any artifact in the game!
-    if is_toy_castle_artifact(full_text):
-        bonus += 50000
-        tags.append("★ Ưu Tiên Tuyệt Đối: Toy Castle / MagicToys")
-    elif is_dragon_tongue_artifact(full_text):
-        bonus += 35000
-        tags.append("★ Thần Khí Meta: Dragon's Tongue (Lưỡi Rồng)")
-    elif tier == 4 or is_special_artifact(full_text):
-        bonus += 3000
-        tags.append("★ Trang Bị Special (Ưu Tiên)")
+    prio_bonus, prio_tag = _meta_artifact_priority_bonus(full_text, tier)
+    if prio_bonus:
+        bonus += prio_bonus
+    if prio_tag:
+        tags.append(prio_tag)
 
     if has_s_tier:
         bonus += 240
@@ -3558,7 +3803,7 @@ def detect_learn_button(frame: np.ndarray, min_confidence: float = 0.65) -> Opti
             return await winocr.recognize_pil(pil_roi, lang="en")
         ocr_res = asyncio.run(_ocr_learn())
         for line in ocr_res.lines:
-            if "learn" in line.text.lower():
+            if re.fullmatch(r"learn\.?", line.text.strip().lower()):
                 if line.words:
                     r = line.words[0].bounding_rect
                     cx = x0 + int(r.x + r.width / 2)
@@ -4396,7 +4641,7 @@ META_S_TIER_ARTIFACTS: set[str] = {
     "hydra", "space-time circuit", "space time circuit", "roster", "golden roulette",
     "peace treaty", "toy castle", "assassination", "dragon's tongue", "dragons tongue", "dragon tongue", "dragontongue",
     "magic seal", "longinus' spear", "longinus spear", "magnum opus", "treasure map",
-    "opulence", "cyberspace", "evil sword", "genome map",
+    "cyberspace", "evil sword", "genome map",
     "starlight", "crown", "shuriken", "mirror", "mutagen", "mandrake",
     "heartbreaker", "butcher", "rose", "golem core", "organic shield", "meat",
 }
@@ -4497,7 +4742,7 @@ def _detect_cards_ocr(frame: np.ndarray, h: int, w: int) -> dict[int, CardSlotDa
             if not line.words:
                 continue
             avg_y = (y_crop_top + sum(wd.bounding_rect.y + wd.bounding_rect.height / 2 for wd in line.words) / len(line.words)) / h
-            if "mana" in t and ("retrieve" in t or "20%" in t):
+            if "mana" in t and ("retrieve" in t or "%" in t):
                 mana_y = avg_y
             if "select magic" in t or "select" in t:
                 if select_magic_y is None or avg_y < select_magic_y:
@@ -4840,7 +5085,7 @@ def is_level_up_screen(frame: np.ndarray) -> LevelUpDetection:
         async def _b():
             return await winocr.recognize_pil(Image.fromarray(cv2.cvtColor(b_roi, cv2.COLOR_BGR2RGB)), lang="en")
         b_res = asyncio.run(_b())
-        if any("retrieve" in l.text.lower() or "mana 20" in l.text.lower() or "mana retrieve" in l.text.lower() for l in b_res.lines):
+        if any("retrieve" in l.text.lower() or "mana 20" in l.text.lower() or "mana 35" in l.text.lower() or "mana retrieve" in l.text.lower() for l in b_res.lines):
             return LevelUpDetection(True, "mana_retrieve_button")
     except Exception:
         pass
@@ -5006,7 +5251,34 @@ def find_best_combination_option(
 
 def detect_player_level(frame: np.ndarray) -> Optional[int]:
     """Read the player's Current Level header, never a skill's Lv on a card."""
+    if frame is None or frame.size == 0:
+        return None
     h, w = frame.shape[:2]
+    if h >= 200 and w >= 200:
+        # Fast, font-exact yellow digit path anchored right after the ':' colon in 'Current Level : XX'
+        hdr = frame[int(h * 0.105) : int(h * 0.16), int(w * 0.50) : int(w * 0.75)]
+        if hdr.size > 0:
+            hsv = cv2.cvtColor(hdr, cv2.COLOR_BGR2HSV)
+            mask = cv2.inRange(hsv, (14, 60, 80), (40, 255, 255))
+            v = cv2.bitwise_and(hsv[:, :, 2], hsv[:, :, 2], mask=mask)
+            if int(np.max(v)) > 40:
+                _, bw = cv2.threshold(v, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+                num, _, stats, _ = cv2.connectedComponentsWithStats(bw)
+                dots = [
+                    (int(stats[i, 0]), int(stats[i, 1]), int(stats[i, 2]), int(stats[i, 3]))
+                    for i in range(1, num)
+                    if 2 <= stats[i, 2] <= 10 and 2 <= stats[i, 3] <= 10 and stats[i, 4] >= 4
+                ]
+                colon_x = None
+                for i in range(len(dots)):
+                    for j in range(i + 1, len(dots)):
+                        if abs(dots[i][0] - dots[j][0]) <= max(3, int(w * 0.006)) and abs(dots[i][1] - dots[j][1]) >= 3:
+                            colon_x = max(dots[i][0] + dots[i][2], dots[j][0] + dots[j][2])
+                if colon_x is not None and colon_x + 2 < hdr.shape[1]:
+                    lvl = _read_digits_value(hdr[:, colon_x + 2 :], hsv_ranges=[((14, 60, 80), (40, 255, 255))], min_score=0.55)
+                    if lvl is not None and 1 <= lvl <= 200:
+                        return lvl
+
     roi = frame[int(h * 0.08):int(h * 0.28), int(w * 0.08):int(w * 0.92)]
     if not roi.size:
         return None
@@ -5040,6 +5312,7 @@ def choose_best_artifact_or_card(
     skill_levels: Optional[dict[str, int]] = None,
     level_count: int = 1,
     early_priority_skills: Optional[dict[str, dict]] = None,
+    allow_mana_retrieve: bool = False,
 ) -> CardChoice:
     """Evaluate 3 vertical card slots using Wiki & Reddit Meta Tier List:
     1. Trait choices: Freeze traits (Sub-Zero, Absolute Zero, Pole) -> Combination traits
@@ -5070,7 +5343,7 @@ def choose_best_artifact_or_card(
 
     def make_choice(idx, target, label="", skill_key="", trait_key=""):
         result = CardChoice(idx, target, label, skill_key, trait_key)
-        result.offered_level = ocr_cards[idx].offered_level
+        result.offered_level = ocr_cards[idx].offered_level if idx in ocr_cards else None
         result.offered_cards = {str(k): list(v) for k, v in slot_skills.items()}
         return result
 
@@ -5178,7 +5451,19 @@ def choose_best_artifact_or_card(
             target = get_upgrade_target(idx, num_cards=num_cards)
             return make_choice(idx, target, f"Nhánh Hỗ Trợ Meta: {trait_name}", trait_key=s_trait)
 
+    def _normalize_skill_name(item: object) -> str:
+        clean = str(item).lower().strip().replace("-", "_").replace(" ", "_")
+        for std_key, aliases in SKILL_ALIASES.items():
+            if clean == std_key or clean in aliases:
+                return std_key
+        return clean
+
     is_ai_free_mode = bool(skill_priority is not None and len(skill_priority) == 0)
+    explicit_priority_set: set[str] = (
+        {_normalize_skill_name(item) for item in skill_priority}
+        if (skill_priority and not is_ai_free_mode)
+        else set()
+    )
     priority_order = list(skill_priority) if (skill_priority is not None and not is_ai_free_mode) else list(DEFAULT_SKILL_PRIORITY)
     for fallback_skill in DEFAULT_SKILL_PRIORITY:
         if fallback_skill not in priority_order:
@@ -5190,15 +5475,9 @@ def choose_best_artifact_or_card(
 
     normalized_priority: list[str] = []
     for item in priority_order:
-        clean = str(item).lower().strip().replace("-", "_").replace(" ", "_")
-        for std_key, aliases in SKILL_ALIASES.items():
-            if clean == std_key or clean in aliases:
-                if std_key not in normalized_priority:
-                    normalized_priority.append(std_key)
-                break
-        else:
-            if clean not in normalized_priority:
-                normalized_priority.append(clean)
+        resolved = _normalize_skill_name(item)
+        if resolved not in normalized_priority:
+            normalized_priority.append(resolved)
 
     # 1.2. LEVEL 7 ATTRIBUTE UNLOCK PRIORITY (e.g. Spirit Lv 7 / Electric Shock Lv 7):
     # When a priority skill is at Level 7 ('You can obtain an attribute.'), pick it IMMEDIATELY!
@@ -5337,8 +5616,23 @@ def choose_best_artifact_or_card(
                     best_skill_card_idx = idx
                     best_detected_skill = skill
 
-    # PRIORITY DECISION: IF A PRIORITIZED SKILL IS DETECTED, CHOOSE IT IMMEDIATELY!
+    # PRIORITY DECISION: IF A PRIORITIZED SKILL IS DETECTED, CHOOSE IT IMMEDIATELY
+    # (unless allow_mana_retrieve prefers skipping unsuitable/low-value cards).
     if best_skill_card_idx is not None:
+        is_owned = bool(active_skills and best_detected_skill in active_skills)
+        if allow_mana_retrieve and level_count >= 6 and not is_owned and best_sp_card_idx is None:
+            if not is_ai_free_mode and explicit_priority_set and best_detected_skill not in explicit_priority_set:
+                return make_choice(
+                    0,
+                    get_mana_retrieve_target(num_cards),
+                    "♻️ Thu hồi 35% Mana (Không có kỹ năng hợp build)",
+                )
+            if is_ai_free_mode and len(active_skills or ()) >= 6 and best_priority_rank < 89.0:
+                return make_choice(
+                    0,
+                    get_mana_retrieve_target(num_cards),
+                    f"♻️ Thu hồi 35% Mana (Thẻ tốt nhất '{best_detected_skill.replace('_', ' ').title()}' điểm thấp: {best_priority_rank:.1f})",
+                )
         target = get_upgrade_target(best_skill_card_idx, num_cards=num_cards)
         display_name = best_detected_skill.replace("_", " ").title()
         return make_choice(best_skill_card_idx, target, f"Kỹ năng: {display_name}", skill_key=best_detected_skill)
@@ -5362,6 +5656,10 @@ def choose_best_artifact_or_card(
         bonus = 0
         if is_toy_castle_artifact(card_full_text):
             bonus += 50000
+        if _match_keyword("gaia", card_full_text):
+            bonus += 2500
+        if _match_keyword("opulence", card_full_text):
+            bonus -= 2000
         if card_tiers[idx] == 4 or is_special_artifact(card_full_text) or ocr_cards[idx].has_special_artifact:
             bonus += 1000
         if ocr_cards[idx].has_s_tier:
@@ -5426,7 +5724,13 @@ def choose_best_artifact_or_card(
         tag_str = f" [{'+'.join(tag)}]" if tag else ""
         return make_choice(best_artifact_idx, target, f"Artifact {tier_names.get(best_tier, 'Thường')}{tag_str}")
 
-    # C. Default choice must also be available.
+    # C. Mana Retrieve (when allowed on level-up) or default choice if no match was found.
+    if allow_mana_retrieve and not is_chest_screen and level_count >= 6:
+        return make_choice(
+            0,
+            get_mana_retrieve_target(num_cards),
+            "♻️ Thu hồi 35% Mana (Không có kỹ năng phù hợp)",
+        )
     if default_choice not in all_indices:
         default_choice = all_indices[0]
     target = get_upgrade_target(default_choice, num_cards=num_cards)

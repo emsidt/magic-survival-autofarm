@@ -1,9 +1,16 @@
-import unittest
+import gzip
+import struct
 import subprocess
+import unittest
 from unittest.mock import patch, MagicMock
 import numpy as np
 
-from adb_controller import ADBController, ADBCommandError
+from adb_controller import (
+    ADBController,
+    ADBCommandError,
+    _decode_screenshot_bytes,
+    _parse_touch_device_from_getevent,
+)
 
 
 class TestADBController(unittest.TestCase):
@@ -179,6 +186,22 @@ class TestADBController(unittest.TestCase):
                 timeout=3.0,
             )
 
+    def test_restart_game_force_stops_and_relaunches(self):
+        """Test restart_game closes browsers, force-stops the game, and relaunches it."""
+        with patch.object(self.ctrl, "_run_adb") as mock_run, patch("adb_controller.time.sleep"):
+            self.ctrl.restart_game()
+            calls = [c.args[0] for c in mock_run.call_args_list]
+            self.assertIn(["shell", "am", "force-stop", "com.vkslrzm.Zombie"], calls)
+            self.assertIn(
+                ["shell", "monkey", "-p", "com.vkslrzm.Zombie", "-c", "android.intent.category.LAUNCHER", "1"],
+                calls,
+            )
+            stop_idx = calls.index(["shell", "am", "force-stop", "com.vkslrzm.Zombie"])
+            launch_idx = calls.index(
+                ["shell", "monkey", "-p", "com.vkslrzm.Zombie", "-c", "android.intent.category.LAUNCHER", "1"]
+            )
+            self.assertLess(stop_idx, launch_idx)
+
     def test_get_foreground_package_and_close_external_browsers(self):
         """Test reading focused package and killing unwanted browser/store apps."""
         mock_res = MagicMock()
@@ -226,6 +249,107 @@ class TestADBController(unittest.TestCase):
             self.assertFalse(self.ctrl.is_moving)
             self.assertIsNone(self.ctrl.current_direction)
             mock_run.assert_called_once_with(["shell", "input", "tap", "540", "960"], timeout=2.0)
+
+    def test_async_move_and_custom_swipe_duration(self):
+        """async_move returns immediately without blocking on input swipe, while worker uses swipe_duration_ms."""
+        with patch.object(self.ctrl, "_run_adb") as run, \
+                patch("adb_controller.time.monotonic", return_value=2.0):
+            self.ctrl.move((1.0, 0.0), config={"async_move": True, "swipe_duration_ms": 160})
+            run.assert_not_called()
+            self.assertTrue(self.ctrl.is_moving)
+            self.assertEqual(self.ctrl.current_direction, (1.0, 0.0))
+
+        with patch.object(self.ctrl, "_run_adb") as run, \
+                patch.object(self.ctrl._stop_event, "is_set", side_effect=[False, True]), \
+                patch("adb_controller.time.monotonic", return_value=2.1), \
+                patch("adb_controller.time.sleep"):
+            self.ctrl._movement_worker_loop()
+        run.assert_called_once()
+        self.assertEqual(run.call_args.args[0][-1], "160")
+
+    def test_parse_touch_device_from_getevent(self):
+        sample = """add device 1: /dev/input/event4
+  name:     "mouse"
+  events:
+    KEY (0001): 0110  0111
+  input props:
+    INPUT_PROP_DIRECT
+add device 3: /dev/input/event2
+  name:     "input"
+  events:
+    ABS (0003): 002f  : value 0, min 0, max 15, fuzz 0, flat 0, resolution 0
+                0035  : value 0, min 0, max 1919, fuzz 0, flat 0, resolution 0
+                0036  : value 0, min 0, max 1079, fuzz 0, flat 0, resolution 0
+                0039  : value 0, min 0, max 65535, fuzz 0, flat 0, resolution 0
+  input props:
+    INPUT_PROP_DIRECT
+"""
+        self.assertEqual(_parse_touch_device_from_getevent(sample), ("/dev/input/event2", 1919, 1079))
+
+    def test_scale_touch_xy(self):
+        self.ctrl._touch_max_x = 1919
+        self.ctrl._touch_max_y = 1079
+        self.assertEqual(self.ctrl._scale_touch_xy(540, 1248), (960, 702))
+        self.assertEqual(self.ctrl._scale_touch_xy(0, 0), (0, 0))
+        self.assertEqual(self.ctrl._scale_touch_xy(1079, 1919), (1919, 1079))
+
+    def test_persistent_touch_down_move_up_no_lift_between_moves(self):
+        self.ctrl._touch_device = "/dev/input/event2"
+        self.ctrl._touch_max_x = 1919
+        self.ctrl._touch_max_y = 1079
+        cmds = []
+
+        with patch.object(self.ctrl, "_write_touch_cmd", side_effect=lambda c: cmds.append(c) or True), \
+                patch.object(self.ctrl, "_run_adb") as run_adb, \
+                patch("adb_controller.time.sleep"):
+            # First move: DOWN + MOVE
+            self.ctrl.move((1.0, 0.0), config={"async_move": True, "joystick_radius_px": 200})
+            self.assertEqual(len(cmds), 2)
+            self.assertIn(" 3 57 ", cmds[0])
+            self.assertIn(" 1 330 1", cmds[0])
+            self.assertNotIn(" 3 57 ", cmds[1])
+            self.assertNotIn(" 1 330 0", cmds[1])
+
+            # Second move: direction pivot -> ONLY MOVE, no UP/DOWN
+            self.ctrl.move((0.0, 1.0), config={"async_move": True, "joystick_radius_px": 200})
+            self.assertEqual(len(cmds), 3)
+            self.assertNotIn(" 3 57 ", cmds[2])
+            self.assertNotIn(" 1 330 ", cmds[2])
+            self.assertTrue(self.ctrl._touch_down)
+
+            # release() sends UP
+            self.ctrl.release()
+            self.assertEqual(len(cmds), 4)
+            self.assertIn(" 3 57 -1", cmds[3])
+            self.assertIn(" 1 330 0", cmds[3])
+            self.assertFalse(self.ctrl._touch_down)
+
+            # Move then tap() releases cleanly with UP before tapping
+            self.ctrl.move((-1.0, 0.0), config={"async_move": True, "joystick_radius_px": 200})
+            self.assertTrue(self.ctrl._touch_down)
+            self.ctrl.tap([0.5, 0.5])
+            self.assertFalse(self.ctrl._touch_down)
+            self.assertIn(" 3 57 -1", cmds[-1])
+            self.assertIn(" 1 330 0", cmds[-1])
+            run_adb.assert_called_once_with(["shell", "input", "tap", "540", "960"], timeout=2.0)
+
+    def test_screenshot_decodes_raw_rgba_and_gzip(self):
+        import cv2
+        bgr = np.zeros((4, 6, 3), dtype=np.uint8)
+        bgr[:, :, 0] = 10   # B
+        bgr[:, :, 1] = 80   # G
+        bgr[:, :, 2] = 200  # R
+        rgba = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGBA)
+        raw_16 = struct.pack("<IIII", 6, 4, 1, 0) + rgba.tobytes()
+        raw_12 = struct.pack("<III", 6, 4, 1) + rgba.tobytes()
+        gz_16 = gzip.compress(raw_16)
+        _, png_buf = cv2.imencode(".png", bgr)
+
+        for payload in (raw_16, raw_12, gz_16, png_buf.tobytes()):
+            decoded = _decode_screenshot_bytes(payload)
+            self.assertIsNotNone(decoded)
+            self.assertEqual(decoded.shape, (4, 6, 3))
+            self.assertTrue(np.array_equal(decoded, bgr))
 
 
 if __name__ == "__main__":

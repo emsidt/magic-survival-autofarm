@@ -43,6 +43,44 @@ def clear_terminal():
         pass
 
 
+def _apply_timer_progress(
+    v_val: Optional[float],
+    now_ts: float,
+    last_known_sec: float,
+    last_advance_time: float,
+    wave_ended_at: float,
+    wave_ended_timer_sec: float,
+    monolith_pos: Optional[tuple[int, int]],
+    logged_monolith_pos: Optional[tuple[int, int]],
+) -> tuple[float, float, float, float, Optional[tuple[int, int]], Optional[tuple[int, int]]]:
+    """Update last_timer_advance_time and clear post-wave state whenever the HUD timer advances."""
+    if v_val is None:
+        return (
+            last_known_sec,
+            last_advance_time,
+            wave_ended_at,
+            wave_ended_timer_sec,
+            monolith_pos,
+            logged_monolith_pos,
+        )
+    if v_val > last_known_sec:
+        last_advance_time = now_ts
+        if wave_ended_at > 0.0 and v_val >= wave_ended_timer_sec + 2.0:
+            # HUD timer resumed advancing after post-wave freeze -> Obelisk was cleared
+            wave_ended_at = 0.0
+            wave_ended_timer_sec = 0.0
+            monolith_pos = None
+            logged_monolith_pos = None
+    return (
+        v_val,
+        last_advance_time,
+        wave_ended_at,
+        wave_ended_timer_sec,
+        monolith_pos,
+        logged_monolith_pos,
+    )
+
+
 def run_cli_bot():
     print("=" * 65)
     print("  🤖 MAGIC SURVIVAL AUTOFARM - TERMINAL MODE (CLI) 🤖")
@@ -250,6 +288,7 @@ def run_cli_bot():
     in_shop = False
     last_shop_label = ""
     step_count = 0
+    consecutive_mana_retrieves = 0
     last_known_game_timer_sec = 0.0
     last_timer_scan_time = 0.0
     last_timer_advance_time = 0.0
@@ -260,20 +299,26 @@ def run_cli_bot():
     wave_seen_active = False
     wave_inactive_since = 0.0
     wave_ended_at = 0.0
+    wave_ended_timer_sec = 0.0
     rule_streak_name = ""
     rule_streak = 0
     last_rule_click = {}
     last_boss_alert_time = 0.0
+    last_combat_ocr_check = 0.0
+    last_chest_scan_time = 0.0
+    last_fg_check = 0.0
+    last_had_boss = False
     last_focus_warning = 0.0
     last_lobby_gold: int | None = None
     last_lobby_gems: int | None = None
     last_cfg_check = 0.0
     last_terminal_clear_time = 0.0
+    post_death_at = 0.0
 
     try:
         while True:
             try:
-                time.sleep(0.02)
+                time.sleep(0.005 if match_running else 0.02)
                 now = time.monotonic()
                 if now - last_cfg_check >= 10.0:
                     last_cfg_check = now
@@ -312,12 +357,35 @@ def run_cli_bot():
                         os.system("shutdown /h")
                     break
 
+                ad_stuck_sec = float(config.get("ad_stuck_restart_sec", 120) or 0)
                 if is_adb:
                     # Tự phục hồi: Nếu game bị văng ra màn hình chính LDPlayer hoặc mở Play Store / Chrome -> tự động đóng & mở lại
-                    if hasattr(controller, "is_game_foreground") and not controller.is_game_foreground():
+                    # Tiết lưu dumpsys window (~720ms) thành mỗi 3.0s trong trận để tăng tốc độ phản xạ né boss.
+                    should_check_fg = (not match_running) or ((now - last_fg_check) >= 3.0)
+                    fg_ok = True
+                    if should_check_fg and hasattr(controller, "is_game_foreground"):
+                        fg_ok = controller.is_game_foreground()
+                        if fg_ok:
+                            last_fg_check = now
+                    if not fg_ok:
+                        last_fg_check = 0.0
                         controller.release()
                         match_running = False
                         previous_direction = None
+
+                        if (
+                            post_death_at > 0.0
+                            and ad_stuck_sec > 0.0
+                            and (now - post_death_at) >= ad_stuck_sec
+                            and config.get("auto_restart", True)
+                            and hasattr(controller, "restart_game")
+                        ):
+                            print(f"⏰ [Quảng cáo] Kẹt quá {int(ad_stuck_sec)}s sau khi chết ở màn hình ngoài -> Tắt hẳn game và mở lại!")
+                            post_death_at = 0.0
+                            last_auto_action_time = now
+                            controller.restart_game()
+                            time.sleep(3.0)
+                            continue
 
                         # Kiểm tra xem có bị nhảy sang Chrome hoặc Google Play Store sau khi bấm X không
                         if hasattr(controller, "get_foreground_package"):
@@ -397,12 +465,32 @@ def run_cli_bot():
                     continue
                 rule_streak_name, rule_streak = "", 0
 
-                fast_combat = botcore.is_fast_combat_frame(frame)
+                ocr_interval = 1.5 if (wave_seen_active or last_had_boss) else 0.9
+                skip_combat_ocr = bool(
+                    match_running
+                    and last_combat_ocr_check > 0.0
+                    and (now - last_combat_ocr_check) < ocr_interval
+                )
+                try:
+                    fast_combat = botcore.is_fast_combat_frame(frame, skip_ocr=skip_combat_ocr)
+                except TypeError:
+                    fast_combat = botcore.is_fast_combat_frame(frame)
+                if fast_combat and not skip_combat_ocr:
+                    last_combat_ocr_check = now
+                elif not fast_combat:
+                    last_combat_ocr_check = 0.0
+                    last_fg_check = 0.0
+                    last_had_boss = False
+                    if match_running:
+                        # Pause menus (level-up, chest, shop, attribute) freeze the in-game clock;
+                        # keep combat freeze timer from expiring due to menu dwell time.
+                        last_timer_advance_time = now
                 if not fast_combat:
                     controller.release()
                     restore_pos = botcore.detect_restore_gold(frame)
                     if restore_pos:
                         controller.release()
+                        post_death_at = 0.0
                         if now - last_confirm_time >= 2.0:
                             controller.tap(list(restore_pos), rect)
                             last_confirm_time = now
@@ -410,6 +498,10 @@ def run_cli_bot():
                                 recorder.finish_run()
                             match_running = False
                             match_start_time = last_known_game_timer_sec = 0.0
+                            consecutive_mana_retrieves = 0
+                            last_combat_ocr_check = 0.0
+                            last_chest_scan_time = 0.0
+                            last_had_boss = False
                             active_skills.clear()
                             skill_levels.clear()
                             maxed_skills.clear()
@@ -429,6 +521,8 @@ def run_cli_bot():
                         if now - last_die_time >= 1.5:
                             last_die_time = now
                             if dismiss_death(controller, rect, capture):
+                                if post_death_at == 0.0:
+                                    post_death_at = time.monotonic()
                                 print("[Tử trận] Đã xác nhận Die, chuyển sang nhận thưởng.")
                             else:
                                 print("[Tử trận] Chưa xác nhận được Die; đọc lại, không đoán vị trí gần Revive.")
@@ -497,6 +591,7 @@ def run_cli_bot():
                                     print(f"💰 [Phần thưởng ván] +{g_val:,} Vàng | 💎 +{gm_val:,} Gem | ⚔️ {k_val:,} Quái")
                             match_start_time = 0.0
                             step_count = 0
+                            consecutive_mana_retrieves = 0
                             active_skills.clear()
                             skill_levels.clear()
                             maxed_skills.clear()
@@ -510,8 +605,17 @@ def run_cli_bot():
                             last_timer_scan_time = 0.0
                             last_timer_advance_time = 0.0
                             last_boss_alert_time = 0.0
+                            last_combat_ocr_check = 0.0
+                            last_chest_scan_time = 0.0
+                            last_had_boss = False
+                            wave_ever_seen = False
+                            wave_seen_active = False
+                            wave_inactive_since = 0.0
+                            wave_ended_at = 0.0
+                            wave_ended_timer_sec = 0.0
                             controller.tap(list(confirm_pos), rect)
-                            last_auto_action_time = now
+                            post_death_at = time.monotonic()
+                            last_auto_action_time = post_death_at
                             print(f"📋 [Kết quả] Tự động bấm 'Confirm' quay về sảnh!")
                             completed_matches += 1
                             max_matches = int(config.get("max_matches", 0) or 0)
@@ -529,9 +633,8 @@ def run_cli_bot():
                         continue
 
                     # 3.5. MÀN HÌNH CƯỜNG HÓA PHÉP (Choose the Magic to strengthen / Enchant)
-                    if botcore.is_strengthen_magic_screen(frame):
+                    if botcore.is_strengthen_magic_screen(frame) and not (post_death_at > 0.0 and not match_running):
                         controller.release()
-                        match_running = True
                         if not config.get("auto_levelup", True):
                             continue
                         if now - last_learn_time >= 1.2:
@@ -544,6 +647,8 @@ def run_cli_bot():
                                 preferred_skills=enchant_pref,
                             )
                             if strengthened:
+                                match_running = True
+                                post_death_at = 0.0
                                 recorder.record_decision(
                                     frame, "strengthen_magic", strengthened.key,
                                     metadata={"chosen_magic": strengthened.label},
@@ -559,6 +664,7 @@ def run_cli_bot():
                         sg_pos = botcore.detect_start_game(frame)
                         if sg_pos:
                             controller.release()
+                            post_death_at = 0.0
                             if not config.get("auto_restart", True):
                                 continue
                             match_running = False
@@ -602,6 +708,7 @@ def run_cli_bot():
                         sel_pos = botcore.detect_selected(frame)
                         if sel_pos:
                             controller.release()
+                            post_death_at = 0.0
                             if not config.get("auto_restart", True):
                                 continue
                             match_running = False
@@ -619,6 +726,7 @@ def run_cli_bot():
                         ea_pos = botcore.detect_enter_area(frame)
                         if ea_pos:
                             controller.release()
+                            post_death_at = 0.0
                             if not config.get("auto_restart", True):
                                 continue
                             match_running = False
@@ -641,11 +749,20 @@ def run_cli_bot():
                                 last_timer_scan_time = 0.0
                                 last_timer_advance_time = now
                                 step_count = 0
+                                consecutive_mana_retrieves = 0
                                 last_monolith_pos = None
                                 last_logged_monolith_pos = None
                                 last_chest_pos = None
                                 last_logged_chest_pos = None
                                 previous_direction = None
+                                last_combat_ocr_check = 0.0
+                                last_chest_scan_time = 0.0
+                                last_had_boss = False
+                                wave_ever_seen = False
+                                wave_seen_active = False
+                                wave_inactive_since = 0.0
+                                wave_ended_at = 0.0
+                                wave_ended_timer_sec = 0.0
                                 controller.tap(list(ea_pos), rect)
                                 print("\n" + "-" * 60)
                                 knowledge.reset_owned_artifacts()
@@ -657,16 +774,38 @@ def run_cli_bot():
                                 time.sleep(1.2)
                             continue
 
+                    # 6a. NẾU CHẾT MÀ QUÁ 2 PHÚT CHƯA VỀ SẢNH / CHƯA SKIP ĐƯỢC QUẢNG CÁO -> TẮT HẲN GAME MỞ LẠI
+                    # Kiểm tra trước các menu trong trận để tránh quảng cáo ("Learn more") làm reset bộ đếm.
+                    if (
+                        post_death_at > 0.0
+                        and ad_stuck_sec > 0.0
+                        and (now - post_death_at) >= ad_stuck_sec
+                        and config.get("auto_restart", True)
+                        and not match_running
+                        and hasattr(controller, "restart_game")
+                        and botcore.detect_pause_button(frame) is None
+                    ):
+                        print(f"⏰ [Quảng cáo] Đã quá {int(ad_stuck_sec)}s sau khi chết vẫn chưa thoát được quảng cáo -> Tắt hẳn game và mở lại!")
+                        post_death_at = 0.0
+                        last_auto_action_time = now
+                        controller.restart_game()
+                        time.sleep(3.0)
+                        continue
+
                     # 7. MÀN HÌNH CHỌN THUỘC TÍNH (Level 4/7 Trait / Select Attribute - Có nút Learn)
-                    if botcore.is_attribute_screen(frame) or botcore.detect_learn_button(frame) is not None:
+                    # Không kiểm tra khi vừa chết đang chờ đóng quảng cáo (ngoài trận không thể có Attribute).
+                    if not (post_death_at > 0.0 and not match_running) and (
+                        botcore.is_attribute_screen(frame) or botcore.detect_learn_button(frame) is not None
+                    ):
                         controller.release()
-                        match_running = True
                         if not config.get("auto_levelup", True):
                             continue
                         if now - last_learn_time >= 1.2:
                             last_learn_time = now
                             learned = select_attribute(controller, rect, capture)
                             if learned:
+                                match_running = True
+                                post_death_at = 0.0
                                 if learned.key:
                                     active_skills.add(learned.key)
                                 recorder.record_decision(frame, "attribute", f"circle_{learned.index}",
@@ -680,6 +819,7 @@ def run_cli_bot():
                     lvl_res = botcore.is_level_up_screen(frame)
                     if lvl_res:
                         controller.release()
+                        post_death_at = 0.0
                         if not config.get("auto_levelup", True):
                             continue
                         match_running = True
@@ -687,8 +827,23 @@ def run_cli_bot():
                             last_timer_scan_time = now
                             t_lvl = botcore.detect_game_timer(frame)
                             v_lvl = botcore.validate_game_timer(t_lvl, last_known_game_timer_sec, (0.0 if attached_mid_run else match_start_time), now, time_mult)
-                            if v_lvl is not None:
-                                last_known_game_timer_sec = v_lvl
+                            (
+                                last_known_game_timer_sec,
+                                last_timer_advance_time,
+                                wave_ended_at,
+                                wave_ended_timer_sec,
+                                last_monolith_pos,
+                                last_logged_monolith_pos,
+                            ) = _apply_timer_progress(
+                                v_lvl,
+                                now,
+                                last_known_game_timer_sec,
+                                last_timer_advance_time,
+                                wave_ended_at,
+                                wave_ended_timer_sec,
+                                last_monolith_pos,
+                                last_logged_monolith_pos,
+                            )
                         if now - last_level_up_time >= 1.2:
                             last_level_up_time = now
 
@@ -724,31 +879,44 @@ def run_cli_bot():
                                 skill_levels=skill_levels,
                                 level_count=botcore.detect_player_level(frame) or step_count + 2,
                                 early_priority_skills=config.get("early_priority_skills"),
+                                allow_mana_retrieve=bool(config.get("allow_mana_retrieve", True)) and consecutive_mana_retrieves < 2,
                             )
                             card_idx, target = choice_res
                             choice_label = getattr(choice_res, "label", f"Thẻ {card_idx}")
                             if select_card(controller, rect, frame, choice_res, capture):
-                                step_count += 1
-                                remember_card(choice_res, active_skills, skill_levels, maxed_skills)
-                                recorder.record_decision(
-                                    frame,
-                                    "level_up",
-                                    f"card_{card_idx}",
-                                    metadata={
-                                        "skill_key": choice_res.skill_key,
-                                        "offered_level": choice_res.offered_level,
-                                        "active_skills": sorted(active_skills),
-                                        "skill_levels": dict(skill_levels),
-                                        "offered_cards": getattr(choice_res, "offered_cards", {}),
-                                    },
-                                )
-                                print(f"[Cấp #{step_count}] Đã xác nhận Thẻ {card_idx}: {choice_label}")
+                                if card_idx == 0:
+                                    consecutive_mana_retrieves += 1
+                                    recorder.record_decision(
+                                        frame,
+                                        "level_up",
+                                        "mana_retrieve",
+                                        metadata={"offered_cards": getattr(choice_res, "offered_cards", {})},
+                                    )
+                                    print(f"♻️ [Thu hồi Mana] {choice_label}")
+                                else:
+                                    consecutive_mana_retrieves = 0
+                                    step_count += 1
+                                    remember_card(choice_res, active_skills, skill_levels, maxed_skills)
+                                    recorder.record_decision(
+                                        frame,
+                                        "level_up",
+                                        f"card_{card_idx}",
+                                        metadata={
+                                            "skill_key": choice_res.skill_key,
+                                            "offered_level": choice_res.offered_level,
+                                            "active_skills": sorted(active_skills),
+                                            "skill_levels": dict(skill_levels),
+                                            "offered_cards": getattr(choice_res, "offered_cards", {}),
+                                        },
+                                    )
+                                    print(f"[Cấp #{step_count}] Đã xác nhận Thẻ {card_idx}: {choice_label}")
                         continue
 
                     # 9. MÀN HÌNH RƯƠNG CỔ VẬT (Obtain button)
                     obtain_pos = botcore.detect_obtain_button(frame)
                     if obtain_pos or botcore.is_chest_screen(frame):
                         controller.release()
+                        post_death_at = 0.0
                         if not config.get("auto_levelup", True) or not obtain_pos:
                             continue
                         match_running = True
@@ -756,8 +924,23 @@ def run_cli_bot():
                             last_timer_scan_time = now
                             t_ch = botcore.detect_game_timer(frame)
                             v_ch = botcore.validate_game_timer(t_ch, last_known_game_timer_sec, (0.0 if attached_mid_run else match_start_time), now, time_mult)
-                            if v_ch is not None:
-                                last_known_game_timer_sec = v_ch
+                            (
+                                last_known_game_timer_sec,
+                                last_timer_advance_time,
+                                wave_ended_at,
+                                wave_ended_timer_sec,
+                                last_monolith_pos,
+                                last_logged_monolith_pos,
+                            ) = _apply_timer_progress(
+                                v_ch,
+                                now,
+                                last_known_game_timer_sec,
+                                last_timer_advance_time,
+                                wave_ended_at,
+                                wave_ended_timer_sec,
+                                last_monolith_pos,
+                                last_logged_monolith_pos,
+                            )
                         if now - last_chest_modal_time >= 1.2:
                             last_chest_modal_time = now
                             chosen = select_chest_artifact(
@@ -772,7 +955,8 @@ def run_cli_bot():
                                 print(f"[Rương] Đã xác nhận nhận cổ vật: {chosen.label} (ô {chosen.index})")
                                 if knowledge.remember_artifact(chosen.label):
                                     print(f"   🧩 Cổ vật đã có trong ván: {', '.join(sorted(knowledge.owned_artifacts()))}")
-                                wave_ended_at = 0.0  # đã chạm Tháp/nhận rương, đợi wave kế tiếp
+                                # Do not clear wave_ended_at here: Boss chests drop right after a wave ends,
+                                # before the player touches the Obelisk; wait for timer/next wave to resume.
                                 last_chest_pos = None
                                 last_logged_chest_pos = None
                             else:
@@ -783,6 +967,7 @@ def run_cli_bot():
                     shop_buy = botcore.detect_buy_button(frame)
                     if shop_buy:
                         controller.release()
+                        post_death_at = 0.0
                         if not config.get("auto_levelup", True):
                             continue
                         match_running = True
@@ -866,10 +1051,12 @@ def run_cli_bot():
                 pause_pos = botcore.detect_pause_button(frame)
                 if pause_pos and fast_combat:
                     match_running = True
+                    post_death_at = 0.0
                     if match_start_time == 0.0:
                         match_start_time = now
                         attached_mid_run = True   # bot không thấy lúc bắt đầu ván -> đồng hồ treo tường đo thiếu
                         step_count = 0
+                        consecutive_mana_retrieves = 0
                         last_timer_advance_time = now
                         last_terminal_clear_time = now
 
@@ -878,40 +1065,37 @@ def run_cli_bot():
                         last_timer_scan_time = now
                         t_live = botcore.detect_game_timer(frame)
                         v_live = botcore.validate_game_timer(t_live, last_known_game_timer_sec, (0.0 if attached_mid_run else match_start_time), now, time_mult)
-                        if v_live is not None:
-                            if v_live > last_known_game_timer_sec:
-                                last_timer_advance_time = now
-                            last_known_game_timer_sec = v_live
+                        (
+                            last_known_game_timer_sec,
+                            last_timer_advance_time,
+                            wave_ended_at,
+                            wave_ended_timer_sec,
+                            last_monolith_pos,
+                            last_logged_monolith_pos,
+                        ) = _apply_timer_progress(
+                            v_live,
+                            now,
+                            last_known_game_timer_sec,
+                            last_timer_advance_time,
+                            wave_ended_at,
+                            wave_ended_timer_sec,
+                            last_monolith_pos,
+                            last_logged_monolith_pos,
+                        )
 
                     player_coords = tuple(config.get("player_position", [0.5, 0.5]))
                     px = int(w * player_coords[0])
                     py = int(h * player_coords[1])
 
-                    # Phân tích thực địa: Quái vật, Đá/Tháp qua màn, Rương cổ vật, Mana Orbs
-                    vision = botcore.inspect_game(
-                        frame,
-                        player=player_coords,
-                        known_monolith=last_monolith_pos,
-                        known_chest=last_chest_pos,
-                    )
-
-                    # Kiểm tra đợt quái/boss: Khi còn địch hoặc boss, TUYỆT ĐỐI không thể có Tháp qua màn!
-                    enemy_px_count = int(np.sum(vision.enemy_mask > 0))
-                    inner_mask = np.zeros((h, w), dtype=bool)
-                    inner_mask[int(h * 0.14) : int(h * 0.86), int(w * 0.10) : int(w * 0.82)] = True
-                    active_combat_enemies = int(np.sum((vision.enemy_mask > 0) & inner_mask))
-                    has_active_threats = bool(
-                        getattr(vision, "bosses", None)
-                        or active_combat_enemies > max(800, int(w * h * 0.003))
-                    )
-
-                    # Theo dõi wave đầu lâu qua màu đồng hồ (cam = đang wave)
+                    # Theo dõi wave đầu lâu qua màu đồng hồ (cam = đang wave) trước khi quét thực địa
+                    # để KHÔNG tốn CPU quét Tháp/Rương vô ích giữa trận hoặc lúc quái to xuất hiện.
                     if botcore.detect_wave_active(frame):
                         wave_ever_seen = True
                         wave_seen_active = True
                         wave_inactive_since = 0.0
                         if wave_ended_at > 0.0:
                             wave_ended_at = 0.0
+                            wave_ended_timer_sec = 0.0
                             last_monolith_pos = None
                     elif wave_seen_active:
                         if wave_inactive_since == 0.0:
@@ -919,16 +1103,65 @@ def run_cli_bot():
                         elif now - wave_inactive_since >= 0.4:
                             wave_seen_active = False
                             wave_ended_at = now
+                            wave_ended_timer_sec = last_known_game_timer_sec
                             print("💀 [Wave] Thanh đầu lâu hết đỏ -> Wave đã hết! Tháp sẽ hiện ngay gần nhân vật sau ~2s, đang tìm Tháp...")
-                    tower_window = wave_ended_at > 0.0
+                    timer_frozen = (
+                        last_known_game_timer_sec >= 120.0
+                        and last_timer_advance_time > 0.0
+                        and (now - last_timer_advance_time >= 4.0)
+                    )
+                    pre_tower_window = (wave_ended_at > 0.0) or timer_frozen
+                    if wave_seen_active:
+                        can_scan_monolith = False
+                    elif not attached_mid_run and not wave_ever_seen and last_known_game_timer_sec < 120.0:
+                        can_scan_monolith = False
+                    else:
+                        can_scan_monolith = bool((not wave_ever_seen) or pre_tower_window)
+
+                    chest_allowed = bool(config.get("auto_chest", True)) and (not wave_seen_active) and (not pre_tower_window)
+                    near_tracked_chest = bool(
+                        last_chest_pos is not None
+                        and math.hypot(last_chest_pos[0] - px, last_chest_pos[1] - py) < min(w, h) * 0.40
+                    )
+                    chest_scan_interval = 0.12 if near_tracked_chest else 0.45
+                    can_scan_chest = chest_allowed and ((now - last_chest_scan_time) >= chest_scan_interval)
+                    if can_scan_chest:
+                        last_chest_scan_time = now
+
+                    # Phân tích thực địa: Quái vật, Đá/Tháp qua màn, Rương cổ vật, Mana Orbs
+                    vision = botcore.inspect_game(
+                        frame,
+                        player=player_coords,
+                        known_monolith=(last_monolith_pos if can_scan_monolith else None),
+                        known_chest=(last_chest_pos if chest_allowed else None),
+                        scan_monolith=can_scan_monolith,
+                        scan_chest=can_scan_chest,
+                    )
+                    last_had_boss = bool(getattr(vision, "bosses", None))
+
+                    # Kiểm tra đợt quái/boss: Khi còn địch hoặc boss, TUYỆT ĐỐI không thể có Tháp qua màn!
+                    inner_mask = np.zeros((h, w), dtype=bool)
+                    inner_mask[int(h * 0.14) : int(h * 0.86), int(w * 0.10) : int(w * 0.82)] = True
+                    raw_active_px = getattr(vision, "active_enemy_pixels", None)
+                    active_combat_enemies = (
+                        int(raw_active_px)
+                        if raw_active_px is not None
+                        else int(np.sum((vision.enemy_mask > 0) & inner_mask))
+                    )
+                    has_active_threats = bool(
+                        getattr(vision, "bosses", None)
+                        or active_combat_enemies > max(800, int(w * h * 0.003))
+                    )
+                    raw_has_active_threats = has_active_threats
+                    tower_window = (wave_ended_at > 0.0) or (timer_frozen and not last_had_boss)
                     if wave_seen_active:
                         has_active_threats = True   # còn wave: chắc chắn chưa có Tháp
                     elif tower_window:
-                        has_active_threats = False  # hết wave: quái lẻ còn sót không được chặn việc tìm Tháp
+                        has_active_threats = False  # hết wave / đồng hồ đứng yên: đâm Tháp trước, bỏ qua rương & rìa tối
                     elif wave_ever_seen:
                         # Giữa hai wave: Tháp chỉ xuất hiện sau khi hết wave, mọi "tháp" báo lúc này là nhiễu
                         vision.monolith = None
-                    if tower_window and getattr(vision, "monolith", None) is not None and now - wave_ended_at <= 6.0:
+                    if wave_ended_at > 0.0 and getattr(vision, "monolith", None) is not None and now - wave_ended_at <= 6.0:
                         # 6s đầu Tháp phải nằm gần nhân vật; xa hơn là nhận nhầm
                         mx_, my_ = vision.monolith
                         if math.hypot(mx_ - px, my_ - py) > 0.5 * h:
@@ -998,11 +1231,11 @@ def run_cli_bot():
                         vision.chest = None
                         last_chest_pos = None
                         last_logged_chest_pos = None
-                        if is_wave_cleared and getattr(vision, "monolith", None) is None:
+                        if is_wave_cleared:
                             vision.gems = []
                             vision.gold_gems = []
                             vision.purple_gems = []
-                            if now - last_wave_clear_log_time >= 15.0:
+                            if getattr(vision, "monolith", None) is None and now - last_wave_clear_log_time >= 15.0:
                                 print("🏛️ [Xong màn] Đã dọn xong đợt quái! Ngưng tìm rương, đang quét tìm Tháp để qua màn...")
                                 last_wave_clear_log_time = now
                     else:
@@ -1063,11 +1296,24 @@ def run_cli_bot():
                     raw_amp = mv_policy.get("weave_amplitude", 0.28)
                     weave_freq = float(raw_freq) if isinstance(raw_freq, (int, float)) else 3.2
                     weave_amp = float(raw_amp) if isinstance(raw_amp, (int, float)) else 0.28
-                    # Đồng hồ game đứng yên khi xong màn -> dùng đồng hồ thực để quét tìm Tháp theo hình xoắn ốc mở rộng
+                    # Khi hết wave & hết quái mà chưa thấy Tháp: đứng im tại chỗ quét toàn màn hình chờ Tháp hiện ra
+                    # (Tháp luôn hiện gần nhân vật sau ~1.5-2s); nếu quá 8s vẫn chưa thấy mới bắt đầu di chuyển quét xoắn ốc.
                     if is_wave_cleared and getattr(vision, "monolith", None) is None:
                         if no_enemy_since == 0.0:
                             no_enemy_since = now
-                        move_elapsed = now - no_enemy_since
+                        scan_elapsed = now - no_enemy_since
+                        stand_scan_active = (
+                            not raw_has_active_threats
+                            and (wave_ended_at > 0.0 or (last_timer_advance_time > 0.0 and now - last_timer_advance_time >= 6.0))
+                        )
+                        if stand_scan_active and scan_elapsed < 8.0:
+                            controller.release()
+                            previous_direction = None
+                            if now - last_wave_clear_log_time >= 15.0:
+                                print("🏛️ [Xong màn] Hết wave & hết quái! Đứng im quét toàn màn hình tìm Tháp...")
+                                last_wave_clear_log_time = now
+                            continue
+                        move_elapsed = max(0.0, scan_elapsed - 8.0) if stand_scan_active else scan_elapsed
                     else:
                         no_enemy_since = 0.0
                         move_elapsed = last_known_game_timer_sec if last_known_game_timer_sec > 0.0 else ((now - match_start_time) * time_mult)
@@ -1082,7 +1328,10 @@ def run_cli_bot():
                         weave_freq=weave_freq,
                         weave_amp=weave_amp,
                     )
-                    if move_from_frame(controller, rect, config, (dir_x, dir_y), captured_at):
+                    move_cfg = dict(config)
+                    move_cfg["async_move"] = True
+                    move_cfg["swipe_duration_ms"] = 160 if last_had_boss else 220
+                    if move_from_frame(controller, rect, move_cfg, (dir_x, dir_y), captured_at):
                         previous_direction = (dir_x, dir_y)
                     else:
                         previous_direction = None
@@ -1100,11 +1349,36 @@ def run_cli_bot():
                         time.sleep(0.4)
                     continue
 
+                # 13a. NẾU CHẾT MÀ QUÁ 2 PHÚT CHƯA SKIP ĐƯỢC QUẢNG CÁO -> TẮT HẲN GAME MỞ LẠI
+                if (
+                    post_death_at > 0.0
+                    and ad_stuck_sec > 0.0
+                    and (now - post_death_at) >= ad_stuck_sec
+                    and config.get("auto_restart", True)
+                    and not match_running
+                    and hasattr(controller, "restart_game")
+                ):
+                    if not (
+                        botcore.detect_start_game(frame)
+                        or botcore.detect_selected(frame)
+                        or botcore.detect_enter_area(frame)
+                        or botcore.detect_confirm_button(frame)
+                        or botcore.detect_die_button(frame)
+                    ):
+                        print(f"⏰ [Quảng cáo] Đã quá {int(ad_stuck_sec)}s sau khi chết vẫn chưa thoát được quảng cáo -> Tắt hẳn game và mở lại!")
+                        post_death_at = 0.0
+                        last_auto_action_time = now
+                        controller.restart_game()
+                        time.sleep(3.0)
+                        continue
+
                 # 13b. MÀN HÌNH "NO ADS - TAP TO CONTINUE" (hết quảng cáo để xem) -> bấm Tap to Continue
                 tap_cont = botcore.detect_tap_to_continue(frame)
                 if tap_cont:
                     controller.release()
                     match_running = False
+                    if post_death_at == 0.0:
+                        post_death_at = now
                     if now - last_auto_action_time >= 1.5:
                         last_auto_action_time = now
                         controller.tap(list(tap_cont), rect)
@@ -1117,6 +1391,8 @@ def run_cli_bot():
                 if ad_x:
                     controller.release()
                     match_running = False
+                    if post_death_at == 0.0:
+                        post_death_at = now
                     if now - last_auto_action_time >= 1.2:
                         last_auto_action_time = now
                         if ad_x[1] > 0.25 and ad_x[1] < 0.75:
@@ -1132,6 +1408,8 @@ def run_cli_bot():
                 elif config.get("auto_close_ads", True) and botcore.is_ad_screen(frame):
                     controller.release()
                     match_running = False
+                    if post_death_at == 0.0:
+                        post_death_at = now
                     if now - last_auto_action_time >= 2.0:
                         last_auto_action_time = now
                         if back_from_ad(controller, rect, capture):

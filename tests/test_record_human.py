@@ -194,6 +194,147 @@ class TestRecordHumanPlay(unittest.TestCase):
         self.assertGreater(f_learned, 1.0)
         self.assertGreater(a_learned, 0.15)
 
+    def test_extract_card_level_badge_and_progression_inference(self):
+        from pathlib import Path
+        import cv2
+        import botcore
+        from record_human_play import extract_card_level_badge, update_inferred_skill_levels
+
+        p = Path("data/runs/run_20261123_161420_057692_f827b381/step_0010_human_level_up.png")
+        if p.is_file():
+            f = botcore.prepare_analysis_frame(cv2.imread(str(p)))
+            self.assertEqual(extract_card_level_badge(f, 2, 3), 1)
+            self.assertEqual(extract_card_level_badge(f, 3, 3), 5)
+
+        active = set()
+        levels = {}
+        pending = {}
+        inferred = {}
+        step1 = {
+            1: botcore.CardSlotData(1, skills=["meteor"], offered_level=1),
+            2: botcore.CardSlotData(2, skills=["blizzard"], offered_level=1),
+        }
+        step2 = {
+            1: botcore.CardSlotData(1, skills=["spirit"], offered_level=2),
+            2: botcore.CardSlotData(2, skills=["meteor"], offered_level=2),
+        }
+        update_inferred_skill_levels(step1, active, levels, pending, inferred, 1)
+        update_inferred_skill_levels(step2, active, levels, pending, inferred, 2)
+        self.assertEqual(inferred, {1: (1, "meteor")})
+        self.assertEqual(levels["meteor"], 1)
+        self.assertEqual(levels["spirit"], 1)
+        self.assertIn("meteor", active)
+        self.assertIn("spirit", active)
+
+    def test_mouse_tracker_get_clicks_in_rect_chronological(self):
+        tracker = MouseTracker()
+        self.addCleanup(tracker.close)
+        rect = {"left": 100, "top": 100, "width": 500, "height": 1000}
+        t0 = time.monotonic()
+        with tracker._lock:
+            tracker.clicks.extend([
+                (350, 500, t0 - 1.0),   # too old
+                (50, 500, t0 + 0.1),    # outside left
+                (350, 600, t0 + 0.2),   # in rect (0.5, 0.5)
+                (450, 960, t0 + 0.5),   # in rect (0.7, 0.86)
+            ])
+        clicks = tracker.get_clicks_in_rect(rect, since_time=t0)
+        self.assertEqual(len(clicks), 2)
+        self.assertAlmostEqual(clicks[0][0], 0.5, delta=0.01)
+        self.assertAlmostEqual(clicks[0][1], 0.5, delta=0.01)
+        self.assertAlmostEqual(clicks[1][0], 0.7, delta=0.01)
+        self.assertAlmostEqual(clicks[1][1], 0.86, delta=0.01)
+        self.assertLess(clicks[0][2], clicks[1][2])
+
+    def test_detect_shop_purchase_via_mana_drop_and_buy_click(self):
+        from record_human_play import detect_shop_purchase
+
+        # 1) Mana drop detects purchase even if user later clicks X
+        bought, spent, last_t = detect_shop_purchase(
+            prev_mana=320,
+            cur_mana=140,
+            buy_clicks=[(0.92, 0.08, 12.0)],
+            last_buy_click_t=10.0,
+            can_buy=True,
+            last_label="Gaia [Legendary]",
+        )
+        self.assertTrue(bought)
+        self.assertEqual(spent, 180)
+        self.assertEqual(last_t, 12.0)
+
+        # 2) Buy click while can_buy=True detects purchase once without double-triggering
+        bought2, spent2, last_t2 = detect_shop_purchase(
+            prev_mana=320,
+            cur_mana=320,
+            buy_clicks=[(0.50, 0.86, 15.0)],
+            last_buy_click_t=12.0,
+            can_buy=True,
+            last_label="Ouroboros [Legendary]",
+        )
+        self.assertTrue(bought2)
+        self.assertIsNone(spent2)
+        self.assertEqual(last_t2, 15.0)
+
+        bought_again, _, _ = detect_shop_purchase(
+            prev_mana=320,
+            cur_mana=320,
+            buy_clicks=[(0.50, 0.86, 15.0)],
+            last_buy_click_t=last_t2,
+            can_buy=True,
+            last_label="Ouroboros [Legendary]",
+        )
+        self.assertFalse(bought_again)
+
+        # 3) Clicking X or clicking Buy when can_buy=False returns False
+        bought_x, _, _ = detect_shop_purchase(
+            prev_mana=320,
+            cur_mana=320,
+            buy_clicks=[(0.92, 0.08, 16.0)],
+            last_buy_click_t=15.0,
+            can_buy=True,
+            last_label="Gaia [Legendary]",
+        )
+        self.assertFalse(bought_x)
+
+        bought_disabled, _, _ = detect_shop_purchase(
+            prev_mana=100,
+            cur_mana=100,
+            buy_clicks=[(0.50, 0.86, 17.0)],
+            last_buy_click_t=15.0,
+            can_buy=False,
+            last_label="Abyss [Legendary]",
+        )
+        self.assertFalse(bought_disabled)
+
+    def test_modal_exit_debounce_ignores_brief_flicker(self):
+        from record_human_play import should_commit_modal_exit
+
+        # 1-2 missing frames while not visibly back in combat must NOT commit
+        commit1, s = should_commit_modal_exit(False, False, 0, min_absent=3)
+        self.assertFalse(commit1)
+        self.assertEqual(s, 1)
+
+        commit2, s = should_commit_modal_exit(False, False, s, min_absent=3)
+        self.assertFalse(commit2)
+        self.assertEqual(s, 2)
+
+        # If button flickers back visible, streak resets cleanly
+        commit_back, s = should_commit_modal_exit(True, False, s, min_absent=3)
+        self.assertFalse(commit_back)
+        self.assertEqual(s, 0)
+
+        # 3 consecutive absent frames commits once
+        _, s = should_commit_modal_exit(False, False, 0, min_absent=3)
+        _, s = should_commit_modal_exit(False, False, s, min_absent=3)
+        commit3, s = should_commit_modal_exit(False, False, s, min_absent=3)
+        self.assertTrue(commit3)
+        self.assertEqual(s, 0)
+
+        # Returning straight to active combat commits immediately on first frame
+        commit_combat, s = should_commit_modal_exit(False, True, 0, min_absent=3)
+        self.assertTrue(commit_combat)
+        self.assertEqual(s, 0)
+
 
 if __name__ == "__main__":
     unittest.main()
