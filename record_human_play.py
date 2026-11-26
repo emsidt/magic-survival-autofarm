@@ -29,6 +29,7 @@ except Exception:
 
 
 import botcore
+import knowledge
 from data_recorder import DataRecorder
 from learning_engine import get_adaptive_learner
 from game_actions import finish_match
@@ -385,6 +386,7 @@ def run_human_recorder():
     last_timer_scan_time = 0.0
     pending_offers: dict[str, tuple[int, int, int]] = {}
     inferred_choices: dict[int, tuple[int, str]] = {}
+    detected_map: str = botcore.normalize_game_map(config.get("game_map", "depth")) or "depth"
 
     try:
         while True:
@@ -413,7 +415,10 @@ def run_human_recorder():
             # --- TRẠNG THÁI 1: ĐANG Ở SẢNH CHỜ (LOBBY) ---
             if state == STATE_LOBBY:
                 if ea_pos:
-                    pass  # Đang ở màn hình chọn map
+                    m = botcore.detect_selected_map(frame)
+                    if m:
+                        detected_map = m
+                        config["game_map"] = m
                 # Trận đấu chính thức bắt đầu khi thấy nút Pause || và KHÔNG có màn hình chết/kết thúc
                 if pause_pos is not None and not die_pos and not confirm_pos:
                     state = STATE_PLAYING
@@ -454,9 +459,10 @@ def run_human_recorder():
                     last_purchased_had_mana = False
                     pending_offers.clear()
                     inferred_choices.clear()
+                    knowledge.reset_owned_artifacts(config.get("character"))
                     run_id = recorder.start_new_run()
-                    game_map = config.get("game_map", "depth")
-                    time_mult = 1.24 if str(game_map).lower().strip() == "depth" else 1.0
+                    game_map = detected_map
+                    time_mult = 1.24 if game_map == "depth" else 1.0
                     map_note = " (Gia tốc 1.24x)" if time_mult > 1.0 else ""
                     print("\n" + "-" * 65)
                     print(f"[🔥 TRẬN ĐẤU BẮT ĐẦU!] Mã trận: {run_id} | Bản đồ: {str(game_map).upper()}{map_note}")
@@ -465,8 +471,8 @@ def run_human_recorder():
 
             # --- TRẠNG THÁI 2: ĐANG TRONG TRẬN ĐẤU (PLAYING) ---
             elif state == STATE_PLAYING:
-                game_map = config.get("game_map", "depth")
-                time_mult = 1.24 if str(game_map).lower().strip() == "depth" else 1.0
+                game_map = detected_map
+                time_mult = 1.24 if game_map == "depth" else 1.0
                 if now - last_timer_scan_time >= 0.5:
                     last_timer_scan_time = now
                     timer = botcore.detect_game_timer(frame)
@@ -629,6 +635,8 @@ def run_human_recorder():
                     if commit_chest:
                         in_chest = False
                         print(f"🎁 [Rương Cổ vật] Đã nhận: [{last_chest_label or 'Chưa rõ'}] (Thời gian: {cur_game_time_str})")
+                        if last_chest_label:
+                            knowledge.remember_artifact(last_chest_label)
                         recorder.record_decision(
                             last_chest_frame if last_chest_frame is not None else frame,
                             "human_chest",
@@ -688,6 +696,8 @@ def run_human_recorder():
                         )
                         if purchased and not is_dup_settle:
                             shop_bought_items.append(last_shop_label)
+                            if last_shop_label:
+                                knowledge.remember_artifact(last_shop_label)
                             last_purchased_label = last_shop_label
                             last_purchased_at = now
                             last_purchased_had_mana = spent is not None
@@ -741,6 +751,7 @@ def run_human_recorder():
                         )
                         if purchased and last_shop_label:
                             shop_bought_items.append(last_shop_label)
+                            knowledge.remember_artifact(last_shop_label)
                             print(f"    -> 💰 [ĐÃ MUA CỔ VẬT]: [{last_shop_label}] [{cur_game_time_str}]")
                             recorder.record_decision(
                                 last_shop_frame if last_shop_frame is not None else frame,
@@ -779,7 +790,7 @@ def run_human_recorder():
                                 last_known_game_timer_sec = float(t_hud[2])
 
                         # Fallback gia tốc bản đồ Depth nếu OCR bị che khuất
-                        time_mult = 1.24 if str(config.get("game_map", "depth")).lower().strip() == "depth" else 1.0
+                        time_mult = 1.24 if detected_map == "depth" else 1.0
                         if last_known_game_timer_sec <= 0.0 and match_start_time > 0.0:
                             last_known_game_timer_sec = max(0.0, (now - match_start_time) * time_mult)
 
@@ -802,7 +813,7 @@ def run_human_recorder():
                                 config.get("skill_priority", []),
                                 skill_levels=skill_levels,
                                 character=config.get("character", "summoner"),
-                                game_map=config.get("game_map", "depth"),
+                                game_map=detected_map,
                                 gold=stats.get("gold", 0),
                                 gems=stats.get("gems", 0),
                                 kills=stats.get("kills", 0),

@@ -26,7 +26,7 @@
   "auto_restart": true,
   "build_mode": "ai",
   "character": "summoner",
-  "game_map": "ecosystem",
+  "game_map": "depth",
   "auto_chest": true,
   "enable_human_weave": true,
   "early_priority_skills": {

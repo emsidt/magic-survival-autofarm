@@ -380,6 +380,12 @@ class ADBController:
             r = int(config["joystick_radius_px"])
             if r >= 80:
                 radius_px = r
+        try:
+            speed_scale = float((config or {}).get("move_speed_scale", 1.0))
+        except (TypeError, ValueError):
+            speed_scale = 1.0
+        if math.isfinite(speed_scale) and 0.0 < speed_scale < 1.0:
+            radius_px = max(60, int(round(radius_px * speed_scale)))
 
         cx = max(0, min(self.screen_width - 1, int(self.screen_width * jx_ratio)))
         cy = max(0, min(self.screen_height - 1, int(self.screen_height * jy_ratio)))
@@ -410,6 +416,13 @@ class ADBController:
                     self.release()
                     continue
                 if self._touch_device:
+                    hold_ms = int((self.current_config or {}).get("touch_hold_ms", 0) or 0)
+                    if (
+                        hold_ms > 0
+                        and self._touch_down
+                        and (time.monotonic() - self.last_move_time) * 1000.0 >= hold_ms
+                    ):
+                        self._touch_up()
                     continue
                 direction = self.current_direction
                 config = self.current_config

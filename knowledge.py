@@ -48,8 +48,20 @@ def remember_artifact(label_or_name: str) -> Optional[str]:
     return canon
 
 
-def reset_owned_artifacts() -> None:
+def seed_subject_artifact(subject_name: Optional[str]) -> Optional[str]:
+    """Ghi nhận cổ vật khởi đầu của Subject đang chọn (nếu cổ vật đó thuộc một synergy)."""
+    if not subject_name:
+        return None
+    info = subject_info(subject_name)
+    if info and info.get("artifact"):
+        return remember_artifact(info["artifact"])
+    return None
+
+
+def reset_owned_artifacts(subject_name: Optional[str] = None) -> None:
     _owned.clear()
+    if subject_name:
+        seed_subject_artifact(subject_name)
 
 
 def owned_artifacts() -> set[str]:
@@ -98,6 +110,7 @@ def artifact_synergy_bonus(artifact_name: str, owned: Optional[set[str]] = None)
     if cand in have_all:
         return 0, ""  # đã có rồi, không thêm giá trị synergy
     syns, _ = _synergy_data()
+    best_key = (-1, -10**6)
     best = (0, "")
     for s in syns:
         comps = [norm(c) for c in s.get("components", [])]
@@ -112,7 +125,9 @@ def artifact_synergy_bonus(artifact_name: str, owned: Optional[set[str]] = None)
             tag = f"Synergy {s['name']} {have + 1}/{len(comps)}"
         else:
             bonus, tag = SYNERGY_POTENTIAL_BONUS, f"Synergy {s['name']} 1/{len(comps)}"
-        if bonus > best[0]:
+        key = (bonus, -need_after)
+        if key > best_key:
+            best_key = key
             best = (bonus, tag)
     return best
 

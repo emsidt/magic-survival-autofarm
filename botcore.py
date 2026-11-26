@@ -51,6 +51,8 @@ class ChestTarget(tuple):
 CHEST_SPECS = [
     ("special_chest", "assets/chests/special_chest_icon.png", 38.0, True),
     ("special_chest", "assets/chests/special_chest_1x.png", 38.0, True),
+    ("special_chest", "assets/chests/relic_box_indicator.png", 38.0, True),
+    ("special_chest", "assets/chests/special_chest_crop.png", 40.0, False),
     ("black_box", "assets/chests/black_box.png", 36.0, False),
     ("reliquary", "assets/chests/reliquary.png", 30.0, False),
     ("treasure_chest", "assets/chests/treasure_chest.png", 24.0, False),
@@ -115,19 +117,24 @@ def _verify_chest_color(
     total_px = roi_bgr.shape[0] * roi_bgr.shape[1]
 
     if chest_type == "special_chest":
-        # Pure crimson horizontal line/mouth in center of special chest (R >= 125, G <= 50, B <= 50, R - G >= 70)
+        # Crimson mouth/clasp in center of Relic Box (also handles darker anti-aliased edge icons)
         B, G, R = roi_bgr[:, :, 0].astype(int), roi_bgr[:, :, 1].astype(int), roi_bgr[:, :, 2].astype(int)
-        crimson = (R >= 125) & (G <= 50) & (B <= 50) & (R - G >= 70)
+        crimson = (R >= 85) & (G <= 55) & (B <= 55) & (R - G >= 38) & (R - B >= 38)
         dark_lines = (V <= 65)
-        badge = (S <= 75) & (V >= 180)
-        crimson_frac = float(np.sum(crimson)) / total_px
+        badge = (S <= 75) & (V >= 175)
+        wood = (H >= 5) & (H <= 28) & (S >= 80) & (V >= 60)
+        crimson_px = int(np.sum(crimson))
+        crimson_frac = float(crimson_px) / total_px
         dark_frac = float(np.sum(dark_lines)) / total_px
         badge_frac = float(np.sum(badge)) / total_px
-        # Genuine special chest indicator must contain the distinctive crimson mouth, dark outlines, and circular cream badge
+        wood_frac = float(np.sum(wood)) / total_px
         return bool(
-            crimson_frac >= 0.008
+            crimson_px >= 4
+            and crimson_frac >= 0.0025
             and dark_frac >= 0.05
-            and (is_indicator is False or badge_frac >= 0.15)
+            and dark_frac <= 0.80
+            and wood_frac < 0.12
+            and (badge_frac >= 0.15 if is_indicator else badge_frac >= 0.10)
         )
     elif chest_type == "treasure_chest":
         # Rich amber/brown wood (H 5..28, S>=35, V>=25), or cream/white indicator badge (S<=75, V>=180)
@@ -207,6 +214,43 @@ def _detect_chests_by_color(frame: np.ndarray) -> list[tuple[int, int, float]]:
     return out
 
 
+def _detect_special_chests_by_color(frame: np.ndarray) -> list[tuple[int, int, float]]:
+    """Find off-screen Relic Box (special_chest) HUD indicator bubbles by their cream badge + central crimson clasp."""
+    fh, fw = frame.shape[:2]
+    k = fw / 1080.0
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    badge_mask = ((hsv[:, :, 1] <= 75) & (hsv[:, :, 2] >= 175)).astype(np.uint8)
+    ksz = max(3, int(round(5 * k)) | 1)
+    badge_mask = cv2.morphologyEx(badge_mask, cv2.MORPH_CLOSE, np.ones((ksz, ksz), np.uint8))
+    n, _, stats, cents = cv2.connectedComponentsWithStats(badge_mask)
+    min_sz, max_sz = 36.0 * k, 135.0 * k
+    out: list[tuple[int, int, float]] = []
+    for i in range(1, n):
+        x, y, w, h, area = (int(v) for v in stats[i])
+        if not (min_sz <= w <= max_sz and min_sz <= h <= max_sz):
+            continue
+        aspect = w / float(max(1, h))
+        fill = area / float(max(1, w * h))
+        if not (0.65 <= aspect <= 1.55 and 0.35 <= fill <= 0.95):
+            continue
+        cx, cy = int(round(cents[i][0])), int(round(cents[i][1]))
+        # Off-screen indicators only appear around the HUD perimeter, never in the inner playfield.
+        if (int(fw * 0.22) <= cx <= int(fw * 0.78)) and (int(fh * 0.16) <= cy <= int(fh * 0.84)):
+            continue
+        roi = frame[y : y + h, x : x + w]
+        if not _verify_chest_color(roi, "special_chest", is_indicator=True):
+            continue
+        mid = roi[int(h * 0.20) : int(h * 0.80), :]
+        if mid.size == 0:
+            continue
+        mB, mG, mR = mid[:, :, 0].astype(int), mid[:, :, 1].astype(int), mid[:, :, 2].astype(int)
+        mid_crimson = (mR >= 85) & (mG <= 55) & (mB <= 55) & (mR - mG >= 38) & (mR - mB >= 38)
+        if int(np.sum(mid_crimson)) < 4:
+            continue
+        out.append((cx, cy, 0.85))
+    return out
+
+
 def detect_chest(
     frame: np.ndarray,
     min_confidence: float = 0.55,
@@ -242,11 +286,16 @@ def detect_chest(
             if tmpl.shape[0] >= small.shape[0] or tmpl.shape[1] >= small.shape[1]:
                 continue
             res = cv2.matchTemplate(small, tmpl, cv2.TM_CCOEFF_NORMED)
-            eff_conf = max(min_confidence, 0.62) if is_indicator else min_confidence
-            # Rare grayscale shapes (reliquary / black box) are easily mimicked by skill swirls and
-            # brick texture; demand a much stronger template match than for plain chests.
-            if ctype in ("reliquary", "black_box") and not is_indicator:
-                eff_conf = max(eff_conf, 0.72)
+            if ctype == "special_chest":
+                eff_conf = max(min_confidence, 0.56 if is_indicator else 0.68)
+            elif is_indicator:
+                eff_conf = max(min_confidence, 0.62)
+            elif ctype in ("reliquary", "black_box"):
+                # Rare grayscale shapes (reliquary / black box) are easily mimicked by skill swirls and
+                # brick texture; demand a much stronger template match than for plain chests.
+                eff_conf = max(min_confidence, 0.72)
+            else:
+                eff_conf = min_confidence
             locs = np.where(res >= eff_conf)
             for pt_y, pt_x in zip(*locs):
                 val = float(res[pt_y, pt_x])
@@ -291,6 +340,25 @@ def detect_chest(
             continue
         candidates.append((24.0, quality, "treasure_chest", (ccx, ccy)))
         all_positions.append((ccx, ccy))
+
+    # Colour-based Relic Box indicators (off-screen special_chest bubbles with cream badge + crimson clasp)
+    for scx, scy, quality in _detect_special_chests_by_color(frame):
+        if scy < indicator_top_hud_y:
+            continue
+        if (scx < int(fw * 0.14) and scy < corner_hud_y) or (scx > int(fw * 0.86) and scy < corner_hud_y):
+            continue
+        if math.hypot(scx - px, scy - py) < span * 0.25:
+            continue
+        matched_idx = None
+        for idx_c, (cw, cv_, ct_, cp_) in enumerate(candidates):
+            if math.hypot(scx - cp_[0], scy - cp_[1]) <= 30:
+                matched_idx = idx_c
+                if cw < 38.0 or (ct_ == "special_chest" and cv_ < quality):
+                    candidates[idx_c] = (38.0, max(cv_, quality) if ct_ == "special_chest" else quality, "special_chest", cp_)
+                break
+        if matched_idx is None:
+            candidates.append((38.0, quality, "special_chest", (scx, scy)))
+            all_positions.append((scx, scy))
 
     if candidates:
         # Prioritize closer chests to the player character so the bot gathers them efficiently.
@@ -959,6 +1027,7 @@ def choose_direction(
     enable_weave: bool = False,
     weave_freq: float = 3.2,
     weave_amp: float = 0.28,
+    wave_active: bool = False,
 ) -> tuple[float, float]:
     """Collect nearby loot directly; flank blocked paths and use known auto-aim builds to approach."""
     h, w = vision.distance.shape
@@ -1075,7 +1144,12 @@ def choose_direction(
     elif pickup_target is None and best_orb is not None:
         pickup_target = (best_orb[0], best_orb[1])
     boss_emergency = any(math.hypot(px - bcx, py - bcy) < max(br * 3.8, span * 0.68) for bcx, bcy, br in getattr(vision, "bosses", []))
-    if not boss_emergency and pickup_target is not None and _hazard_path_clear(hazard, (px, py), pickup_target):
+    allow_direct_pickup = (pickup_target is not None) and (
+        (not wave_active)
+        or pickup_target == getattr(vision, "monolith", None)
+        or pickup_target == vision.chest
+    )
+    if not boss_emergency and allow_direct_pickup and _hazard_path_clear(hazard, (px, py), pickup_target):
         approach = _approach_pickup(vision, pickup_target, (px, py), has_nearest_target_attack)
         if approach is not None:
             return approach
@@ -1173,15 +1247,18 @@ def choose_direction(
             and not boss_emergency
         )
 
-        if has_clear_exit and near_danger_dist < (4.0 if (allow_chest_approach or is_charging_monolith or is_charging_chest) else 10.0):
+        skip_danger_dist = 14.0 if wave_active else 10.0
+        if has_clear_exit and near_danger_dist < (4.0 if (allow_chest_approach or is_charging_monolith or is_charging_chest) else skip_danger_dist):
             # Loot rewards must never outweigh an immediate collision when an
             # unobstructed escape exists.
             continue
 
         # Danger repulsion: clear collision avoidance with lethal boundary (< 10px) while staying brave
         score = -10.0 * forward_danger
-        if near_danger_dist < 18.0 and not (is_charging_monolith or is_charging_chest):
-            score -= (6.0 if allow_chest_approach else 22.0) * (1.0 - near_danger_dist / 18.0)
+        danger_range = 24.0 if wave_active else 18.0
+        danger_weight = 30.0 if wave_active else 22.0
+        if near_danger_dist < danger_range and not (is_charging_monolith or is_charging_chest):
+            score -= (6.0 if allow_chest_approach else danger_weight) * (1.0 - near_danger_dist / danger_range)
         if near_danger_dist < 10.0 and not (is_charging_monolith or is_charging_chest):
             score -= (10.0 if allow_chest_approach else 50.0) * (1.0 - near_danger_dist / 10.0)
 
@@ -1304,6 +1381,8 @@ def choose_direction(
         # If a monolith is present, suppress mana orbs pulling away from the monolith
         if getattr(vision, "monolith", None) and monolith_dist > 4:
             mana_score = 0.0
+        if wave_active:
+            mana_score *= 0.25
         score += mana_score
 
         # High priority for artifact chest / chest indicator (DISABLED when a monolith is present):
@@ -1355,9 +1434,9 @@ def choose_direction(
             best_score = score
             best = direction
 
-    # Apply human weaving ("Lắc tay") micro-oscillation if enabled (disabled when charging/searching monolith, near chest, or bosses present)
+    # Apply human weaving ("Lắc tay") micro-oscillation if enabled (disabled when charging/searching monolith, near chest, wave/bosses present)
     near_chest = bool(vision.chest is not None and math.hypot(vision.chest[0] - px, vision.chest[1] - py) < span * 0.42)
-    if enable_weave and not is_searching_monolith and not near_chest and getattr(vision, "monolith", None) is None and best != (0.0, 0.0) and not boss_emergency and not getattr(vision, "bosses", None) and (hazard is None or not np.any(hazard)):
+    if enable_weave and not wave_active and not is_searching_monolith and not near_chest and getattr(vision, "monolith", None) is None and best != (0.0, 0.0) and not boss_emergency and not getattr(vision, "bosses", None) and (hazard is None or not np.any(hazard)):
         weaved = apply_human_weave(best, elapsed, frequency=weave_freq, amplitude=weave_amp)
         wx = int(px + weaved[0] * span * 0.05)
         wy = int(py + weaved[1] * span * 0.05)
@@ -1422,6 +1501,16 @@ def is_fast_combat_frame(frame: np.ndarray, *, skip_ocr: bool = False) -> bool:
             and float(np.mean((middle >= 42) & (middle <= 200))) >= 0.12)
     if not clear_field:
         return False
+    # Three stacked dark card bands identify a level-up / attribute modal even when bright
+    # swarms crowd the top/side margins and slightly raise overall frame luminance.
+    card_bands = (
+        gray[int(h * 0.30):int(h * 0.42), int(w * 0.18):int(w * 0.82)],
+        gray[int(h * 0.46):int(h * 0.56), int(w * 0.18):int(w * 0.82)],
+        gray[int(h * 0.60):int(h * 0.70), int(w * 0.18):int(w * 0.82)],
+    )
+    if all(b.size > 0 and float(np.mean(b <= 25)) >= 0.60 for b in card_bands):
+        if sum(float(np.mean(b)) for b in card_bands) / 3.0 <= 32.0:
+            return False
     # A wide black card/popup is sufficient (~3ms) to catch level-up/chest/shop modals without OCR,
     # while ignoring edge-to-edge dark map-boundary fog at top/bottom when center & modal are clear.
     dark_slice = gray[int(h * 0.20):int(h * 0.90)]
@@ -1429,7 +1518,7 @@ def is_fast_combat_frame(frame: np.ndarray, *, skip_ocr: bool = False) -> bool:
     dark = (dark_slice <= 20).astype(np.uint8)
     _, _, stats, _ = cv2.connectedComponentsWithStats(dark, 8)
     for x, y, width, height, area in stats[1:]:
-        if width > w * 0.6 and height > h * 0.08 and area > width * height * 0.65:
+        if width > w * 0.6 and height > h * 0.08 and (area > width * height * 0.65 or area > w * slice_h * 0.30):
             is_edge_fog = (
                 width >= w * 0.95
                 and height < slice_h * 0.45
@@ -1447,6 +1536,8 @@ def is_fast_combat_frame(frame: np.ndarray, *, skip_ocr: bool = False) -> bool:
         import winocr
         from PIL import Image
         header = frame[int(h * 0.09):int(h * 0.32), int(w * 0.15):int(w * 0.85)]
+        if header.shape[1] < 600:
+            header = cv2.resize(header, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
 
         async def recognize():
             return await winocr.recognize_pil(Image.fromarray(cv2.cvtColor(header, cv2.COLOR_BGR2RGB)), lang="en")
@@ -2070,6 +2161,35 @@ def _load_digit_templates() -> list[tuple[str, float, np.ndarray]]:
     return _DIGIT_TEMPLATES_CACHE
 
 
+def _classify_digit_boxes(
+    val_src: np.ndarray,
+    cands: list[tuple[int, int, int, int]],
+    templates: list[tuple[str, float, np.ndarray]],
+    min_score: float,
+) -> Optional[tuple[str, float]]:
+    """Classify sorted digit bounding boxes using aspect-ratio-penalized NCC."""
+    digits: list[str] = []
+    min_matched = 1.0
+    for bx, by, bw_w, bw_h in cands:
+        patch = val_src[by : by + bw_h, bx : bx + bw_w]
+        norm = cv2.normalize(patch, None, 0, 255, cv2.NORM_MINMAX)
+        resized = cv2.resize(norm, (_DIGIT_TARGET_W, _DIGIT_TARGET_H), interpolation=cv2.INTER_AREA).astype(np.float32)
+        ar = bw_w / max(1, bw_h)
+        best_ch = None
+        best_sc = -1e9
+        for ch_lbl, tar, tmpl in templates:
+            ncc = float(cv2.matchTemplate(resized, tmpl, cv2.TM_CCOEFF_NORMED)[0][0])
+            sc = ncc - 0.8 * abs(ar - tar)
+            if sc > best_sc:
+                best_sc = sc
+                best_ch = ch_lbl
+        if best_ch is None or best_sc < min_score:
+            return None
+        digits.append(best_ch)
+        min_matched = min(min_matched, best_sc)
+    return ("".join(digits), min_matched)
+
+
 def _segment_and_match_digits(
     crop: np.ndarray,
     hsv_ranges: Optional[list[tuple[tuple[int, int, int], tuple[int, int, int]]]] = None,
@@ -2123,26 +2243,11 @@ def _segment_and_match_digits(
         return None
     cands.sort(key=lambda b: b[0])
 
-    digits: list[str] = []
-    min_matched = 1.0
-    for bx, by, bw_w, bw_h in cands:
-        patch = val_src[by : by + bw_h, bx : bx + bw_w]
-        norm = cv2.normalize(patch, None, 0, 255, cv2.NORM_MINMAX)
-        resized = cv2.resize(norm, (_DIGIT_TARGET_W, _DIGIT_TARGET_H), interpolation=cv2.INTER_AREA).astype(np.float32)
-        ar = bw_w / max(1, bw_h)
-        best_ch = None
-        best_sc = -1e9
-        for ch_lbl, tar, tmpl in templates:
-            ncc = float(cv2.matchTemplate(resized, tmpl, cv2.TM_CCOEFF_NORMED)[0][0])
-            sc = ncc - 0.8 * abs(ar - tar)
-            if sc > best_sc:
-                best_sc = sc
-                best_ch = ch_lbl
-        if best_ch is None or best_sc < min_score:
-            return None
-        digits.append(best_ch)
-        min_matched = min(min_matched, best_sc)
-    return ("".join(digits), cands, min_matched)
+    matched = _classify_digit_boxes(val_src, cands, templates, min_score)
+    if matched is None:
+        return None
+    digits_str, min_matched = matched
+    return (digits_str, cands, min_matched)
 
 
 def _read_digits_value(
@@ -2155,6 +2260,87 @@ def _read_digits_value(
     if res is None:
         return None
     return int(res[0])
+
+
+def _read_digits_with_split(
+    crop: np.ndarray,
+    hsv_ranges: Optional[list[tuple[tuple[int, int, int], tuple[int, int, int]]]] = None,
+    min_score: float = 0.52,
+) -> Optional[int]:
+    """Read an integer value using digit templates, splitting touching digits via vertical valley."""
+    res = _segment_and_match_digits(crop, hsv_ranges=hsv_ranges, min_score=min_score)
+    if res is not None:
+        return int(res[0])
+    if crop is None or crop.size == 0 or crop.shape[0] < 8 or crop.shape[1] < 8:
+        return None
+    templates = _load_digit_templates()
+    if not templates:
+        return None
+
+    if hsv_ranges:
+        hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+        mask = np.zeros(crop.shape[:2], dtype=np.uint8)
+        for lo, hi in hsv_ranges:
+            mask = cv2.bitwise_or(mask, cv2.inRange(hsv, lo, hi))
+        val_src = cv2.bitwise_and(hsv[:, :, 2], hsv[:, :, 2], mask=mask)
+    else:
+        val_src = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+
+    peak = int(np.max(val_src))
+    if peak < 45:
+        return None
+
+    ch, _ = crop.shape[:2]
+    min_h = max(6, int(ch * 0.22))
+    for ratio in (0.62, 0.70, 0.52):
+        _, bw = cv2.threshold(val_src, int(peak * ratio), 255, cv2.THRESH_BINARY)
+        num, _, stats, _ = cv2.connectedComponentsWithStats(bw)
+        cands: list[tuple[int, int, int, int]] = []
+        ok = True
+        for i in range(1, num):
+            bx, by, bw_w, bw_h, area = (
+                int(stats[i, 0]), int(stats[i, 1]), int(stats[i, 2]), int(stats[i, 3]), int(stats[i, 4])
+            )
+            if bw_h < min_h or bw_h > int(ch * 0.92) or bw_w < 2 or area < 8:
+                continue
+            if bw_w > int(bw_h * 2.2):
+                ok = False
+                break
+            if bw_w > int(bw_h * 1.35):
+                sub = val_src[by : by + bw_h, bx : bx + bw_w]
+                col_sum = sub.sum(axis=0)
+                lo_c, hi_c = max(2, int(bw_w * 0.28)), min(bw_w - 2, int(bw_w * 0.72))
+                if hi_c <= lo_c:
+                    ok = False
+                    break
+                split = lo_c + int(np.argmin(col_sum[lo_c:hi_c]))
+                for lx, rx in ((bx, bx + split), (bx + split, bx + bw_w)):
+                    part = bw[by : by + bw_h, lx:rx]
+                    ys, xs = np.where(part > 0)
+                    if ys.size == 0:
+                        ok = False
+                        break
+                    sw = int(xs.max() - xs.min() + 1)
+                    sh = int(ys.max() - ys.min() + 1)
+                    if sw > int(sh * 1.45):
+                        ok = False
+                        break
+                    cands.append((lx + int(xs.min()), by + int(ys.min()), sw, sh))
+                if not ok:
+                    break
+            else:
+                cands.append((bx, by, bw_w, bw_h))
+        if not ok or not cands:
+            continue
+        max_h = max(c[3] for c in cands)
+        cands = [c for c in cands if c[3] >= 0.62 * max_h]
+        if not cands:
+            continue
+        cands.sort(key=lambda b: b[0])
+        matched = _classify_digit_boxes(val_src, cands, templates, min_score)
+        if matched is not None and matched[0]:
+            return int(matched[0])
+    return None
 
 
 def _read_timer_from_crop(
@@ -2489,6 +2675,110 @@ def get_mana_retrieve_target(num_cards: int = 3) -> tuple[float, float]:
     return (0.50, 0.922) if num_cards == 4 else (0.50, 0.835)
 
 
+def normalize_game_map(raw_map: Optional[str]) -> str:
+    """Normalize a Magic Survival stage/map name to a canonical key ('depth', 'ecosystem', ...)."""
+    if not raw_map:
+        return ""
+    low = re.sub(r"[^a-z0-9]+", " ", str(raw_map).lower()).strip()
+    if not low:
+        return ""
+    if "depth" in low:
+        return "depth"
+    if "artificial" in low or "virtual" in low or "ecosystem" in low or "eco system" in low:
+        return "ecosystem"
+    if "terra" in low:
+        return "terra"
+    for known in (
+        "academy",
+        "woodland",
+        "incubation",
+        "laboratory",
+        "outskirts",
+        "sewer",
+        "power plant",
+        "array zone",
+        "arboretum",
+        "city",
+    ):
+        if known in low:
+            return known.replace(" ", "_")
+    return low.replace(" ", "_")
+
+
+def detect_selected_map(frame: np.ndarray) -> Optional[str]:
+    """Detect selected stage on the 'Enter Area' screen ('depth' for Depths, 'ecosystem' for Artificial Ecosystem).
+
+    Reads the title banner between the < / > arrows with 2x-upscaled WinOCR and falls back to the
+    distinctive stage artwork + cyan 'Space-Time Circuit' indicator when OCR is unavailable.
+    """
+    if frame is None or frame.size == 0:
+        return None
+    h, w = frame.shape[:2]
+    known_maps = {
+        "depth",
+        "ecosystem",
+        "terra",
+        "academy",
+        "woodland",
+        "incubation",
+        "laboratory",
+        "outskirts",
+        "sewer",
+        "power_plant",
+        "array_zone",
+        "arboretum",
+        "city",
+    }
+
+    title_roi = frame[int(h * 0.09) : int(h * 0.18), int(w * 0.18) : int(w * 0.82)]
+    if title_roi.size > 0:
+        try:
+            import asyncio
+            import winocr
+            from PIL import Image
+
+            ocr_src = (
+                cv2.resize(title_roi, None, fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+                if title_roi.shape[1] < 600
+                else title_roi
+            )
+
+            async def _recognize():
+                return await winocr.recognize_pil(
+                    Image.fromarray(cv2.cvtColor(ocr_src, cv2.COLOR_BGR2RGB)), lang="en"
+                )
+
+            text = " ".join(line.text.lower() for line in asyncio.run(_recognize()).lines)
+            norm = normalize_game_map(text)
+            if norm in known_maps:
+                return norm
+        except Exception:
+            pass
+
+    art = frame[int(h * 0.21) : int(h * 0.62), int(w * 0.14) : int(w * 0.86)]
+    bonus = frame[int(h * 0.81) : int(h * 0.88), int(w * 0.18) : int(w * 0.82)]
+    if art.size > 0 and bonus.size > 0:
+        B = art[:, :, 0].astype(float)
+        G = art[:, :, 1].astype(float)
+        R = art[:, :, 2].astype(float)
+        rg_diff = float(np.mean(R - G))
+        gb_diff = float(np.mean(G - B))
+        bhsv = cv2.cvtColor(bonus, cv2.COLOR_BGR2HSV)
+        cyan_frac = float(
+            np.mean(
+                (bhsv[:, :, 0] >= 75)
+                & (bhsv[:, :, 0] <= 110)
+                & (bhsv[:, :, 1] >= 80)
+                & (bhsv[:, :, 2] >= 100)
+            )
+        )
+        if (rg_diff >= 12.0 and cyan_frac >= 0.004) or rg_diff >= 20.0:
+            return "depth"
+        if cyan_frac < 0.002 and gb_diff >= 6.0 and abs(rg_diff) <= 6.0:
+            return "ecosystem"
+    return None
+
+
 def detect_enter_area(frame: np.ndarray, min_confidence: float = 0.70) -> Optional[tuple[float, float]]:
     """Detect 'Enter Area' start button in stage selection screen."""
     h, w = frame.shape[:2]
@@ -2785,9 +3075,9 @@ def detect_die_button(frame: np.ndarray, min_confidence: float = 0.68) -> Option
     if template is None:
         return None
     h, w = frame.shape[:2]
-    # 'Die' button is in the vertical range 55% to 88%
+    # 'Die' button is horizontally centered in the 26%..74% band and vertically in 55%..88%
     y0, y1 = int(h * 0.55), int(h * 0.88)
-    x0, x1 = int(w * 0.12), int(w * 0.88)
+    x0, x1 = int(w * 0.26), int(w * 0.74)
     roi = frame[y0:y1, x0:x1]
     gray_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
     th, tw = template.shape[:2]
@@ -2824,8 +3114,8 @@ def detect_die_button(frame: np.ndarray, min_confidence: float = 0.68) -> Option
     if best_score >= min_confidence and best_match:
         ny = round(best_match[1] / h, 4)
         nx = round(best_match[0] / w, 4)
-        # CRITICAL SAFETY GATE: 'Die' row is strictly at y >= 0.68. Revive is at y ~ 0.64.
-        if 0.68 <= ny <= 0.85:
+        # CRITICAL SAFETY GATE: 'Die' row is strictly centered at x in [0.35, 0.65], y in [0.68, 0.85]. Revive is at y ~ 0.64.
+        if 0.68 <= ny <= 0.85 and 0.35 <= nx <= 0.65:
             return (nx, ny)
 
     # 3. OCR must locate the actual Die word, never infer its position from Revive.
@@ -2848,9 +3138,10 @@ def detect_die_button(frame: np.ndarray, min_confidence: float = 0.68) -> Option
                         r = word.bounding_rect
                         cx = x0 + r.x + r.width / 2
                         cy = y0 + r.y + r.height / 2
+                        nx = round(cx / w, 4)
                         ny = round(cy / h, 4)
-                        if ny >= 0.68:
-                            return (round(cx / w, 4), ny)
+                        if ny >= 0.68 and 0.35 <= nx <= 0.65:
+                            return (nx, ny)
     except Exception:
         pass
 
@@ -3021,30 +3312,37 @@ def is_three_card_chest(frame: np.ndarray, obtain_x: float = 0.50) -> bool:
 # Direct Archetype & Skill-Specific Synergy Keywords for Artifact Selection
 SKILL_SYNERGY_KEYWORDS: dict[str, list[str]] = {
     "spirit": [
-        "spirit", "blade", "sword of devil", "ether blade", "wand", "silver bullet",
+        "spirit", "blade", "sword of devil", "ether blade", "wand", "magic wand", "silver bullet",
         "projectile", "number of projectiles", "projectile speed", "shuriken", "mirror",
+        "firefly", "fire fly", "ether arrow", "mana scepter",
     ],
     "electric_shock": [
         "electric shock", "electric", "shock", "lightning", "lightning rod", "thunderbolt",
-        "spark", "tesla", "battery", "plasma", "copper wire", "cable",
+        "spark", "tesla", "plasma", "copper wire", "cable", "electric cable",
     ],
     "cyclone": [
-        "cyclone", "hurricane", "vortex", "black hole", "blackhole", "fan", "weather vane", "storm", "typhoon", "aerodynamics",
+        "cyclone", "hurricane", "vortex", "black hole", "blackhole", "fan", "weather vane",
+        "storm", "typhoon", "aerodynamics", "totem", "palm leaf fan", "weather controller",
+        "pandora's box", "pandoras box",
     ],
     "satellite": [
         "satellite", "orbit", "rotation speed", "core", "neutron core", "astrolabe", "miniature",
+        "glass orb", "core energy", "circular sawblade", "electromagnet", "mana scepter", "mirror",
     ],
     "blizzard": [
-        "blizzard", "freeze", "frost", "cold", "sub-zero", "sub zero", "absolute zero", "snowman", "ice age", "glacier",
+        "blizzard", "freeze", "frost", "cold", "sub-zero", "sub zero", "absolute zero", "snowman",
+        "ice age", "glacier", "snowflake crown", "skadi", "weather controller",
     ],
     "frost_nova": [
         "frost nova", "frost", "freeze", "cold", "pole", "ice age", "glacier", "snowman",
+        "moon crystal", "skadi", "weather controller",
     ],
     "tsunami": [
-        "tsunami", "ocean", "water", "wave", "pole", "wave-calming flute", "wave calming flute", "freeze",
+        "tsunami", "ocean", "water", "wave", "pole", "wave-calming flute", "wave calming flute",
+        "freeze", "weather controller", "pandora's box", "pandoras box", "chimera",
     ],
     "flash_shock": [
-        "flash shock", "flash", "lens", "prism",
+        "flash shock", "flash", "lens", "prism", "gae bolg", "gàe bolg", "chimera",
     ],
     "magic_circle": [
         "magic circle", "magiccircle", "ancient tree staff", "magic scroll", "magic grimoire", "hourglass",
@@ -3059,28 +3357,35 @@ SKILL_SYNERGY_KEYWORDS: dict[str, list[str]] = {
         "armageddon", "book of revelation", "apocalypse", "a eddo n", "remove all enemies",
     ],
     "electric_zone": [
-        "electric zone", "electric", "emp",
+        "electric zone", "electric", "emp", "battery", "electromagnet", "lightning", "robot",
+    ],
+    "thunderstorm": [
+        "thunderstorm", "lightning rod", "lightning", "mjolnir",
     ],
     "arcane_ray": [
-        "arcane ray", "ray", "laser",
+        "arcane ray", "ray", "laser", "crystal prism", "otherworldly tentacles", "mana scepter", "mirror",
     ],
     "meteor": [
         "meteor", "meteorite", "asteroid", "giant impact", "crater", "volcano",
+        "celestial calendar", "dimensional gate", "candlestick", "cauldron", "pandora's box", "pandoras box",
     ],
     "fireball": [
-        "fireball", "fire ball", "phoenix bow", "candle", "torch", "ignite",
+        "fireball", "fire ball", "phoenix bow", "phoenix's bow", "phoenixs bow",
+        "candle", "candlestick", "cauldron", "torch", "ignite",
     ],
     "incineration": [
-        "incineration", "cerberus", "dragon breath", "flamethrower",
+        "incineration", "cerberus", "dragon breath", "dragon's breath", "dragons breath",
+        "flamethrower", "torch", "salamander", "cauldron",
     ],
     "lava_zone": [
-        "lava zone", "lava", "magma", "melting",
+        "lava zone", "lava", "magma", "melting", "salamander", "cauldron", "sulfur", "chimera",
     ],
     "energy_bolt": [
-        "energy bolt", "charged bolt", "spark",
+        "energy bolt", "charged bolt", "spark", "magitech module", "machine arm", "mana scepter", "mirror",
     ],
     "magic_bolt": [
         "magic bolt", "magic bullet", "doppelganger", "continuous casting",
+        "shuriken", "ether arrow", "freeshooter",
     ],
 }
 
@@ -3119,6 +3424,39 @@ COMBINATION_COMPONENTS: dict[str, list[str]] = {
 }
 
 
+def resolve_effective_active_skills(active_skills: Optional[set[str]]) -> tuple[set[str], set[str]]:
+    """Expand active fusions into (effective_skills, consumed_materials).
+
+    Primary combination skills remain active and keep benefiting from artifacts;
+    secondary material skills are consumed by the combination and excluded so the
+    bot never wastes Chest/Shop slots on artifacts buffing consumed materials.
+    """
+    if not active_skills:
+        return set(), set()
+
+    primary_kept: set[str] = set()
+    consumed: set[str] = set()
+    for s_key in active_skills:
+        fusion = knowledge.fusion_by_name(s_key.replace("_", " "))
+        if fusion:
+            p_skill = str(fusion.get("primary", {}).get("skill", "")).strip().lower().replace(" ", "_")
+            sec_skill = str(fusion.get("secondary", {}).get("skill", "")).strip().lower().replace(" ", "_")
+            if p_skill:
+                primary_kept.add(p_skill)
+            if sec_skill:
+                consumed.add(sec_skill)
+        elif s_key in COMBINATION_COMPONENTS:
+            comps = COMBINATION_COMPONENTS[s_key]
+            if len(comps) >= 1:
+                primary_kept.add(comps[0])
+            if len(comps) >= 2:
+                consumed.update(comps[1:])
+
+    net_consumed = consumed - primary_kept
+    effective = (set(active_skills) | primary_kept) - net_consumed
+    return effective, net_consumed
+
+
 def compute_skill_synergy_bonus(full_text: str, active_skills: Optional[set[str]] = None) -> tuple[int, list[str]]:
     """Calculate dynamic synergy bonus and tag for artifacts based on skills the player is currently learning."""
     if not active_skills:
@@ -3127,13 +3465,9 @@ def compute_skill_synergy_bonus(full_text: str, active_skills: Optional[set[str]
     matched_skills: list[str] = []
     bonus = 0
 
-    # Expand active skills to include combination component magics
-    expanded_skills = set(active_skills)
-    for s_key in active_skills:
-        if s_key in COMBINATION_COMPONENTS:
-            expanded_skills.update(COMBINATION_COMPONENTS[s_key])
+    effective_skills, _ = resolve_effective_active_skills(active_skills)
 
-    for s_key in sorted(expanded_skills):
+    for s_key in sorted(effective_skills):
         std_name = s_key.replace("_", " ")
         kw_list = SKILL_SYNERGY_KEYWORDS.get(s_key, [std_name])
         if any(_match_keyword(kw, text_lower) for kw in kw_list):
@@ -3149,22 +3483,23 @@ def compute_skill_synergy_bonus(full_text: str, active_skills: Optional[set[str]
 
 # Specific magic identifiers that uniquely target a specific active skill
 SPECIFIC_MAGIC_IDENTIFIERS: dict[str, list[str]] = {
-    "meteor": ["meteor", "meteorite", "asteroid", "giant impact"],
-    "blizzard": ["blizzard", "sub-zero", "sub zero"],
-    "cyclone": ["cyclone", "weather vane"],
-    "tsunami": ["tsunami", "wave-calming flute", "wave calming flute"],
-    "satellite": ["satellite", "astrolabe", "glass orb", "glass marble"],
-    "spirit": ["spirit", "sword of devil", "ether blade", "shuriken", "mirror"],
-    "electric_zone": ["electric zone"],
-    "frost_nova": ["frost nova"],
-    "arcane_ray": ["arcane ray", "laser pointer", "crystal prism"],
-    "flash_shock": ["flash shock"],
-    "fireball": ["fireball", "phoenix bow", "candle", "firecracker"],
-    "incineration": ["incineration", "cerberus", "flamethrower"],
-    "energy_bolt": ["energy bolt", "energybolt", "charged bolt", "magitech module", "mechanical arm", "split into 2"],
-    "lava_zone": ["lava zone", "melting", "magma"],
-    "magic_bolt": ["magic bolt", "magic bullet", "doppelganger", "continuous casting"],
-    "electric_shock": ["electric shock", "lightning rod"],
+    "meteor": ["meteor", "meteorite", "asteroid", "giant impact", "celestial calendar", "dimensional gate", "candlestick", "cauldron"],
+    "blizzard": ["blizzard", "sub-zero", "sub zero", "snowflake crown", "skadi", "weather controller"],
+    "cyclone": ["cyclone", "weather vane", "totem", "palm leaf fan", "weather controller"],
+    "tsunami": ["tsunami", "wave-calming flute", "wave calming flute", "weather controller", "chimera"],
+    "satellite": ["satellite", "astrolabe", "glass orb", "glass marble", "core energy", "circular sawblade", "electromagnet", "mana scepter", "mirror"],
+    "spirit": ["spirit", "sword of devil", "ether blade", "shuriken", "mirror", "firefly", "fire fly", "magic wand", "ether arrow", "mana scepter"],
+    "electric_zone": ["electric zone", "battery", "electromagnet", "robot"],
+    "thunderstorm": ["thunderstorm", "lightning rod", "lightning", "mjolnir"],
+    "frost_nova": ["frost nova", "moon crystal", "skadi", "weather controller"],
+    "arcane_ray": ["arcane ray", "laser pointer", "crystal prism", "otherworldly tentacles", "mana scepter", "mirror"],
+    "flash_shock": ["flash shock", "gae bolg", "gàe bolg", "chimera"],
+    "fireball": ["fireball", "phoenix bow", "phoenix's bow", "phoenixs bow", "candle", "candlestick", "cauldron", "torch", "firecracker"],
+    "incineration": ["incineration", "cerberus", "flamethrower", "torch", "salamander", "cauldron", "dragon's breath", "dragons breath"],
+    "energy_bolt": ["energy bolt", "energybolt", "charged bolt", "magitech module", "mechanical arm", "machine arm", "mana scepter", "mirror", "split into 2"],
+    "lava_zone": ["lava zone", "melting", "magma", "salamander", "cauldron", "sulfur", "chimera"],
+    "magic_bolt": ["magic bolt", "magic bullet", "doppelganger", "continuous casting", "shuriken", "ether arrow", "freeshooter"],
+    "electric_shock": ["electric shock", "lightning rod", "electric cable"],
     "shield": ["organic shield"],
     "magic_circle": ["magic circle", "magic grimoire"],
     "armageddon": ["armageddon", "book of revelation"],
@@ -3179,13 +3514,15 @@ def check_unlearned_magic_target(full_text: str, active_skills: Optional[set[str
     if active_skills is None:
         return None
     text_lower = full_text.lower()
-    expanded_skills = set(active_skills)
-    for s_key in active_skills:
-        if s_key in COMBINATION_COMPONENTS:
-            expanded_skills.update(COMBINATION_COMPONENTS[s_key])
+    effective_skills, _ = resolve_effective_active_skills(active_skills)
+
+    for magic_k in effective_skills:
+        kws = SPECIFIC_MAGIC_IDENTIFIERS.get(magic_k)
+        if kws and any(_match_keyword(kw, text_lower) for kw in kws):
+            return None
 
     for magic_k, kws in SPECIFIC_MAGIC_IDENTIFIERS.items():
-        if magic_k not in expanded_skills:
+        if magic_k not in effective_skills:
             if any(_match_keyword(kw, text_lower) for kw in kws):
                 return magic_k
     return None
@@ -3457,6 +3794,164 @@ def evaluate_selected_chest_artifact(
     return (tier_base + bonus, label)
 
 
+@dataclass(frozen=True)
+class ShopCandidate:
+    """Evaluated Merchant Shop item with slot position, build score, and price."""
+
+    slot_idx: int
+    pos: tuple[float, float]
+    score: int
+    label: str
+    price: Optional[int]
+    affordable: bool
+    worth: bool
+
+
+@dataclass(frozen=True)
+class ShopPurchasePlan:
+    """Optimal sequence of Merchant Shop items selected for current Mana budget."""
+
+    selected: list[ShopCandidate]
+    eligible_count: int
+    total_cost: Optional[int]
+    total_score: int
+    remaining_mana: Optional[int]
+    used_budget_optimizer: bool
+
+
+def _normalize_owned_artifacts(owned_artifacts: Optional[set[str]]) -> set[str]:
+    if owned_artifacts is None:
+        return set(knowledge.owned_artifacts())
+    normalized: set[str] = set()
+    for item in owned_artifacts:
+        canon = knowledge.canonical_artifact(knowledge.artifact_name_from_label(item))
+        if canon:
+            normalized.add(canon)
+        else:
+            raw = knowledge.norm(item)
+            if raw:
+                normalized.add(raw)
+    return normalized
+
+
+def plan_shop_purchases(
+    candidates: list[ShopCandidate],
+    mana: Optional[int],
+    owned_artifacts: Optional[set[str]] = None,
+) -> ShopPurchasePlan:
+    """Plan which affordable, worthy shop artifacts to buy within the current Mana budget.
+
+    Maximizes joint value (including dynamic Artifact-Set Synergy unlocked across items
+    bought together) when both Mana and all eligible item prices are known; otherwise
+    falls back to dynamic-synergy greedy ordering.
+    """
+    eligible = [c for c in candidates if c.affordable and c.worth]
+    if not eligible:
+        return ShopPurchasePlan([], 0, 0 if mana is not None else None, 0, mana, mana is not None)
+
+    base_owned = _normalize_owned_artifacts(owned_artifacts)
+    standalone_scores: list[int] = []
+    individual_effs: list[int] = []
+    canons: list[Optional[str]] = []
+
+    for c in eligible:
+        init_set_bonus, _ = knowledge.artifact_synergy_bonus(c.label, owned=base_owned)
+        individual_eff = int(c.score) + (2000 if "Build:" in c.label else 0)
+        standalone = individual_eff - init_set_bonus
+        canon = knowledge.canonical_artifact(knowledge.artifact_name_from_label(c.label))
+        individual_effs.append(individual_eff)
+        standalone_scores.append(standalone)
+        canons.append(canon)
+
+    can_optimize = (
+        mana is not None
+        and mana > 0
+        and len(eligible) <= 12
+        and all(c.price is not None and 0 < c.price <= mana for c in eligible)
+    )
+
+    if can_optimize:
+        assert mana is not None
+        n = len(eligible)
+        best_key: Optional[tuple[int, int, int, int]] = None
+        best_idxs: list[int] = []
+        best_cost = 0
+        best_total_val = 0
+
+        for mask in range(1, 1 << n):
+            idxs = [i for i in range(n) if (mask >> i) & 1]
+            cost = sum(int(eligible[i].price or 0) for i in idxs)
+            if cost > mana:
+                continue
+
+            idxs_sim = sorted(idxs, key=lambda i: (-standalone_scores[i], eligible[i].slot_idx))
+            sim_owned = set(base_owned)
+            total_val = 0
+            max_single = -10**9
+            for i in idxs_sim:
+                set_b, _ = knowledge.artifact_synergy_bonus(eligible[i].label, owned=sim_owned)
+                val = standalone_scores[i] + set_b
+                total_val += val
+                if val > max_single:
+                    max_single = val
+                canon = canons[i]
+                if canon:
+                    sim_owned.add(canon)
+
+            key = (total_val, len(idxs), -cost, max_single)
+            if best_key is None or key > best_key:
+                best_key = key
+                best_idxs = idxs
+                best_cost = cost
+                best_total_val = total_val
+
+        ordered_idxs = sorted(
+            best_idxs,
+            key=lambda i: (individual_effs[i], -(eligible[i].price or 0)),
+            reverse=True,
+        )
+        ordered = [eligible[i] for i in ordered_idxs]
+        return ShopPurchasePlan(
+            selected=ordered,
+            eligible_count=len(eligible),
+            total_cost=best_cost,
+            total_score=best_total_val,
+            remaining_mana=mana - best_cost,
+            used_budget_optimizer=True,
+        )
+
+    # Fallback: dynamic-synergy greedy ordering when mana or price is unavailable
+    sim_owned = set(base_owned)
+    remaining_idxs = list(range(len(eligible)))
+    ordered = []
+    total_val = 0
+    while remaining_idxs:
+        best_i = max(
+            remaining_idxs,
+            key=lambda i: (
+                standalone_scores[i] + knowledge.artifact_synergy_bonus(eligible[i].label, owned=sim_owned)[0],
+                -(eligible[i].price or 0),
+                -eligible[i].slot_idx,
+            ),
+        )
+        remaining_idxs.remove(best_i)
+        set_b, _ = knowledge.artifact_synergy_bonus(eligible[best_i].label, owned=sim_owned)
+        total_val += standalone_scores[best_i] + set_b
+        canon = canons[best_i]
+        if canon:
+            sim_owned.add(canon)
+        ordered.append(eligible[best_i])
+
+    return ShopPurchasePlan(
+        selected=ordered,
+        eligible_count=len(eligible),
+        total_cost=None,
+        total_score=total_val,
+        remaining_mana=None,
+        used_budget_optimizer=False,
+    )
+
+
 def detect_buy_button(frame: np.ndarray, min_confidence: float = 0.65) -> Optional[tuple[float, float]]:
     """Detect 'Buy' button at the bottom of the Merchant Shop screen (y = 0.84..0.98, x = 0.25..0.75)."""
     h, w = frame.shape[:2]
@@ -3557,6 +4052,16 @@ def is_merchant_shop(frame: np.ndarray) -> bool:
 def detect_mana_orb_currency(frame: np.ndarray) -> Optional[int]:
     """Read the player's accumulated mana orb currency displayed in the top-left corner."""
     h, w = frame.shape[:2]
+    mana_crop = frame[int(h * 0.02) : int(h * 0.075), int(w * 0.10) : int(w * 0.38)]
+    if mana_crop.size > 0:
+        tmpl_val = _read_digits_with_split(
+            mana_crop,
+            hsv_ranges=[((75, 60, 90), (115, 255, 255))],
+            min_score=0.52,
+        )
+        if tmpl_val is not None and 0 <= tmpl_val <= 999999:
+            return tmpl_val
+
     roi = frame[int(h * 0.01) : int(h * 0.10), int(w * 0.02) : int(w * 0.40)]
     if roi.size == 0:
         return None
@@ -3589,6 +4094,39 @@ def get_shop_item_targets() -> list[tuple[float, float]]:
         (0.22, 0.33), (0.42, 0.33), (0.62, 0.33), (0.82, 0.33),
         (0.22, 0.50), (0.42, 0.50), (0.62, 0.50), (0.82, 0.50),
     ]
+
+
+SHOP_ITEM_COL_BOUNDS = (
+    (0.071, 0.276),
+    (0.288, 0.493),
+    (0.505, 0.710),
+    (0.723, 0.928),
+)
+SHOP_ITEM_PRICE_ROW_Y = ((0.354, 0.390), (0.526, 0.562))
+SHOP_PRICE_HSV_RANGES = [((40, 60, 90), (115, 255, 255))]
+
+
+def detect_shop_item_prices(frame: np.ndarray) -> list[Optional[int]]:
+    """Read the Mana price displayed at the bottom of each of the 8 Merchant Shop slots."""
+    h, w = frame.shape[:2]
+    prices: list[Optional[int]] = []
+    lo, hi = SHOP_PRICE_HSV_RANGES[0]
+    for ry0, ry1 in SHOP_ITEM_PRICE_ROW_Y:
+        for cx0, cx1 in SHOP_ITEM_COL_BOUNDS:
+            tx0 = cx0 + (cx1 - cx0) * 0.39
+            tx1 = cx1 - (cx1 - cx0) * 0.05
+            crop = frame[int(h * ry0) : int(h * ry1), int(w * tx0) : int(w * tx1)]
+            if crop.size == 0 or crop.shape[0] < 8 or crop.shape[1] < 8:
+                prices.append(None)
+                continue
+            hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+            mask = cv2.inRange(hsv, lo, hi)
+            if int(np.count_nonzero(mask)) < 15:
+                prices.append(None)
+                continue
+            val = _read_digits_with_split(crop, hsv_ranges=SHOP_PRICE_HSV_RANGES, min_score=0.52)
+            prices.append(val if (val is not None and 1 <= val <= 99999) else None)
+    return prices
 
 
 def is_shop_buy_enabled(frame: np.ndarray, buy_pos: Optional[tuple[float, float]] = None) -> bool:
@@ -3754,6 +4292,164 @@ def evaluate_selected_shop_artifact(
     display_title = artifact_name if artifact_name else "Artifact"
     label = f"{display_title} [{' | '.join(tags)}]"
     return (tier_base + bonus, label)
+
+
+@dataclass(frozen=True)
+class ShopCandidate:
+    """Evaluated Merchant Shop item with slot position, build score, and price."""
+
+    slot_idx: int
+    pos: tuple[float, float]
+    score: int
+    label: str
+    price: Optional[int]
+    affordable: bool
+    worth: bool
+
+
+@dataclass(frozen=True)
+class ShopPurchasePlan:
+    """Optimal sequence of Merchant Shop items selected for current Mana budget."""
+
+    selected: list[ShopCandidate]
+    eligible_count: int
+    total_cost: Optional[int]
+    total_score: int
+    remaining_mana: Optional[int]
+    used_budget_optimizer: bool
+
+
+def _normalize_owned_artifacts(owned_artifacts: Optional[set[str]]) -> set[str]:
+    if owned_artifacts is None:
+        return set(knowledge.owned_artifacts())
+    normalized: set[str] = set()
+    for item in owned_artifacts:
+        canon = knowledge.canonical_artifact(knowledge.artifact_name_from_label(item))
+        if canon:
+            normalized.add(canon)
+        else:
+            raw = knowledge.norm(item)
+            if raw:
+                normalized.add(raw)
+    return normalized
+
+
+def plan_shop_purchases(
+    candidates: list[ShopCandidate],
+    mana: Optional[int],
+    owned_artifacts: Optional[set[str]] = None,
+) -> ShopPurchasePlan:
+    """Plan which affordable, worthy shop artifacts to buy within the current Mana budget.
+
+    Maximizes joint value (including dynamic Artifact-Set Synergy unlocked across items
+    bought together) when both Mana and all eligible item prices are known; otherwise
+    falls back to dynamic-synergy greedy ordering.
+    """
+    eligible = [c for c in candidates if c.affordable and c.worth]
+    if not eligible:
+        return ShopPurchasePlan([], 0, 0 if mana is not None else None, 0, mana, mana is not None)
+
+    base_owned = _normalize_owned_artifacts(owned_artifacts)
+    standalone_scores: list[int] = []
+    individual_effs: list[int] = []
+    canons: list[Optional[str]] = []
+
+    for c in eligible:
+        init_set_bonus, _ = knowledge.artifact_synergy_bonus(c.label, owned=base_owned)
+        individual_eff = int(c.score) + (2000 if "Build:" in c.label else 0)
+        standalone = individual_eff - init_set_bonus
+        canon = knowledge.canonical_artifact(knowledge.artifact_name_from_label(c.label))
+        individual_effs.append(individual_eff)
+        standalone_scores.append(standalone)
+        canons.append(canon)
+
+    can_optimize = (
+        mana is not None
+        and mana > 0
+        and len(eligible) <= 12
+        and all(c.price is not None and 0 < c.price <= mana for c in eligible)
+    )
+
+    if can_optimize:
+        assert mana is not None
+        n = len(eligible)
+        best_key: Optional[tuple[int, int, int, int]] = None
+        best_idxs: list[int] = []
+        best_cost = 0
+        best_total_val = 0
+
+        for mask in range(1, 1 << n):
+            idxs = [i for i in range(n) if (mask >> i) & 1]
+            cost = sum(int(eligible[i].price or 0) for i in idxs)
+            if cost > mana:
+                continue
+
+            idxs_sim = sorted(idxs, key=lambda i: (-standalone_scores[i], eligible[i].slot_idx))
+            sim_owned = set(base_owned)
+            total_val = 0
+            max_single = -10**9
+            for i in idxs_sim:
+                set_b, _ = knowledge.artifact_synergy_bonus(eligible[i].label, owned=sim_owned)
+                val = standalone_scores[i] + set_b
+                total_val += val
+                if val > max_single:
+                    max_single = val
+                canon = canons[i]
+                if canon:
+                    sim_owned.add(canon)
+
+            key = (total_val, len(idxs), -cost, max_single)
+            if best_key is None or key > best_key:
+                best_key = key
+                best_idxs = idxs
+                best_cost = cost
+                best_total_val = total_val
+
+        ordered_idxs = sorted(
+            best_idxs,
+            key=lambda i: (individual_effs[i], -(eligible[i].price or 0)),
+            reverse=True,
+        )
+        ordered = [eligible[i] for i in ordered_idxs]
+        return ShopPurchasePlan(
+            selected=ordered,
+            eligible_count=len(eligible),
+            total_cost=best_cost,
+            total_score=best_total_val,
+            remaining_mana=mana - best_cost,
+            used_budget_optimizer=True,
+        )
+
+    # Fallback: dynamic-synergy greedy ordering when mana or price is unavailable
+    sim_owned = set(base_owned)
+    remaining_idxs = list(range(len(eligible)))
+    ordered = []
+    total_val = 0
+    while remaining_idxs:
+        best_i = max(
+            remaining_idxs,
+            key=lambda i: (
+                standalone_scores[i] + knowledge.artifact_synergy_bonus(eligible[i].label, owned=sim_owned)[0],
+                -(eligible[i].price or 0),
+                -eligible[i].slot_idx,
+            ),
+        )
+        remaining_idxs.remove(best_i)
+        set_b, _ = knowledge.artifact_synergy_bonus(eligible[best_i].label, owned=sim_owned)
+        total_val += standalone_scores[best_i] + set_b
+        canon = canons[best_i]
+        if canon:
+            sim_owned.add(canon)
+        ordered.append(eligible[best_i])
+
+    return ShopPurchasePlan(
+        selected=ordered,
+        eligible_count=len(eligible),
+        total_cost=None,
+        total_score=total_val,
+        remaining_mana=None,
+        used_budget_optimizer=False,
+    )
 
 
 def detect_learn_button(frame: np.ndarray, min_confidence: float = 0.65) -> Optional[tuple[float, float]]:

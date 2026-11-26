@@ -8,8 +8,25 @@ import json
 import logging
 import math
 from pathlib import Path
+import re
 from typing import Any, Optional
 from storage import write_json_atomic
+
+
+def _normalize_map(game_map: Optional[str]) -> str:
+    """Normalize a stage/map identifier to a canonical bucket key ('depth', 'ecosystem', ...)."""
+    if not game_map:
+        return ""
+    low = re.sub(r"[^a-z0-9]+", " ", str(game_map).lower()).strip()
+    if not low:
+        return ""
+    if "depth" in low:
+        return "depth"
+    if "artificial" in low or "virtual" in low or "ecosystem" in low or "eco system" in low:
+        return "ecosystem"
+    if "terra" in low:
+        return "terra"
+    return low.replace(" ", "_")
 
 BASE_DIR = Path(__file__).resolve().parent
 DATA_DIR = BASE_DIR / "data"
@@ -64,6 +81,27 @@ class AdaptiveLearner:
                     policy["skill_usage"] = {}
                 recent = policy.get("recent_run_ids", [])
                 policy["recent_run_ids"] = [item for item in recent if isinstance(item, str)] if isinstance(recent, list) else []
+                raw_maps = policy.get("map_averages")
+                clean_maps: dict[str, dict[str, Any]] = {}
+                if isinstance(raw_maps, dict):
+                    for mk, mv in raw_maps.items():
+                        nk = _normalize_map(mk)
+                        if not nk or not isinstance(mv, dict):
+                            continue
+                        avg_v = mv.get("average_survival_sec", 0.0)
+                        cnt_v = mv.get("total_runs", 0)
+                        if (
+                            isinstance(avg_v, (int, float))
+                            and math.isfinite(avg_v)
+                            and avg_v >= 0
+                            and isinstance(cnt_v, int)
+                            and cnt_v >= 0
+                        ):
+                            clean_maps[nk] = {
+                                "average_survival_sec": float(avg_v),
+                                "total_runs": int(cnt_v),
+                            }
+                policy["map_averages"] = clean_maps
                 return policy
             except Exception:
                 pass
@@ -74,6 +112,7 @@ class AdaptiveLearner:
             "synergy_weights": {},     # "skill_a+skill_b" -> synergy weight bonus (-1.0 to +5.0)
             "skill_usage": {},         # skill_key -> EMA of how often it is used (baseline for the advantage)
             "average_survival_sec": 0.0,
+            "map_averages": {},        # game_map -> {"average_survival_sec": float, "total_runs": int}
         }
 
     # ------------------------------------------------------------------ credit assignment (v2)
@@ -83,10 +122,13 @@ class AdaptiveLearner:
         reward: float,
         lr: float,
         core_skills: Optional[set[str]] = None,
+        skill_levels: Optional[dict[str, int]] = None,
+        starting_skill: Optional[str] = None,
     ) -> tuple[dict[str, float], dict[str, float], dict[str, float], dict[str, float]]:
         """Advantage-based update of skill/synergy weights. Returns (skills_updated, skill_deltas, syn_updated, syn_deltas)
         for the skills used in this run."""
         core_skills = core_skills or set()
+        levels = skill_levels or {}
         weights = self.policy["skill_weights"]
         syn_weights = self.policy["synergy_weights"]
         usage = self.policy.setdefault("skill_usage", {})
@@ -100,12 +142,21 @@ class AdaptiveLearner:
 
         skills_updated: dict[str, float] = {}
         skill_deltas: dict[str, float] = {}
-        # 2) skills: used -> (1 - usual rate); known-but-unused -> (0 - usual rate) at half strength
+        invest_map: dict[str, float] = {}
+        # 2) skills: credit actual investment (a free character-starting Lv.1 skill counts as 0.0 until upgraded)
         for sk, p in prior.items():
             used = sk in active_skills
-            if not used and sk not in weights:
+            if not used:
+                inv = 0.0
+            elif starting_skill and sk == starting_skill and sk in levels:
+                lvl = int(levels.get(sk, 1))
+                inv = 0.0 if lvl <= 1 else min(1.0, (lvl - 1) / 6.0)
+            else:
+                inv = 1.0
+            invest_map[sk] = inv
+            if inv <= 0.0 and sk not in weights:
                 continue
-            advantage = (1.0 - p) if used else -p * ABSENT_FACTOR
+            advantage = (inv - p) if inv > 0.0 else -p * ABSENT_FACTOR
             current = weights.get(sk, 0.0)
             floor = 0.0 if sk in core_skills else -1.5
             new_val = round(max(floor, min(8.0, current + lr * reward * 2.0 * advantage)), 3)
@@ -114,15 +165,18 @@ class AdaptiveLearner:
                 skills_updated[sk] = new_val
                 skill_deltas[sk] = round(new_val - current, 3)
 
-        # 3) synergy: expected co-use under independence is p_a * p_b, so an always-together pair gets ~0
+        # 3) synergy: expected co-use under independence is p_a * p_b, weighted by actual investment
         synergies_updated: dict[str, float] = {}
         synergy_deltas: dict[str, float] = {}
         for i in range(len(all_skills)):
             for j in range(i + 1, len(all_skills)):
                 a, b = all_skills[i], all_skills[j]
+                inv_ab = invest_map.get(a, 0.0) * invest_map.get(b, 0.0)
+                if inv_ab <= 0.0:
+                    continue
                 pair_key = f"{a}+{b}"
                 cur_syn = syn_weights.get(pair_key, 0.0)
-                advantage = 1.0 - prior[a] * prior[b]
+                advantage = inv_ab - prior[a] * prior[b]
                 new_syn = round(max(-1.0, min(5.0, cur_syn + lr * reward * 1.5 * advantage)), 3)
                 syn_weights[pair_key] = new_syn
                 synergies_updated[pair_key] = new_syn
@@ -131,8 +185,32 @@ class AdaptiveLearner:
         # 4) update the usage baseline AFTER crediting (so this run is judged against past behaviour)
         for sk in set(all_skills) | set(usage):
             p = prior.get(sk, USAGE_PRIOR)
-            usage[sk] = round((1.0 - USAGE_ALPHA) * p + USAGE_ALPHA * (1.0 if sk in active_skills else 0.0), 4)
+            usage[sk] = round((1.0 - USAGE_ALPHA) * p + USAGE_ALPHA * invest_map.get(sk, 0.0), 4)
         return skills_updated, skill_deltas, synergies_updated, synergy_deltas
+
+    def rebuild_weights_from_history(self, default_starting_skill: Optional[str] = None) -> None:
+        """Recompute skill_weights, synergy_weights, and skill_usage from recorded run history."""
+        self.policy["skill_weights"] = {}
+        self.policy["synergy_weights"] = {}
+        self.policy["skill_usage"] = {}
+        for rec in self.history:
+            skills = {s for s in rec.get("skills", []) if isinstance(s, str)}
+            reward = rec.get("reward")
+            if not skills or not isinstance(reward, (int, float)) or not math.isfinite(reward):
+                continue
+            lr = 0.20 if (reward >= 0 or rec.get("is_human")) else 0.06
+            lvls = rec.get("skill_levels")
+            sk_levels = lvls if isinstance(lvls, dict) else None
+            self._apply_credit(
+                skills,
+                float(reward),
+                lr,
+                core_skills=None,
+                skill_levels=sk_levels,
+                starting_skill=default_starting_skill,
+            )
+        self.policy["version"] = POLICY_VERSION
+        self.save()
 
     def _migrate_policy_if_needed(self) -> None:
         """v1 -> v2: weights were saturated (every used skill got the same bonus), so rebuild them by replaying the
@@ -186,8 +264,10 @@ class AdaptiveLearner:
         kills: int = 0,
         core_skills: Optional[set[str]] = None,
         skill_levels: Optional[dict[str, int]] = None,
+        game_map: str = "",
+        starting_skill: Optional[str] = None,
     ) -> dict[str, Any]:
-        """Evaluate match outcome against the bot's own historical average.
+        """Evaluate match outcome against the bot's own historical average (per-map when known).
         - Better than average: Award positive reward to build on successful skills/synergies.
         - Below average: Apply gentle adjustment without destroying proven builds (bot is still learning movement).
         """
@@ -203,14 +283,26 @@ class AdaptiveLearner:
             }
         combos = combos or []
         core_skills = core_skills or set()
+        norm_map = _normalize_map(game_map)
 
         n = self.policy.get("total_runs_analyzed", 0)
-        prev_avg = float(self.policy.get("average_survival_sec", 0.0))
+        global_prev_avg = float(self.policy.get("average_survival_sec", 0.0))
+        if n == 0 or global_prev_avg <= 10.0:
+            global_prev_avg = max(180.0, min(600.0, survival_seconds))
+            self.policy["average_survival_sec"] = global_prev_avg
 
-        # Baseline: initialize from first run if no history
-        if n == 0 or prev_avg <= 10.0:
-            prev_avg = max(180.0, min(600.0, survival_seconds))
-            self.policy["average_survival_sec"] = prev_avg
+        map_averages = self.policy.setdefault("map_averages", {})
+        if norm_map:
+            m_entry = map_averages.setdefault(norm_map, {"average_survival_sec": 0.0, "total_runs": 0})
+            m_n = int(m_entry.get("total_runs", 0))
+            prev_avg = float(m_entry.get("average_survival_sec", 0.0))
+            if m_n == 0 or prev_avg <= 10.0:
+                prev_avg = max(180.0, min(600.0, survival_seconds))
+                m_entry["average_survival_sec"] = prev_avg
+        else:
+            m_entry = None
+            m_n = 0
+            prev_avg = global_prev_avg
 
         # Phân biệt ván người chơi (>= 20 phút) vs ván bot tự chơi (< 20 phút)
         is_human_run = bool(survival_seconds >= 1200.0)
@@ -229,7 +321,12 @@ class AdaptiveLearner:
         all_skills = sorted(list(active_skills))
         # Core/preferred skills never drop below 0; credit goes by advantage over their usual usage rate
         skills_updated, skill_deltas, synergies_updated, synergy_deltas = self._apply_credit(
-            set(active_skills), reward, lr, core_skills
+            set(active_skills),
+            reward,
+            lr,
+            core_skills,
+            skill_levels=skill_levels,
+            starting_skill=starting_skill,
         )
         self.policy["version"] = POLICY_VERSION
 
@@ -237,9 +334,16 @@ class AdaptiveLearner:
         # QUAN TRỌNG: TUYỆT ĐỐI KHÔNG để các ván người chơi (25p - 110p) làm lệch mốc trung bình của bot!
         if not is_human_run:
             weight = min(n, 12)
-            new_avg = round((prev_avg * weight + survival_seconds) / (weight + 1), 1)
+            new_global_avg = round((global_prev_avg * weight + survival_seconds) / (weight + 1), 1)
             self.policy["total_runs_analyzed"] = n + 1
-            self.policy["average_survival_sec"] = new_avg
+            self.policy["average_survival_sec"] = new_global_avg
+            if m_entry is not None:
+                m_weight = min(m_n, 12)
+                new_avg = round((prev_avg * m_weight + survival_seconds) / (m_weight + 1), 1)
+                m_entry["total_runs"] = m_n + 1
+                m_entry["average_survival_sec"] = new_avg
+            else:
+                new_avg = new_global_avg
         else:
             self.policy["total_runs_analyzed"] = n + 1
             new_avg = prev_avg
@@ -256,6 +360,8 @@ class AdaptiveLearner:
             "combos": combos,
             "is_human": is_human_run,
         }
+        if norm_map:
+            run_record["game_map"] = norm_map
         if skill_levels:
             run_record["skill_levels"] = {k: int(v) for k, v in skill_levels.items() if k in all_skills}
         self.history.append(run_record)
@@ -264,6 +370,7 @@ class AdaptiveLearner:
 
         return {
             "run_id": run_id,
+            "game_map": norm_map,
             "survival_sec": survival_seconds,
             "prev_avg_sec": prev_avg,
             "diff_sec": diff,

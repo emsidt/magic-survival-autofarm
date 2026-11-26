@@ -479,9 +479,9 @@ def format_match_summary(
     if game_map:
         map_low = game_map.lower().strip()
         if "depth" in map_low:
-            lines.append("🗺️  Bản đồ: Depth (Vực thẳm - Tốc độ thời gian x1.24 [Time Circuit])")
-        elif "virtual" in map_low or "ecosystem" in map_low:
-            lines.append("🗺️  Bản đồ: Virtual Ecosystem (Hệ sinh thái ảo)")
+            lines.append("🗺️  Bản đồ: Depths (Vực thẳm - Tốc độ thời gian x1.24 [Time Circuit])")
+        elif "artificial" in map_low or "virtual" in map_low or "ecosystem" in map_low:
+            lines.append("🗺️  Bản đồ: Artificial Ecosystem (Hệ sinh thái nhân tạo)")
         else:
             lines.append(f"🗺️  Bản đồ: {game_map.title()}")
     lines.append(f"⏱️  Thời gian sống: {survival_detail} {diff_str}".strip())
@@ -551,19 +551,29 @@ def finish_match(
     """Preserve the run ID, train on gameplay survival time, and format log summary."""
     active_set = set(active_skills)
     levels = dict(skill_levels or {})
+    start_skill = ""
     if character:
         char_norm = character.lower().strip()
-        start_skill = botcore.CHARACTER_STARTING_SKILLS.get(char_norm)
+        start_skill = botcore.CHARACTER_STARTING_SKILLS.get(char_norm, "")
         if start_skill:
             active_set.add(start_skill)
             if start_skill not in levels:
                 levels[start_skill] = 1
 
+    norm_map = (
+        botcore.normalize_game_map(game_map)
+        if hasattr(botcore, "normalize_game_map")
+        else str(game_map).lower().strip()
+    )
+
     recorder.record_decision(frame, "endgame", "confirm", metadata={"timer_source": "hud"})
     run_id = recorder.current_run_id or f"unrecorded_{uuid4().hex}"
     minutes, seconds = divmod(int(max(0.0, survival_seconds)), 60)
     survival_str = f"{minutes:02d}:{seconds:02d}" if survival_seconds > 0 else ""
-    recorder.finish_run(survival_time=survival_str)
+    if norm_map:
+        recorder.finish_run(survival_time=survival_str, game_map=norm_map)
+    else:
+        recorder.finish_run(survival_time=survival_str)
     if survival_seconds <= 0:
         summary_block, _ = format_match_summary(
             survival_seconds=0.0,
@@ -574,7 +584,7 @@ def finish_match(
             gold=gold,
             gems=gems,
             kills=kills,
-            game_map=game_map,
+            game_map=norm_map or game_map,
         )
         print(summary_block)
         return None
@@ -591,6 +601,10 @@ def finish_match(
         learn_kwargs["kills"] = kills
     if levels:
         learn_kwargs["skill_levels"] = levels
+    if norm_map:
+        learn_kwargs["game_map"] = norm_map
+    if start_skill:
+        learn_kwargs["starting_skill"] = start_skill
 
     report = learner.evaluate_and_learn_run(**learn_kwargs)
 
@@ -603,7 +617,7 @@ def finish_match(
         gold=gold,
         gems=gems,
         kills=kills,
-        game_map=game_map,
+        game_map=norm_map or game_map,
     )
 
     if isinstance(report, dict):

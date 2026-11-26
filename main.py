@@ -37,12 +37,14 @@ import win32api, win32gui, win32process, win32con
 pydirectinput.FAILSAFE = False
 
 import botcore
+import knowledge
 from game_actions import (ActionCancelled, GuardedController, capture_frame,
                           select_attribute, select_combination, select_card, remember_card, finish_match,
                           select_character, dismiss_death, close_ad, back_from_ad, move_from_frame,
                           select_chest_artifact, select_strengthen_magic)
 
 from botcore import (
+    ShopCandidate,
     choose_best_artifact_or_card,
     choose_direction,
     detect_buy_button,
@@ -56,6 +58,7 @@ from botcore import (
     detect_obtain_button,
     detect_selected,
     detect_settings_dialog,
+    detect_shop_item_prices,
     detect_start_game,
     detect_shop_x_button,
     evaluate_selected_chest_artifact,
@@ -69,6 +72,7 @@ from botcore import (
     is_shop_artifact_worth_buying,
     is_shop_buy_enabled,
     is_three_card_chest,
+    plan_shop_purchases,
 )
 from data_recorder import DataRecorder
 from learning_engine import get_adaptive_learner
@@ -751,6 +755,7 @@ class FarmApp:
         match_start_time: float = 0.0
         last_known_game_timer_sec: float = 0.0
         last_timer_scan_time: float = 0.0
+        current_game_map: str = botcore.normalize_game_map(self.config.get("game_map", "depth")) or "depth"
         while not self.ending.is_set():
             try:
                 while not self.ending.is_set():
@@ -890,6 +895,7 @@ class FarmApp:
                                     active_skills.clear()
                                     skill_levels.clear()
                                     maxed_skills.clear()
+                                    knowledge.reset_owned_artifacts(self.config.get("character", "summoner"))
                                     self.previous_direction = last_chest_pos = last_monolith_pos = None
                                     self._push("status", "[Restore Gold] Đã bấm Confirm nhận lại vàng sau crash.")
                                 continue
@@ -938,7 +944,8 @@ class FarmApp:
                                             if v_fin is not None:
                                                 last_known_game_timer_sec = v_fin
                                         if match_start_time > 0.0:
-                                            wall_sec = max(0.0, start_tick - match_start_time)
+                                            time_mult = 1.24 if current_game_map == "depth" else 1.0
+                                            wall_sec = max(0.0, (start_tick - match_start_time) * time_mult)
                                             if last_known_game_timer_sec <= 0.0 or last_known_game_timer_sec > wall_sec + 35.0:
                                                 last_known_game_timer_sec = wall_sec
                                         stats = botcore.detect_results_stats(frame)
@@ -947,7 +954,7 @@ class FarmApp:
                                             active_skills, self.config.get("skill_priority", []),
                                             skill_levels=skill_levels,
                                             character=self.config.get("character", "summoner"),
-                                            game_map=self.config.get("game_map", "depth"),
+                                            game_map=current_game_map,
                                             gold=stats.get("gold", 0),
                                             gems=stats.get("gems", 0),
                                             kills=stats.get("kills", 0),
@@ -963,6 +970,7 @@ class FarmApp:
                                     active_skills.clear()
                                     skill_levels.clear()
                                     maxed_skills.clear()
+                                    knowledge.reset_owned_artifacts(self.config.get("character", "summoner"))
                                     controller.tap(list(confirm_pos), rect)
                                     now_tick = time.monotonic()
                                     last_confirm_click_time = now_tick
@@ -1017,6 +1025,7 @@ class FarmApp:
                                     active_skills.clear()
                                     skill_levels.clear()
                                     maxed_skills.clear()
+                                    knowledge.reset_owned_artifacts(self.config.get("character", "summoner"))
                                     strengthened_skills.clear()
                                     ad_wait_start_time = 0.0
                                     match_start_time = 0.0
@@ -1046,6 +1055,7 @@ class FarmApp:
                                     active_skills.clear()
                                     skill_levels.clear()
                                     maxed_skills.clear()
+                                    knowledge.reset_owned_artifacts(self.config.get("character", "summoner"))
                                     ad_wait_start_time = 0.0
                                     match_start_time = 0.0
                                     if self.config.get("auto_restart", True) and (start_tick - last_auto_action_time >= 1.5):
@@ -1063,12 +1073,19 @@ class FarmApp:
                                 # A3. MÀN HÌNH SẢNH / CHỌN MAP (ENTER AREA SCREEN): Bấm "Enter Area"
                                 ea_pos = detect_enter_area(frame)
                                 if ea_pos:
+                                    detected_map = botcore.detect_selected_map(frame)
+                                    if detected_map:
+                                        current_game_map = detected_map
+                                        self.config["game_map"] = detected_map
+                                    else:
+                                        current_game_map = botcore.normalize_game_map(self.config.get("game_map", "depth")) or "depth"
                                     match_running = False
                                     post_death_phase = False
                                     post_death_at = 0.0
                                     active_skills.clear()
                                     skill_levels.clear()
                                     maxed_skills.clear()
+                                    knowledge.reset_owned_artifacts(self.config.get("character", "summoner"))
                                     ad_wait_start_time = 0.0
                                     currencies = botcore.detect_main_screen_currencies(frame)
                                     gold = currencies.get("gold")
@@ -1082,6 +1099,7 @@ class FarmApp:
                                         if match_start_time == 0.0:
                                             self.recorder.start_new_run()
                                             match_start_time = time.monotonic()
+                                        knowledge.reset_owned_artifacts(self.config.get("character", "summoner"))
                                         last_chest_pos = None
                                         last_monolith_pos = None
                                         self.previous_direction = None
@@ -1216,6 +1234,7 @@ class FarmApp:
                                         )
                                         last_chest_scan_time = last_auto_action_time
                                         self.rule_counts["nang_cap"] = self.rule_counts.get("nang_cap", 0) + 1
+                                        knowledge.remember_artifact(chosen.label)
                                         self._push("status", f"Đã xác nhận nhận cổ vật: {chosen.label} (ô {chosen.index})")
                                         auto_action_done = True
                                     else:
@@ -1235,10 +1254,9 @@ class FarmApp:
                                 if start_tick - last_shop_action_time >= 1.2:
                                     prefer_cc = self.config.get("prefer_crit_and_cooldown", True)
                                     shop_items = get_shop_item_targets()
-                                    best_buy_slot = None
-                                    best_buy_score = -1
-                                    best_buy_label = ""
+                                    scanned_candidates: list[ShopCandidate] = []
                                     current_mana = detect_mana_orb_currency(frame)
+                                    slot_prices = detect_shop_item_prices(frame)
                                     mana_info = f" ({current_mana} Mana)" if current_mana is not None else ""
                                     self._push("status", f"[Cửa hàng] Mở Thương nhân{mana_info}! Đang duyệt full 8 món...")
 
@@ -1258,51 +1276,111 @@ class FarmApp:
                                         is_affordable = is_shop_buy_enabled(f_item, buy_pos=shop_buy_pos)
                                         s_item, l_item = evaluate_selected_shop_artifact(f_item, prefer_cc, active_skills=build_skills)
                                         is_worth = is_shop_artifact_worth_buying(s_item, l_item)
+                                        item_price = slot_prices[idx - 1] if idx - 1 < len(slot_prices) else None
 
-                                        if is_affordable and is_worth:
-                                            effective_score = s_item + (2000 if "Build:" in l_item else 0)
-                                            if effective_score > best_buy_score:
-                                                best_buy_score = effective_score
-                                                best_buy_slot = s_target
-                                                best_buy_label = l_item
+                                        scanned_candidates.append(
+                                            ShopCandidate(
+                                                slot_idx=idx,
+                                                pos=tuple(s_target),
+                                                score=int(s_item),
+                                                label=l_item,
+                                                price=item_price,
+                                                affordable=is_affordable,
+                                                worth=is_worth,
+                                            )
+                                        )
 
                                     if shop_lost:
                                         last_shop_action_time = time.monotonic()
                                         continue
 
-                                    # Nếu có món đủ tiền mua và thật sự đáng mua -> chọn và bấm BUY!
-                                    if best_buy_slot and best_buy_score > 0 and is_shop_artifact_worth_buying(best_buy_score, best_buy_label):
-                                        controller.tap(list(best_buy_slot), rect)
+                                    shop_plan = plan_shop_purchases(scanned_candidates, mana=current_mana)
+                                    if shop_plan.selected:
+                                        plan_names = " -> ".join(f"Ô {c.slot_idx}" for c in shop_plan.selected)
+                                        if shop_plan.used_budget_optimizer and shop_plan.total_cost is not None:
+                                            self._push(
+                                                "status",
+                                                f"[Cửa hàng] Tối ưu giỏ {len(shop_plan.selected)}/{shop_plan.eligible_count} món ({plan_names}), tổng {shop_plan.total_cost} Mana.",
+                                            )
+                                        else:
+                                            self._push(
+                                                "status",
+                                                f"[Cửa hàng] Chọn {len(shop_plan.selected)}/{shop_plan.eligible_count} món theo ưu tiên ({plan_names}).",
+                                            )
+
+                                    bought_count = 0
+                                    skipped_any = False
+
+                                    def _try_buy_candidate(cand: ShopCandidate) -> bool:
+                                        nonlocal bought_count, shop_lost, last_shop_action_time, last_auto_action_time, auto_action_done
+                                        controller.tap(list(cand.pos), rect)
                                         time.sleep(0.25)
                                         selected_item = capture()
                                         fresh_buy = detect_buy_button(selected_item)
-                                        if not fresh_buy or not is_shop_buy_enabled(selected_item, fresh_buy):
-                                            last_shop_action_time = time.monotonic()
-                                            continue
+                                        if not fresh_buy:
+                                            shop_lost = True
+                                            return False
+                                        if not is_shop_buy_enabled(selected_item, fresh_buy):
+                                            return False
+                                        c_lbl = cand.label
+                                        if bought_count > 0:
+                                            _, refreshed_lbl = evaluate_selected_shop_artifact(
+                                                selected_item, prefer_cc, active_skills=build_skills
+                                            )
+                                            if refreshed_lbl and "select the desired artifact" not in refreshed_lbl.lower():
+                                                c_lbl = refreshed_lbl
                                         controller.tap(list(fresh_buy), rect)
                                         now_tick = time.monotonic()
                                         last_shop_action_time = now_tick
                                         last_auto_action_time = now_tick
                                         self.rule_counts["mua_do"] = self.rule_counts.get("mua_do", 0) + 1
-                                        self._push("status", f"[Cửa hàng] Đã mua thành công: [{best_buy_label}]!")
+                                        bought_count += 1
+                                        knowledge.remember_artifact(c_lbl)
+                                        self._push("status", f"[Cửa hàng] Đã mua thành công: [{c_lbl}]!")
                                         auto_action_done = True
-                                        time.sleep(0.65)
-                                        f_after = capture()
-                                        shop_x_pos = detect_shop_x_button(f_after)
-                                        if shop_x_pos:
-                                            controller.tap(list(shop_x_pos), rect)
+                                        time.sleep(0.55)
+                                        return True
+
+                                    for cand in shop_plan.selected:
+                                        if not _try_buy_candidate(cand):
+                                            if shop_lost:
+                                                break
+                                            skipped_any = True
+
+                                    if shop_plan.used_budget_optimizer and skipped_any and not shop_lost:
+                                        chosen_slots = {c.slot_idx for c in shop_plan.selected}
+                                        fallback_cands = sorted(
+                                            [
+                                                c for c in scanned_candidates
+                                                if c.affordable and c.worth and c.slot_idx not in chosen_slots
+                                            ],
+                                            key=lambda c: (c.score + (2000 if "Build:" in c.label else 0), -(c.price or 0)),
+                                            reverse=True,
+                                        )
+                                        for cand in fallback_cands:
+                                            if not _try_buy_candidate(cand) and shop_lost:
+                                                break
+
+                                    if shop_lost:
+                                        last_shop_action_time = time.monotonic()
+                                        continue
+
+                                    f_after = capture()
+                                    shop_x_pos = detect_shop_x_button(f_after)
+                                    if shop_x_pos:
+                                        controller.tap(list(shop_x_pos), rect)
+                                    now_tick = time.monotonic()
+                                    last_shop_action_time = now_tick
+                                    last_auto_action_time = now_tick
+                                    auto_action_done = True
+                                    if bought_count > 0:
+                                        if bought_count >= 2:
+                                            self._push("status", f"[Cửa hàng] Đã mua {bought_count} món phù hợp trước khi đóng shop!")
                                         time.sleep(0.4)
                                     else:
                                         # Không đủ mana mua món nào hoặc không có món hợp build -> Bấm nút 'X' đóng cửa hàng giữ Mana
-                                        shop_x_pos = detect_shop_x_button(capture())
-                                        if shop_x_pos:
-                                            controller.tap(list(shop_x_pos), rect)
-                                        now_tick = time.monotonic()
-                                        last_shop_action_time = now_tick
-                                        last_auto_action_time = now_tick
                                         self.rule_counts["dong_cua_hang"] = self.rule_counts.get("dong_cua_hang", 0) + 1
                                         self._push("status", f"[Cửa hàng] Không có món phù hợp với build -> Giữ Mana, bấm 'X' đóng shop!")
-                                        auto_action_done = True
                                         time.sleep(0.8)
                                 continue
 

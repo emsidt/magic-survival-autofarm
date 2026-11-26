@@ -351,6 +351,48 @@ add device 3: /dev/input/event2
             self.assertEqual(decoded.shape, (4, 6, 3))
             self.assertTrue(np.array_equal(decoded, bgr))
 
+    def test_move_speed_scale_reduces_joystick_radius_safely(self):
+        cx, cy, tx, ty = self.ctrl._calc_joystick_coords(
+            (1.0, 0.0),
+            {"joystick_position": [0.5, 0.65], "joystick_radius_px": 200, "move_speed_scale": 0.65},
+        )
+        self.assertEqual((cx, cy), (540, 1248))
+        self.assertEqual((tx, ty), (670, 1248))  # 540 + 200 * 0.65
+
+        # Very small speed scale clamps at >= 60 px so joystick still registers movement
+        _, _, tx_min, _ = self.ctrl._calc_joystick_coords(
+            (1.0, 0.0),
+            {"joystick_position": [0.5, 0.65], "joystick_radius_px": 200, "move_speed_scale": 0.1},
+        )
+        self.assertEqual(tx_min, 600)
+
+    def test_touch_hold_ms_pauses_persistent_touch_during_wave(self):
+        self.ctrl._touch_device = "/dev/input/event2"
+        self.ctrl.is_moving = True
+        self.ctrl.current_direction = (1.0, 0.0)
+        self.ctrl.last_direction_time = 2.2
+        self.ctrl.last_move_time = 2.0
+
+        # When touch_hold_ms=0 (normal play), _touch_up must NOT be called
+        self.ctrl._touch_down = True
+        self.ctrl.current_config = {"touch_hold_ms": 0}
+        with patch.object(self.ctrl, "_touch_up") as touch_up, \
+                patch.object(self.ctrl._stop_event, "is_set", side_effect=[False, True]), \
+                patch("adb_controller.time.monotonic", return_value=2.35), \
+                patch("adb_controller.time.sleep"):
+            self.ctrl._movement_worker_loop()
+        touch_up.assert_not_called()
+
+        # When touch_hold_ms=280 and 300ms elapsed, _touch_up lifts finger cleanly
+        self.ctrl._touch_down = True
+        self.ctrl.current_config = {"touch_hold_ms": 280}
+        with patch.object(self.ctrl, "_touch_up") as touch_up, \
+                patch.object(self.ctrl._stop_event, "is_set", side_effect=[False, True]), \
+                patch("adb_controller.time.monotonic", return_value=2.30), \
+                patch("adb_controller.time.sleep"):
+            self.ctrl._movement_worker_loop()
+        touch_up.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -124,6 +124,11 @@ def export_dataset() -> Path:
         survival_sec = float(hist_data.get("survival_sec") or _parse_survival_str(summary_data.get("survival_time")) or 0.0)
         kills = int(hist_data.get("kills") or summary_data.get("kills") or 0)
         is_human = bool(hist_data.get("is_human") or (survival_sec >= 1200.0))
+        game_map = str(
+            hist_data.get("game_map")
+            or summary_data.get("game_map")
+            or ("depth" if run_id >= "run_20261126_010000" else "ecosystem")
+        ).lower().strip()
 
         decisions = []
         if dec_file.is_file():
@@ -269,6 +274,7 @@ def export_dataset() -> Path:
                     skill_rows.append({
                         "run_id": run_id,
                         "step": step,
+                        "game_map": game_map,
                         "chosen_skill": chosen_skill,
                         "chosen_slot": chosen_slot,
                         "offered_level": offered_lvl,
@@ -299,6 +305,7 @@ def export_dataset() -> Path:
         if running_active or survival_sec > 0:
             run_rows.append({
                 "run_id": run_id,
+                "game_map": game_map,
                 "survival_sec": round(survival_sec, 1),
                 "kills": kills,
                 "is_human": 1 if is_human else 0,
@@ -321,8 +328,13 @@ def export_dataset() -> Path:
         surv = float(h_item.get("survival_sec", 0.0))
         is_hum = bool(h_item.get("is_human") or surv >= 1200.0)
         sk_lvls = h_item.get("skill_levels") or {s: 4 for s in sk_list}
+        h_map = str(
+            h_item.get("game_map")
+            or ("depth" if r_id >= "run_20261126_010000" else "ecosystem")
+        ).lower().strip()
         run_rows.append({
             "run_id": r_id,
+            "game_map": h_map,
             "survival_sec": round(surv, 1),
             "kills": int(h_item.get("kills", 0)),
             "is_human": 1 if is_hum else 0,
@@ -343,7 +355,7 @@ def export_dataset() -> Path:
         EXPORT_DIR / "skill_decisions.csv",
         skill_rows,
         [
-            "run_id", "step", "chosen_skill", "chosen_slot", "offered_level",
+            "run_id", "step", "game_map", "chosen_skill", "chosen_slot", "offered_level",
             "active_skills_json", "skill_levels_json", "rejected_skills_json",
             "survival_sec", "kills", "is_human",
         ],
@@ -351,7 +363,7 @@ def export_dataset() -> Path:
     _write_csv(
         EXPORT_DIR / "run_summaries.csv",
         run_rows,
-        ["run_id", "survival_sec", "kills", "is_human", "total_steps", "skills_json", "skill_levels_json", "source"],
+        ["run_id", "game_map", "survival_sec", "kills", "is_human", "total_steps", "skills_json", "skill_levels_json", "source"],
     )
     _write_csv(
         EXPORT_DIR / "vision_screens.csv",

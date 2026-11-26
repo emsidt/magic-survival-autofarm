@@ -451,3 +451,127 @@ class TestCLIFlow(unittest.TestCase):
             )
         self.assertEqual(len(observed), 2)
         self.assertEqual(observed[-1], ((20, 40), [(10, 20)]))
+
+    def test_merchant_shop_buys_multiple_affordable_worthy_items_in_priority_order(self):
+        shop_open = np.zeros((200, 100, 3), np.uint8) + 20
+        slots = [(round(0.1 * i, 2), 0.5) for i in range(1, 9)]
+        buy_btn = (0.5, 0.85)
+        x_btn = (0.9, 0.10)
+        slot_items = {
+            slots[0]: (7000, "Low Tier Worthy"),
+            slots[2]: (12000, "Mid Tier Worthy"),
+            slots[5]: (15000, "Top Item [Build: Spirit]"),
+        }
+        taps = []
+        state = {"last_slot": None, "buys": 0}
+
+        def on_tap(pos, rect=None):
+            pt = (round(pos[0], 2), round(pos[1], 2))
+            taps.append(pt)
+            if pt in slots:
+                state["last_slot"] = pt
+            elif pt == buy_btn:
+                state["buys"] += 1
+
+        with patch("botcore.get_shop_item_targets", return_value=slots), \
+                patch("botcore.detect_mana_orb_currency", return_value=950), \
+                patch("botcore.detect_shop_x_button", return_value=x_btn), \
+                patch("botcore.is_shop_buy_enabled", side_effect=lambda f, buy_pos=None: state["buys"] < 2), \
+                patch("botcore.evaluate_selected_shop_artifact",
+                      side_effect=lambda f, *a, **kw: slot_items.get(state["last_slot"], (1000, "Skip Junk"))), \
+                patch("botcore.is_shop_artifact_worth_buying", side_effect=lambda s, lbl="": s >= 5000):
+            self.run_frames(
+                [shop_open] * 13,
+                overrides={"detect_buy_button": lambda _: buy_btn},
+                controller_effects={"tap": on_tap},
+            )
+
+        buy_indices = [i for i, pt in enumerate(taps) if pt == buy_btn]
+        self.assertEqual(len(buy_indices), 2)
+        self.assertEqual(taps[buy_indices[0] - 1], slots[5])  # Top priority bought first
+        self.assertEqual(taps[buy_indices[1] - 1], slots[2])  # Second priority bought second
+        self.assertEqual(taps.count(x_btn), 1)
+        self.assertEqual(taps[-1], x_btn)
+
+    def test_merchant_shop_uses_knapsack_budget_optimizer_with_item_prices(self):
+        shop_open = np.zeros((200, 100, 3), np.uint8) + 20
+        slots = [(round(0.1 * i, 2), 0.5) for i in range(1, 9)]
+        buy_btn = (0.5, 0.85)
+        x_btn = (0.9, 0.10)
+        slot_prices = [900, 750, 450, 990, 480, 990, 990, 990]
+        slot_items = {
+            slots[1]: (630, "Single Strong [Epic | Build: Spirit]"),
+            slots[2]: (380, "Pair One [Epic | Build: Spirit]"),
+            slots[4]: (380, "Pair Two [Epic | Build: Spirit]"),
+        }
+        taps = []
+        state = {"last_slot": None, "mana": 1000}
+
+        def on_tap(pos, rect=None):
+            pt = (round(pos[0], 2), round(pos[1], 2))
+            taps.append(pt)
+            if pt in slots:
+                state["last_slot"] = pt
+            elif pt == buy_btn and state["last_slot"] in slots:
+                state["mana"] -= slot_prices[slots.index(state["last_slot"])]
+
+        def can_buy(_frame, buy_pos=None):
+            if state["last_slot"] not in slots:
+                return False
+            return state["mana"] >= slot_prices[slots.index(state["last_slot"])]
+
+        with patch("botcore.get_shop_item_targets", return_value=slots), \
+                patch("botcore.detect_mana_orb_currency", return_value=1000), \
+                patch("botcore.detect_shop_item_prices", return_value=slot_prices), \
+                patch("botcore.detect_shop_x_button", return_value=x_btn), \
+                patch("botcore.is_shop_buy_enabled", side_effect=can_buy), \
+                patch("botcore.evaluate_selected_shop_artifact",
+                      side_effect=lambda f, *a, **kw: slot_items.get(state["last_slot"], (100, "Skip Junk [Normal]"))), \
+                patch("botcore.is_shop_artifact_worth_buying", side_effect=lambda s, lbl="": s >= 300):
+            self.run_frames(
+                [shop_open] * 12,
+                overrides={"detect_buy_button": lambda _: buy_btn},
+                controller_effects={"tap": on_tap},
+            )
+
+        buy_indices = [i for i, pt in enumerate(taps) if pt == buy_btn]
+        self.assertEqual(len(buy_indices), 2)
+        bought_slots = [taps[idx - 1] for idx in buy_indices]
+        self.assertEqual(bought_slots, [slots[2], slots[4]])
+        self.assertEqual(state["mana"], 70)
+        self.assertEqual(taps.count(x_btn), 1)
+        self.assertEqual(taps[-1], x_btn)
+
+    def test_stuck_die_screen_restarts_game_after_timeout(self):
+        stuck = np.zeros((200, 100, 3), np.uint8)
+        with patch("bot_cli.dismiss_death", return_value=False):
+            controller, _, _ = self.run_frames(
+                [stuck, stuck, stuck],
+                overrides={"detect_die_button": lambda _: (0.5, 0.73)},
+                config={"auto_restart": True, "ad_stuck_restart_sec": 120},
+                monotonic_step=60,
+            )
+        controller.restart_game.assert_called_once()
+
+    def test_combat_move_config_slows_only_in_wave_without_elite_boss(self):
+        base_cfg = {"joystick_radius_px": 200}
+
+        normal_cfg = bot_cli._build_combat_move_config(base_cfg, wave_active=False, has_boss=False)
+        self.assertEqual(normal_cfg["move_speed_scale"], 1.0)
+        self.assertEqual(normal_cfg["touch_hold_ms"], 0)
+        self.assertEqual(normal_cfg["swipe_duration_ms"], 220)
+
+        elite_only_cfg = bot_cli._build_combat_move_config(base_cfg, wave_active=False, has_boss=True)
+        self.assertEqual(elite_only_cfg["move_speed_scale"], 1.0)
+        self.assertEqual(elite_only_cfg["touch_hold_ms"], 0)
+        self.assertEqual(elite_only_cfg["swipe_duration_ms"], 220)
+
+        wave_only_cfg = bot_cli._build_combat_move_config(base_cfg, wave_active=True, has_boss=False)
+        self.assertEqual(wave_only_cfg["move_speed_scale"], 0.65)
+        self.assertEqual(wave_only_cfg["touch_hold_ms"], 280)
+        self.assertEqual(wave_only_cfg["swipe_duration_ms"], 140)
+
+        wave_with_boss_cfg = bot_cli._build_combat_move_config(base_cfg, wave_active=True, has_boss=True)
+        self.assertEqual(wave_with_boss_cfg["move_speed_scale"], 1.0)
+        self.assertEqual(wave_with_boss_cfg["touch_hold_ms"], 0)
+        self.assertEqual(wave_with_boss_cfg["swipe_duration_ms"], 220)

@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 import sys
 import time
-from typing import Optional
+from typing import Any, Optional
 
 import numpy as np
 
@@ -79,6 +79,22 @@ def _apply_timer_progress(
         monolith_pos,
         logged_monolith_pos,
     )
+
+
+def _build_combat_move_config(
+    config: dict[str, Any],
+    *,
+    wave_active: bool,
+    has_boss: bool,
+) -> dict[str, Any]:
+    """Build movement config: slow down in skull/boss waves only when no Elite Boss is on screen."""
+    slow_wave_mode = bool(wave_active and not has_boss)
+    move_cfg = dict(config)
+    move_cfg["async_move"] = True
+    move_cfg["move_speed_scale"] = 0.65 if slow_wave_mode else 1.0
+    move_cfg["touch_hold_ms"] = 280 if slow_wave_mode else 0
+    move_cfg["swipe_duration_ms"] = 140 if slow_wave_mode else 220
+    return move_cfg
 
 
 def run_cli_bot():
@@ -314,6 +330,8 @@ def run_cli_bot():
     last_cfg_check = 0.0
     last_terminal_clear_time = 0.0
     post_death_at = 0.0
+    die_stuck_since = 0.0
+    current_game_map = botcore.normalize_game_map(config.get("game_map", "depth")) or "depth"
 
     try:
         while True:
@@ -347,7 +365,7 @@ def run_cli_bot():
                         print(f"  ⚔️ Hợp thể: {c_label}")
                         print(f"  🔮 Kỹ năng ({len(active_skills)}): {', '.join(sorted(active_skills))[:80]}")
                         print("=" * 65)
-                time_mult = 1.24 if str(config.get("game_map", "depth")).lower().strip() == "depth" else 1.0
+                time_mult = 1.24 if current_game_map == "depth" else 1.0
                 max_session_mins = float(config.get("max_session_minutes", 0) or 0)
                 if max_session_mins > 0 and now - session_start >= 60 * max_session_mins:
                     print(f"Đã hết giới hạn thời gian phiên chơi ({max_session_mins:.0f} phút). Dừng bot an toàn.")
@@ -466,8 +484,13 @@ def run_cli_bot():
                 rule_streak_name, rule_streak = "", 0
 
                 ocr_interval = 1.5 if (wave_seen_active or last_had_boss) else 0.9
+                timer_suspected_frozen = bool(
+                    last_timer_advance_time > 0.0
+                    and (now - last_timer_advance_time) >= 4.0
+                )
                 skip_combat_ocr = bool(
                     match_running
+                    and not timer_suspected_frozen
                     and last_combat_ocr_check > 0.0
                     and (now - last_combat_ocr_check) < ocr_interval
                 )
@@ -491,6 +514,7 @@ def run_cli_bot():
                     if restore_pos:
                         controller.release()
                         post_death_at = 0.0
+                        die_stuck_since = 0.0
                         if now - last_confirm_time >= 2.0:
                             controller.tap(list(restore_pos), rect)
                             last_confirm_time = now
@@ -505,6 +529,7 @@ def run_cli_bot():
                             active_skills.clear()
                             skill_levels.clear()
                             maxed_skills.clear()
+                            knowledge.reset_owned_artifacts(config.get("character", "summoner"))
                             previous_direction = last_chest_pos = last_monolith_pos = last_logged_chest_pos = last_logged_monolith_pos = None
                             print("[Restore Gold] Đã bấm Confirm nhận lại vàng sau crash.")
                         continue
@@ -521,10 +546,26 @@ def run_cli_bot():
                         if now - last_die_time >= 1.5:
                             last_die_time = now
                             if dismiss_death(controller, rect, capture):
+                                die_stuck_since = 0.0
                                 if post_death_at == 0.0:
                                     post_death_at = time.monotonic()
                                 print("[Tử trận] Đã xác nhận Die, chuyển sang nhận thưởng.")
                             else:
+                                if die_stuck_since == 0.0:
+                                    die_stuck_since = now
+                                if (
+                                    ad_stuck_sec > 0.0
+                                    and (now - die_stuck_since) >= ad_stuck_sec
+                                    and config.get("auto_restart", True)
+                                    and hasattr(controller, "restart_game")
+                                ):
+                                    print(f"⏰ [Tử trận] Kẹt màn Die quá {int(ad_stuck_sec)}s không xác nhận được -> Tắt hẳn game và mở lại!")
+                                    die_stuck_since = 0.0
+                                    post_death_at = 0.0
+                                    last_auto_action_time = now
+                                    controller.restart_game()
+                                    time.sleep(3.0)
+                                    continue
                                 print("[Tử trận] Chưa xác nhận được Die; đọc lại, không đoán vị trí gần Revive.")
                             time.sleep(0.8)
                         continue
@@ -534,6 +575,7 @@ def run_cli_bot():
                     if confirm_pos:
                         controller.release()
                         match_running = False
+                        die_stuck_since = 0.0
                         if now - last_confirm_time >= 2.0:
                             last_confirm_time = now
                             if match_start_time > 0.0 or recorder.current_run_id or last_known_game_timer_sec > 0.0:
@@ -571,7 +613,7 @@ def run_cli_bot():
                                     active_skills, config.get("skill_priority", []),
                                     skill_levels=skill_levels,
                                     character=config.get("character", "summoner"),
-                                    game_map=config.get("game_map", "depth"),
+                                    game_map=current_game_map,
                                     gold=stats.get("gold", 0),
                                     gems=stats.get("gems", 0),
                                     kills=stats.get("kills", 0),
@@ -596,6 +638,7 @@ def run_cli_bot():
                             skill_levels.clear()
                             maxed_skills.clear()
                             strengthened_skills.clear()
+                            knowledge.reset_owned_artifacts(config.get("character", "summoner"))
                             last_monolith_pos = None
                             last_logged_monolith_pos = None
                             last_chest_pos = None
@@ -672,6 +715,7 @@ def run_cli_bot():
                             skill_levels.clear()
                             maxed_skills.clear()
                             strengthened_skills.clear()
+                            knowledge.reset_owned_artifacts(config.get("character", "summoner"))
                             match_start_time = 0.0
                             currencies = botcore.detect_main_screen_currencies(frame)
                             gold = currencies.get("gold")
@@ -727,6 +771,12 @@ def run_cli_bot():
                         if ea_pos:
                             controller.release()
                             post_death_at = 0.0
+                            detected_map = botcore.detect_selected_map(frame)
+                            if detected_map:
+                                current_game_map = detected_map
+                                config["game_map"] = detected_map
+                            else:
+                                current_game_map = botcore.normalize_game_map(config.get("game_map", "depth")) or "depth"
                             if not config.get("auto_restart", True):
                                 continue
                             match_running = False
@@ -748,6 +798,7 @@ def run_cli_bot():
                                 last_known_game_timer_sec = 0.0
                                 last_timer_scan_time = 0.0
                                 last_timer_advance_time = now
+                                die_stuck_since = 0.0
                                 step_count = 0
                                 consecutive_mana_retrieves = 0
                                 last_monolith_pos = None
@@ -765,8 +816,9 @@ def run_cli_bot():
                                 wave_ended_timer_sec = 0.0
                                 controller.tap(list(ea_pos), rect)
                                 print("\n" + "-" * 60)
-                                knowledge.reset_owned_artifacts()
-                                print(f"🔥 [TRẬN ĐẤU MỚI BẮT ĐẦU!] Mã ván: {run_id}")
+                                knowledge.reset_owned_artifacts(config.get("character", "summoner"))
+                                map_disp = "Depths (x1.24)" if current_game_map == "depth" else ("Artificial Ecosystem" if current_game_map == "ecosystem" else current_game_map.title())
+                                print(f"🔥 [TRẬN ĐẤU MỚI BẮT ĐẦU!] Mã ván: {run_id} | 🗺️ Bản đồ: {map_disp}")
                                 if cur_header:
                                     print(f"   {cur_header}")
                                 print("   Bot đang tự động né quái và cày vàng...")
@@ -974,15 +1026,14 @@ def run_cli_bot():
                         if now - last_shop_time >= 1.5:
                             last_shop_time = now
                             mana_val = botcore.detect_mana_orb_currency(frame)
+                            slot_prices = botcore.detect_shop_item_prices(frame)
                             mana_str = f" ({mana_val} Mana)" if mana_val is not None else ""
                             print(f"\n🛒 [Cửa hàng] Mở cửa hàng Thương nhân{mana_str}! Đang duyệt full 8 món đồ...")
 
                             shop_targets = botcore.get_shop_item_targets()
                             build_skills = set(active_skills)
 
-                            best_buy_slot = None
-                            best_buy_score = -1
-                            best_buy_label = ""
+                            scanned_candidates: list[botcore.ShopCandidate] = []
 
                             shop_lost = False
                             for idx, s_pos in enumerate(shop_targets, 1):
@@ -1004,44 +1055,112 @@ def run_cli_bot():
 
                                 # Kiểm tra xem món đồ có thực sự đáng mua không (hợp build hoặc Tier cao/Toy Castle)
                                 is_worth = botcore.is_shop_artifact_worth_buying(s_score, s_lbl)
+                                item_price = slot_prices[idx - 1] if idx - 1 < len(slot_prices) else None
+                                price_str = f" | Giá: {item_price}" if item_price is not None else ""
+
+                                scanned_candidates.append(
+                                    botcore.ShopCandidate(
+                                        slot_idx=idx,
+                                        pos=tuple(s_pos),
+                                        score=int(s_score),
+                                        label=s_lbl,
+                                        price=item_price,
+                                        affordable=is_affordable,
+                                        worth=is_worth,
+                                    )
+                                )
 
                                 if is_affordable and is_worth:
                                     syn_tag = " [HỢP BUILD ⭐]" if ("Build:" in s_lbl or "★" in s_lbl or "Special" in s_lbl or "Legendary" in s_lbl) else ""
-                                    print(f"   - Ô {idx}/8: [{s_lbl}] -> 🟢 ĐỦ MANA & ĐÁNG MUA (Điểm: {s_score}){syn_tag}")
-                                    effective_score = s_score + (2000 if "Build:" in s_lbl else 0)
-                                    if effective_score > best_buy_score:
-                                        best_buy_score = effective_score
-                                        best_buy_slot = s_pos
-                                        best_buy_label = s_lbl
+                                    print(f"   - Ô {idx}/8: [{s_lbl}] -> 🟢 ĐỦ MANA & ĐÁNG MUA (Điểm: {s_score}{price_str}){syn_tag}")
                                 elif is_affordable:
-                                    print(f"   - Ô {idx}/8: [{s_lbl}] -> 🟡 BỎ QUA (Không hợp build/không đáng tốn Mana)")
+                                    print(f"   - Ô {idx}/8: [{s_lbl}] -> 🟡 BỎ QUA (Không hợp build/không đáng tốn Mana{price_str})")
                                 else:
-                                    print(f"   - Ô {idx}/8: [{s_lbl}] -> 🔴 Chưa đủ Mana")
+                                    print(f"   - Ô {idx}/8: [{s_lbl}] -> 🔴 Chưa đủ Mana{price_str}")
 
                             if shop_lost:
                                 continue
 
-                            # Quyết định mua hoặc đóng cửa hàng
-                            if best_buy_slot and best_buy_score > 0 and botcore.is_shop_artifact_worth_buying(best_buy_score, best_buy_label):
-                                controller.tap(list(best_buy_slot), rect)
+                            shop_plan = botcore.plan_shop_purchases(scanned_candidates, mana=mana_val)
+                            if shop_plan.selected:
+                                plan_names = " -> ".join(f"Ô {c.slot_idx}" for c in shop_plan.selected)
+                                if shop_plan.used_budget_optimizer and shop_plan.total_cost is not None:
+                                    print(
+                                        f"   🧮 [Kế hoạch Shop] {shop_plan.eligible_count} món hợp chuẩn -> "
+                                        f"Tối ưu giỏ {len(shop_plan.selected)} món ({plan_names}) | "
+                                        f"Tổng giá: {shop_plan.total_cost} (còn {shop_plan.remaining_mana} Mana) | "
+                                        f"Tổng điểm: {shop_plan.total_score}"
+                                    )
+                                else:
+                                    print(
+                                        f"   🧮 [Kế hoạch Shop] {shop_plan.eligible_count} món hợp chuẩn -> "
+                                        f"Thứ tự ưu tiên: {plan_names} (Tổng điểm: {shop_plan.total_score})"
+                                    )
+
+                            bought_count = 0
+                            skipped_any = False
+
+                            def _try_buy_candidate(cand: botcore.ShopCandidate) -> bool:
+                                nonlocal bought_count, shop_lost
+                                controller.tap(list(cand.pos), rect)
                                 time.sleep(0.25)
                                 selected_item = capture()
                                 fresh_buy = botcore.detect_buy_button(selected_item)
-                                if not fresh_buy or not botcore.is_shop_buy_enabled(selected_item, fresh_buy):
-                                    continue
+                                if not fresh_buy:
+                                    shop_lost = True
+                                    return False
+                                if not botcore.is_shop_buy_enabled(selected_item, fresh_buy):
+                                    return False
+                                c_lbl = cand.label
+                                if bought_count > 0:
+                                    _, refreshed_lbl = botcore.evaluate_selected_shop_artifact(
+                                        selected_item,
+                                        prefer_crit_and_cooldown=config.get("prefer_crit_and_cooldown", True),
+                                        active_skills=build_skills,
+                                    )
+                                    if refreshed_lbl and "select the desired artifact" not in refreshed_lbl.lower():
+                                        c_lbl = refreshed_lbl
                                 controller.tap(list(fresh_buy), rect)
-                                print(f"💰 [Cửa hàng] Đã mua thành công vật phẩm giá trị: [{best_buy_label}]!")
-                                knowledge.remember_artifact(best_buy_label)
-                                time.sleep(0.65)
-                                f_after = capture()
-                                x_pos = botcore.detect_shop_x_button(f_after)
-                                if x_pos:
-                                    controller.tap(list(x_pos), rect)
+                                print(f"💰 [Cửa hàng] Đã mua thành công vật phẩm giá trị: [{c_lbl}]!")
+                                if knowledge.remember_artifact(c_lbl):
+                                    print(f"   🧩 Cổ vật đã có trong ván: {', '.join(sorted(knowledge.owned_artifacts()))}")
+                                bought_count += 1
+                                time.sleep(0.55)
+                                return True
+
+                            for cand in shop_plan.selected:
+                                if not _try_buy_candidate(cand):
+                                    if shop_lost:
+                                        break
+                                    skipped_any = True
+
+                            if shop_plan.used_budget_optimizer and skipped_any and not shop_lost:
+                                chosen_slots = {c.slot_idx for c in shop_plan.selected}
+                                fallback_cands = sorted(
+                                    [
+                                        c for c in scanned_candidates
+                                        if c.affordable and c.worth and c.slot_idx not in chosen_slots
+                                    ],
+                                    key=lambda c: (c.score + (2000 if "Build:" in c.label else 0), -(c.price or 0)),
+                                    reverse=True,
+                                )
+                                for cand in fallback_cands:
+                                    if not _try_buy_candidate(cand) and shop_lost:
+                                        break
+
+                            if shop_lost:
+                                continue
+
+                            f_after = capture()
+                            x_pos = botcore.detect_shop_x_button(f_after)
+                            if x_pos:
+                                controller.tap(list(x_pos), rect)
+                            if bought_count >= 2:
+                                print(f"💰 [Cửa hàng] Đã mua tổng cộng {bought_count} vật phẩm phù hợp -> Bấm 'X' đóng shop farm tiếp!")
+                                time.sleep(0.4)
+                            elif bought_count == 1:
                                 time.sleep(0.4)
                             else:
-                                x_pos = botcore.detect_shop_x_button(capture())
-                                if x_pos:
-                                    controller.tap(list(x_pos), rect)
                                 print(f"🛒 [Cửa hàng] Không có món phù hợp với build -> Giữ Mana, bấm 'X' đóng shop farm tiếp!")
                                 time.sleep(0.5)
                         continue
@@ -1052,6 +1171,7 @@ def run_cli_bot():
                 if pause_pos and fast_combat:
                     match_running = True
                     post_death_at = 0.0
+                    die_stuck_since = 0.0
                     if match_start_time == 0.0:
                         match_start_time = now
                         attached_mid_run = True   # bot không thấy lúc bắt đầu ván -> đồng hồ treo tường đo thiếu
@@ -1287,7 +1407,7 @@ def run_cli_bot():
                         last_boss_alert_time = now
                         print(f"⚠️ [Cảnh báo] Phát hiện {len(vision.bosses)} quái to (Elite/Boss) có thanh máu đỏ! Kích hoạt né tránh khẩn cấp!")
 
-                    time_mult = 1.24 if str(config.get("game_map", "depth")).lower().strip() == "depth" else 1.0
+                    time_mult = 1.24 if current_game_map == "depth" else 1.0
                     mv_policy = getattr(learner, "get_movement_policy", lambda: {})()
                     if not isinstance(mv_policy, dict):
                         mv_policy = {}
@@ -1317,6 +1437,7 @@ def run_cli_bot():
                     else:
                         no_enemy_since = 0.0
                         move_elapsed = last_known_game_timer_sec if last_known_game_timer_sec > 0.0 else ((now - match_start_time) * time_mult)
+                    has_elite_boss = bool(last_had_boss)
                     dir_x, dir_y = botcore.choose_direction(
                         vision,
                         elapsed=move_elapsed,
@@ -1324,13 +1445,16 @@ def run_cli_bot():
                         previous=previous_direction,
                         active_skills=active_skills,
                         nearest_target_skills=config.get("nearest_target_skills"),
-                        enable_weave=enable_weave,
+                        enable_weave=(enable_weave and not wave_seen_active and not has_elite_boss),
                         weave_freq=weave_freq,
                         weave_amp=weave_amp,
+                        wave_active=bool(wave_seen_active),
                     )
-                    move_cfg = dict(config)
-                    move_cfg["async_move"] = True
-                    move_cfg["swipe_duration_ms"] = 160 if last_had_boss else 220
+                    move_cfg = _build_combat_move_config(
+                        config,
+                        wave_active=bool(wave_seen_active),
+                        has_boss=has_elite_boss,
+                    )
                     if move_from_frame(controller, rect, move_cfg, (dir_x, dir_y), captured_at):
                         previous_direction = (dir_x, dir_y)
                     else:

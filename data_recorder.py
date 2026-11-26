@@ -103,6 +103,7 @@ class DataRecorder:
         skill_levels: Optional[dict[str, int]] = None,
         reward: Optional[float] = None,
         skill_deltas: Optional[dict[str, float]] = None,
+        game_map: str = "",
     ):
         if not self.enabled or not self.current_run_dir:
             return
@@ -115,6 +116,8 @@ class DataRecorder:
                 "kills": kills,
                 "gold": gold,
             }
+            if game_map:
+                summary["game_map"] = str(game_map)
             if skills is not None:
                 summary["skills"] = skills
             if skill_levels is not None:

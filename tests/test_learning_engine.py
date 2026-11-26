@@ -168,6 +168,57 @@ class TestAdaptiveLearner(unittest.TestCase):
         self.assertEqual(rep2["total_sessions"], 2)
         self.assertAlmostEqual(rep2["weave_frequency"], (1 - 0.35) * 3.8 + 0.35 * 4.2, delta=0.05)
 
+    def test_per_map_baselines_prevent_unfair_cross_map_penalties(self):
+        # Train high Ecosystem runs first (11:00 = 660s)
+        for i in range(4):
+            self.learner.evaluate_and_learn_run(
+                run_id=f"eco_{i}",
+                survival_seconds=660.0,
+                active_skills={"spirit", "electric_shock"},
+                game_map="Artificial Ecosystem",
+            )
+        # First Depth run at 07:30 (450s) should NOT be penalized against Ecosystem's 660s baseline
+        rep_depth_1 = self.learner.evaluate_and_learn_run(
+            run_id="depth_0",
+            survival_seconds=450.0,
+            active_skills={"spirit", "blizzard"},
+            game_map="Depths",
+        )
+        self.assertEqual(rep_depth_1["game_map"], "depth")
+        self.assertGreaterEqual(rep_depth_1["reward"], 0.0)
+
+        # Second Depth run at 09:00 (540s) is compared strictly against Depth's own baseline (450s)
+        rep_depth_2 = self.learner.evaluate_and_learn_run(
+            run_id="depth_1",
+            survival_seconds=540.0,
+            active_skills={"spirit", "blizzard"},
+            game_map="Depths",
+        )
+        self.assertEqual(rep_depth_2["prev_avg_sec"], 450.0)
+        self.assertGreater(rep_depth_2["reward"], 0.0)
+
+        reloaded = AdaptiveLearner(self.test_dir)
+        self.assertIn("ecosystem", reloaded.policy["map_averages"])
+        self.assertIn("depth", reloaded.policy["map_averages"])
+        self.assertEqual(reloaded.history[-1]["game_map"], "depth")
+
+    def test_starting_skill_credits_level_investment_not_free_lv1(self):
+        # Free starting 'spirit' stays Lv.1 on short runs and upgrades to Lv.7 on long runs
+        for i in range(12):
+            good = i % 2 == 0
+            rep = self.learner.evaluate_and_learn_run(
+                run_id=f"sp_{i}",
+                survival_seconds=900.0 if good else 250.0,
+                active_skills={"spirit", "electric_shock"} if good else {"spirit", "incineration"},
+                skill_levels={"spirit": 7 if good else 1, "electric_shock": 7} if good else {"spirit": 1, "incineration": 4},
+                starting_skill="spirit",
+            )
+            if i >= 2 and good:
+                self.assertGreater(rep["skill_deltas"]["spirit"], 0.0)
+
+        self.assertLess(self.learner.policy["skill_usage"]["spirit"], 0.85)
+        self.assertGreater(self.learner.get_skill_bonus("spirit"), 0.5)
+
 
 if __name__ == "__main__":
     unittest.main()

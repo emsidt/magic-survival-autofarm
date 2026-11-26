@@ -149,9 +149,17 @@ class CombatFlowTests(unittest.TestCase):
     def test_is_fast_combat_frame_skip_ocr_avoids_winocr(self):
         combat = botcore.prepare_analysis_frame(cv2.imread(str(Path(__file__).parent / "fixtures/movement/combat.png")))
         level_up = botcore.prepare_analysis_frame(cv2.imread(str(Path(__file__).parent / "fixtures/movement/level_up.png")))
+        crowded_lu = botcore.prepare_analysis_frame(cv2.imread(str(Path(__file__).parent / "fixtures/movement/level_up_crowded.png")))
         with patch("winocr.recognize_pil", new=AsyncMock(side_effect=AssertionError("should not run"))):
             self.assertTrue(botcore.is_fast_combat_frame(combat, skip_ocr=True))
             self.assertFalse(botcore.is_fast_combat_frame(level_up, skip_ocr=True))
+            self.assertFalse(botcore.is_fast_combat_frame(crowded_lu, skip_ocr=True))
+
+    def test_crowded_level_up_modal_rejects_fast_combat_with_and_without_ocr(self):
+        crowded_lu = botcore.prepare_analysis_frame(cv2.imread(str(Path(__file__).parent / "fixtures/movement/level_up_crowded.png")))
+        self.assertFalse(botcore.is_fast_combat_frame(crowded_lu, skip_ocr=False))
+        self.assertFalse(botcore.is_fast_combat_frame(crowded_lu, skip_ocr=True))
+        self.assertTrue(bool(botcore.is_level_up_screen(crowded_lu)))
 
     def test_boss_evasion_disables_weave_and_avoids_boss(self):
         mask = np.zeros((960, 540), np.uint8)
@@ -230,3 +238,23 @@ class CombatFlowTests(unittest.TestCase):
         direction = botcore.choose_direction(vision, elapsed=0.0, player=(0.5, 0.5), previous=(1.0, 0.0))
         self.assertGreater(abs(direction[1]), 0.4)
         self.assertLessEqual(direction[0], 0.15)
+
+    def test_wave_active_disables_weave_and_avoids_risky_orb(self):
+        mask = np.zeros((960, 540), np.uint8)
+        # Put dense enemies on the right between player (270, 480) and risky orb at (355, 480)
+        mask[450:510, 315:345] = 255
+        dist = cv2.distanceTransform(255 - mask, cv2.DIST_L2, 5)
+        vision = botcore.Vision(mask, dist, [(355, 480)], True, 0.8)
+
+        d_wave_weave = botcore.choose_direction(
+            vision, elapsed=0.078125, previous=(1.0, 0.0), enable_weave=True, wave_active=True
+        )
+        d_wave_plain = botcore.choose_direction(
+            vision, elapsed=0.078125, previous=(1.0, 0.0), enable_weave=False, wave_active=True
+        )
+        d_normal = botcore.choose_direction(
+            vision, elapsed=0.078125, previous=(1.0, 0.0), enable_weave=False, wave_active=False
+        )
+        self.assertEqual(d_wave_weave, d_wave_plain)
+        self.assertLess(d_wave_plain[0], d_normal[0])
+        self.assertLess(d_wave_plain[0], 0.45)

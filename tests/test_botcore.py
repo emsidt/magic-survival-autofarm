@@ -686,16 +686,23 @@ class VisionTests(unittest.TestCase):
         self.assertEqual(b, 180)
         self.assertIn("Spirit", m)
 
-        # Combination match: telekinetic_sword expands to spirit and electric_shock
+        # Combination match: telekinetic_sword keeps primary spirit and consumes electric_shock
         b2, m2 = compute_skill_synergy_bonus("Increases Spirit projectile speed and blade damage", {"telekinetic_sword"})
         self.assertGreaterEqual(b2, 180)
         self.assertIn("Spirit", m2)
 
-        # Multi-skill match (capped at 360)
         b3, m3 = compute_skill_synergy_bonus("Spirit projectile and Electric Shock damage", {"telekinetic_sword"})
-        self.assertEqual(b3, 360)
+        self.assertEqual(b3, 180)
         self.assertIn("Spirit", m3)
-        self.assertIn("Electric Shock", m3)
+        self.assertNotIn("Electric Shock", m3)
+
+        # Multi-skill match (capped at 360) across unconsumed active skills
+        b3_cap, m3_cap = compute_skill_synergy_bonus(
+            "Spirit projectile and Blizzard damage", {"telekinetic_sword", "blizzard"}
+        )
+        self.assertEqual(b3_cap, 360)
+        self.assertIn("Spirit", m3_cap)
+        self.assertIn("Blizzard", m3_cap)
 
         # Unrelated text
         b4, m4 = compute_skill_synergy_bonus("Increase max HP by 20%", {"spirit"})
@@ -1851,6 +1858,249 @@ class VisionTests(unittest.TestCase):
             )
             self.assertEqual(res_ai.idx, 0)
             self.assertEqual(res_ai.target, (0.50, 0.835))
+
+    def test_detect_die_button_ignores_offcenter_left_match(self):
+        die_tmpl = cv2.imread("assets/die_button.png")
+        if die_tmpl is None:
+            self.skipTest("assets/die_button.png missing")
+        rt = cv2.resize(die_tmpl, (max(40, int(die_tmpl.shape[1] * 0.6)), max(40, int(die_tmpl.shape[0] * 0.6))))
+        rth, rtw = rt.shape[:2]
+        frame = np.zeros((1000, 600, 3), dtype=np.uint8)
+        frame[740:740 + rth, 75:75 + rtw] = rt
+        self.assertIsNone(detect_die_button(frame))
+
+    def test_firefly_and_shuriken_match_spirit_build_and_are_worth_buying(self):
+        bonus, matched = botcore.compute_skill_synergy_bonus("Firefly", {"spirit"})
+        self.assertEqual(bonus, 180)
+        self.assertEqual(matched, ["Spirit"])
+        self.assertIsNone(botcore.check_unlearned_magic_target("Firefly", {"spirit"}))
+        self.assertTrue(botcore.is_shop_artifact_worth_buying(360, "Firefly [Rare | Build: Spirit]"))
+
+        shuriken_text = "Shuriken Spirit Critical Strike Rate +15% Magic Bolt Critical Strike Rate +15%"
+        s_bonus, s_matched = botcore.compute_skill_synergy_bonus(shuriken_text, {"spirit"})
+        self.assertEqual(s_bonus, 180)
+        self.assertEqual(s_matched, ["Spirit"])
+        self.assertIsNone(botcore.check_unlearned_magic_target(shuriken_text, {"spirit"}))
+        self.assertEqual(botcore.check_unlearned_magic_target("Meteor damage +30%", {"spirit"}), "meteor")
+
+    def test_consumed_combination_material_does_not_get_artifact_synergy(self):
+        # Telekinetic Sword = Spirit (kept primary) + Electric Shock (consumed secondary)
+        active_tk = {"spirit", "electric_shock", "telekinetic_sword"}
+        self.assertEqual(botcore.compute_skill_synergy_bonus("Electric Cable", active_tk), (0, []))
+        self.assertEqual(botcore.check_unlearned_magic_target("Electric Cable", active_tk), "electric_shock")
+        self.assertEqual(botcore.compute_skill_synergy_bonus("Firefly", active_tk), (180, ["Spirit"]))
+        self.assertIsNone(botcore.check_unlearned_magic_target("Firefly", active_tk))
+
+        # Black Hole / Vortex = Cyclone (kept primary) + Satellite (consumed secondary)
+        active_bh = {"cyclone", "satellite", "black_hole"}
+        self.assertEqual(botcore.compute_skill_synergy_bonus("Glass Orb", active_bh), (0, []))
+        self.assertEqual(botcore.check_unlearned_magic_target("Glass Orb", active_bh), "satellite")
+        self.assertEqual(botcore.compute_skill_synergy_bonus("Totem", active_bh), (180, ["Cyclone"]))
+        self.assertIsNone(botcore.check_unlearned_magic_target("Totem", active_bh))
+
+        # Battery buffs electric_zone (NOT electric_shock), and Mjolnir buffs thunderstorm
+        self.assertEqual(botcore.compute_skill_synergy_bonus("Battery", {"electric_shock"}), (0, []))
+        self.assertEqual(botcore.compute_skill_synergy_bonus("Battery", {"electric_zone"}), (180, ["Electric Zone"]))
+        self.assertEqual(botcore.compute_skill_synergy_bonus("Mjolnir", {"thunderstorm"}), (180, ["Thunderstorm"]))
+
+    def test_artifact_synergy_progress_counts_owned_and_subject_artifacts(self):
+        import knowledge
+
+        self.addCleanup(knowledge.reset_owned_artifacts)
+        # Archmage starts with Black Cat -> Chronos is already 1/4, so Ouroboros shows 2/4 immediately
+        knowledge.reset_owned_artifacts("Archmage")
+        self.assertIn("blackcat", knowledge.owned_artifacts())
+        self.assertEqual(knowledge.artifact_synergy_bonus("Ouroboros"), (400, "Synergy Chronos 2/4"))
+
+        knowledge.remember_artifact("Ouroboros [Legendary | Synergy Chronos 2/4]")
+        knowledge.remember_artifact("Hourglass")
+        bonus, tag = knowledge.artifact_synergy_bonus("Wizard's Hat")
+        self.assertEqual(bonus, 2500)
+        self.assertEqual(tag, "⚡ Hoàn thành Synergy Chronos (4/4)")
+
+        # Fresh Summoner run (Magic Wand is not part of a 4-set): progression increments 1/4 -> 2/4 -> 3/4 -> 4/4
+        knowledge.reset_owned_artifacts("Summoner")
+        self.assertEqual(knowledge.artifact_synergy_bonus("Abyss"), (60, "Synergy Cosmic Horror 1/3"))
+        self.assertEqual(knowledge.artifact_synergy_bonus("Accelerator"), (60, "Synergy Zero-to-Hundred 1/4"))
+        knowledge.remember_artifact("Accelerator")
+        self.assertEqual(knowledge.artifact_synergy_bonus("Jet Engine"), (400, "Synergy Zero-to-Hundred 2/4"))
+        knowledge.remember_artifact("Jet Engine")
+        self.assertEqual(knowledge.artifact_synergy_bonus("Breeze"), (800, "Synergy Zero-to-Hundred 3/4"))
+        knowledge.remember_artifact("Breeze")
+        self.assertEqual(knowledge.artifact_synergy_bonus("Broom"), (2500, "⚡ Hoàn thành Synergy Zero-to-Hundred (4/4)"))
+
+    def test_relic_box_indicator_and_priority_detection(self):
+        from pathlib import Path
+        botcore._CACHED_SMALL_CHEST_TEMPLATES.clear()
+
+        ind_path = Path("assets/chests/relic_box_indicator.png")
+        crop_path = Path("assets/chests/special_chest_crop.png")
+        wood_path = Path("assets/chests/treasure_chest.png")
+        ind = cv2.imread(str(ind_path))
+        self.assertIsNotNone(ind)
+        ih, iw = ind.shape[:2]
+
+        # 1. Detects off-screen Relic Box indicator on 540x960 analysis frame
+        frame_540 = np.full((960, 540, 3), 35, dtype=np.uint8)
+        frame_540[450:450 + ih, 470:470 + iw] = ind
+        res_540 = detect_chest(frame_540, player=(0.5, 0.5))
+        self.assertIsNotNone(res_540)
+        self.assertEqual(res_540.chest_type, "special_chest")
+        self.assertEqual(res_540.weight, 38.0)
+
+        # 2. Detects off-screen Relic Box indicator on full 1080x1920 frame
+        frame_1080 = np.full((1920, 1080, 3), 35, dtype=np.uint8)
+        ind_2x = cv2.resize(ind, (iw * 2, ih * 2))
+        frame_1080[900:900 + ih * 2, 940:940 + iw * 2] = ind_2x
+        res_1080 = detect_chest(frame_1080, player=(0.5, 0.5))
+        self.assertIsNotNone(res_1080)
+        self.assertEqual(res_1080.chest_type, "special_chest")
+        self.assertEqual(res_1080.weight, 38.0)
+
+        # 3. Prioritizes Relic Box over a wooden chest on the same 540x960 frame
+        wood = cv2.imread(str(wood_path))
+        if wood is not None:
+            wood_sm = cv2.resize(wood, (44, 34))
+            wh, ww = wood_sm.shape[:2]
+            combo = frame_540.copy()
+            combo[200:200 + wh, 120:120 + ww] = wood_sm
+            res_combo = detect_chest(combo, player=(0.5, 0.5))
+            self.assertIsNotNone(res_combo)
+            self.assertEqual(res_combo.chest_type, "special_chest")
+
+        # 4. Detects on-field Relic Box sprite crop
+        crop = cv2.imread(str(crop_path))
+        if crop is not None:
+            ch, cw = crop.shape[:2]
+            field_f = np.full((960, 540, 3), 35, dtype=np.uint8)
+            field_f[220:220 + ch, 150:150 + cw] = crop
+            res_field = detect_chest(field_f, player=(0.5, 0.5))
+            self.assertIsNotNone(res_field)
+            self.assertEqual(res_field.chest_type, "special_chest")
+
+        # 5. Rejects false positives (cream circle with no crimson clasp, and red bar with no cream badge)
+        false_cream = np.full((960, 540, 3), 35, dtype=np.uint8)
+        cv2.circle(false_cream, (490, 480), 26, (215, 225, 230), -1)
+        self.assertIsNone(detect_chest(false_cream, player=(0.5, 0.5)))
+
+        false_red = np.full((960, 540, 3), 35, dtype=np.uint8)
+        cv2.rectangle(false_red, (470, 470), (520, 482), (20, 20, 210), -1)
+        self.assertIsNone(detect_chest(false_red, player=(0.5, 0.5)))
+
+    def test_detect_selected_map_depths_and_artificial_ecosystem(self):
+        from pathlib import Path
+        from unittest.mock import AsyncMock, patch
+
+        self.assertEqual(botcore.normalize_game_map("Depths"), "depth")
+        self.assertEqual(botcore.normalize_game_map("Artificial Ecosystem"), "ecosystem")
+        self.assertEqual(botcore.normalize_game_map("Virtual Ecosystem"), "ecosystem")
+        self.assertEqual(botcore.normalize_game_map("Terra"), "terra")
+
+        depths = cv2.imread(str(Path("tests/fixtures/maps/depths.png")))
+        eco = cv2.imread(str(Path("tests/fixtures/maps/artificial_ecosystem.png")))
+        self.assertIsNotNone(depths)
+        self.assertIsNotNone(eco)
+
+        # 1. With WinOCR active
+        self.assertEqual(botcore.detect_selected_map(depths), "depth")
+        self.assertEqual(botcore.detect_selected_map(eco), "ecosystem")
+
+        # 2. Visual fallback when WinOCR fails
+        with patch("winocr.recognize_pil", new=AsyncMock(side_effect=RuntimeError("OCR offline"))):
+            self.assertEqual(botcore.detect_selected_map(depths), "depth")
+            self.assertEqual(botcore.detect_selected_map(eco), "ecosystem")
+
+    def test_detect_shop_mana_and_prices_on_real_fixtures(self):
+        from pathlib import Path
+
+        blank = np.zeros((1000, 600, 3), dtype=np.uint8)
+        self.assertEqual(botcore.detect_shop_item_prices(blank), [None] * 8)
+
+        cases = [
+            (
+                "tests/fixtures/shop/shop_full_8_items.png",
+                615,
+                [281, 556, 353, 268, 284, 356, 374, 364],
+            ),
+            (
+                "tests/fixtures/shop/shop_late_touching_digits.png",
+                3283,
+                [1404, 1390, 850, 833, 751, 2048, 1970, 1911],
+            ),
+            (
+                "tests/fixtures/shop/shop_with_sold_slots.png",
+                1593,
+                [1213, None, 847, 474, None, 373, 1224, 824],
+            ),
+        ]
+        for rel_path, expected_mana, expected_prices in cases:
+            frame = cv2.imread(str(Path(rel_path)))
+            self.assertIsNotNone(frame, f"Missing fixture: {rel_path}")
+            self.assertEqual(botcore.detect_mana_orb_currency(frame), expected_mana, rel_path)
+            self.assertEqual(botcore.detect_shop_item_prices(frame), expected_prices, rel_path)
+
+    def test_plan_shop_purchases_optimizes_budget_and_synergies(self):
+        slots = botcore.get_shop_item_targets()
+
+        # 1. Single-item affordable budget: picks highest score and breaks ties by lower price (-25%)
+        cands_single = [
+            botcore.ShopCandidate(1, slots[0], 350, "Item A [Epic | Chí mạng]", 400, True, True),
+            botcore.ShopCandidate(2, slots[1], 350, "Item B [Epic | Hồi chiêu]", 300, True, True),
+            botcore.ShopCandidate(3, slots[2], 320, "Item C [Epic]", 250, True, True),
+        ]
+        plan_single = botcore.plan_shop_purchases(cands_single, mana=450, owned_artifacts=set())
+        self.assertTrue(plan_single.used_budget_optimizer)
+        self.assertEqual([c.slot_idx for c in plan_single.selected], [2])
+        self.assertEqual(plan_single.total_cost, 300)
+        self.assertEqual(plan_single.remaining_mana, 150)
+
+        # 2. Knapsack beats greedy: B+C (450+480=930) beats single A (750)
+        cands_knap = [
+            botcore.ShopCandidate(1, slots[0], 630, "Item A [Epic | Build: Spirit]", 750, True, True),
+            botcore.ShopCandidate(2, slots[1], 380, "Item B [Epic | Build: Spirit]", 450, True, True),
+            botcore.ShopCandidate(3, slots[2], 380, "Item C [Epic | Build: Spirit]", 480, True, True),
+        ]
+        plan_knap = botcore.plan_shop_purchases(cands_knap, mana=1000, owned_artifacts=set())
+        self.assertTrue(plan_knap.used_budget_optimizer)
+        self.assertEqual(sorted(c.slot_idx for c in plan_knap.selected), [2, 3])
+        self.assertEqual(plan_knap.total_cost, 930)
+        self.assertEqual(plan_knap.remaining_mana, 70)
+
+        # 3. Special/Legendary is never sacrificed for three weak Epics
+        cands_special = [
+            botcore.ShopCandidate(1, slots[0], 13080, "Halo [Special]", 1400, True, True),
+            botcore.ShopCandidate(2, slots[1], 530, "Epic 1 [Epic | Chí mạng]", 400, True, True),
+            botcore.ShopCandidate(3, slots[2], 530, "Epic 2 [Epic | Hồi chiêu]", 400, True, True),
+            botcore.ShopCandidate(4, slots[3], 530, "Epic 3 [Epic | Synergy]", 400, True, True),
+        ]
+        plan_special = botcore.plan_shop_purchases(cands_special, mana=1600, owned_artifacts=set())
+        self.assertEqual([c.slot_idx for c in plan_special.selected], [1])
+        self.assertEqual(plan_special.total_cost, 1400)
+
+        # 4. Joint Artifact-Set Synergy completion (Venom: owned Genome Map + Basilisk, buying Virus + Sample)
+        cands_syn = [
+            botcore.ShopCandidate(1, slots[0], 3500, "Standalone [Epic | Synergy]", 950, True, True),
+            botcore.ShopCandidate(2, slots[1], 1180, "Virus [Rare | Synergy Venom 3/4]", 450, True, True),
+            botcore.ShopCandidate(3, slots[2], 1180, "Sample [Legendary | Synergy Venom 3/4]", 450, True, True),
+        ]
+        plan_syn = botcore.plan_shop_purchases(cands_syn, mana=1000, owned_artifacts={"genome map", "basilisk"})
+        self.assertTrue(plan_syn.used_budget_optimizer)
+        self.assertEqual(sorted(c.slot_idx for c in plan_syn.selected), [2, 3])
+        self.assertEqual(plan_syn.total_cost, 900)
+        self.assertEqual(plan_syn.total_score, 4060)
+
+        # 5. Execution order puts highest individual priority first inside the chosen basket
+        cands_order = [
+            botcore.ShopCandidate(1, slots[0], 500, "Lower Prio [Epic]", 300, True, True),
+            botcore.ShopCandidate(2, slots[1], 13000, "Higher Prio [Special]", 500, True, True),
+        ]
+        plan_order = botcore.plan_shop_purchases(cands_order, mana=1000, owned_artifacts=set())
+        self.assertEqual([c.slot_idx for c in plan_order.selected], [2, 1])
+
+        # 6. Fallback mode (mana=None or missing price) falls back to dynamic priority order
+        plan_fallback = botcore.plan_shop_purchases(cands_order, mana=None, owned_artifacts=set())
+        self.assertFalse(plan_fallback.used_budget_optimizer)
+        self.assertEqual([c.slot_idx for c in plan_fallback.selected], [2, 1])
 
 
 if __name__ == "__main__":
